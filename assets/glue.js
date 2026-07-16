@@ -16,6 +16,23 @@
 (() => {
     "use strict";
 
+    // Console diagnostics — pure observability, threaded through the jobs below: SSE lifecycle, every htmx
+    // request/response, board refreshes, and error toasts, all under a common prefix.
+    const diag = (...args) => console.log("[kanban]", ...args);
+
+    document.body.addEventListener("htmx:configRequest", (e) => {
+        const params = e.detail.parameters;
+        const entries = typeof params?.entries === "function" ? Object.fromEntries(params.entries()) : params;
+        diag(`→ ${e.detail.verb.toUpperCase()} ${e.detail.path}`, entries && Object.keys(entries).length ? entries : "");
+    });
+    document.body.addEventListener("htmx:afterRequest", (e) => {
+        const cfg = e.detail.requestConfig;
+        diag(`← ${e.detail.xhr.status} ${cfg.verb.toUpperCase()} ${cfg.path}${e.detail.successful ? "" : " (failed)"}`);
+    });
+    document.body.addEventListener("htmx:afterSwap", (e) => {
+        diag(`swapped #${e.detail.target.id || e.detail.target.tagName}`);
+    });
+
     // --- 1. board version header ---------------------------------------------------------------------------------
     document.body.addEventListener("htmx:configRequest", (e) => {
         if (e.detail.verb !== "get") {
@@ -30,10 +47,12 @@
 
     const refresh = () => {
         if (dragging) {
+            diag("board refresh deferred — drag in flight");
             pendingRefresh = true;
             return;
         }
         pendingRefresh = false;
+        diag("board refresh");
         htmx.trigger(document.body, "kanban:refresh");
     };
 
@@ -42,12 +61,16 @@
 
     const connect = () => {
         const es = new EventSource("/events");
+        es.onopen = () => diag("SSE connected to /events");
         es.addEventListener("board-changed", (e) => {
             const root = document.getElementById("board-root");
-            if (root && String(e.data) === root.dataset.version) return; // already showing this version
+            const alreadyShown = root && String(e.data) === root.dataset.version;
+            diag(`SSE board-changed: version ${e.data}${alreadyShown ? " (already shown)" : ""}`);
+            if (alreadyShown) return;
             refresh();
         });
         es.onerror = () => {
+            diag("SSE connection lost — retrying in 2s");
             es.close();
             setTimeout(connect, 2000); // server restarted or M4 not running yet — keep trying quietly
         };
@@ -94,7 +117,9 @@
         new MutationObserver((mutations) => {
             mutations.forEach((m) =>
                 m.addedNodes.forEach((node) => {
-                    if (node.nodeType === 1) setTimeout(() => node.remove(), 6000);
+                    if (node.nodeType !== 1) return;
+                    console.warn("[kanban] toast:", node.textContent.trim());
+                    setTimeout(() => node.remove(), 6000);
                 })
             );
         }).observe(toasts, { childList: true });
