@@ -1,6 +1,6 @@
 /* claude-kanban glue — the only hand-written JavaScript in the project.
  *
- * Owns exactly six jobs, none of which htmx attributes can express alone:
+ * Owns exactly seven jobs, none of which htmx attributes can express alone:
  *   1. Stamp the board version (X-Board-Version) onto every mutating request — the optimistic-concurrency token, and,
  *      being a custom header, the CSRF guard: cross-site forms can't send it, and cross-origin fetch would need a CORS
  *      preflight the server never grants.
@@ -10,6 +10,8 @@
  *   4. Error toasts: htmx refuses to swap non-2xx responses by default; whitelist the codes the server retargets at #toasts.
  *   5. Client-side markdown: [data-md-src] panes fetch raw markdown once and render it locally (marked + DOMPurify).
  *   6. Modal plumbing: open the detail dialog when content lands in it; close/reset forms marked for it on success.
+ *   7. Epic options sync: the create-ticket form sits in the static page shell, so its epic <select> would go stale
+ *      as epics come and go — after every swap it re-mirrors the list from the OOB-refreshed filter dropdown.
  */
 (() => {
     "use strict";
@@ -132,10 +134,26 @@
         }
     });
 
+    // --- 7. epic options sync ---------------------------------------------------------------------------------------
+    // #filter-epic is swapped out-of-band with every board fragment, so it always holds the current epic list; the
+    // create-ticket form's <select> is copied from it rather than OOB-swapped itself, which would wipe the user's
+    // in-flight choice on every live refresh. Each select keeps its own first option ("none" / "All epics").
+    const syncEpicOptions = () => {
+        const source = document.getElementById("filter-epic");
+        if (!source) return;
+        document.querySelectorAll("select[data-epic-options]").forEach((select) => {
+            const current = select.value;
+            [...select.options].slice(1).forEach((option) => option.remove());
+            [...source.options].filter((option) => option.value !== "").forEach((option) => select.add(new Option(option.text, option.value)));
+            select.value = [...select.options].some((option) => option.value === current) ? current : "";
+        });
+    };
+
     // htmx calls this once per swapped-in element (and once for body on load): wire up whatever arrived.
     htmx.onLoad((el) => {
         const scope = el.nodeType === 1 ? el : document.body;
         initDragAndDrop(scope);
         renderMarkdown(scope);
+        syncEpicOptions();
     });
 })();
