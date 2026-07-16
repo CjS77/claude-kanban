@@ -198,13 +198,13 @@ What v1 does.
 ### Claude's side (`mcp`)
 
 - [x] `kanban_board` — read the board, optionally one column
-- [x] `kanban_next` — the top unclaimed `ready` ticket in `todo` whose dependencies are all `done`
+- [x] `kanban_next` — the top unclaimed `ready` (action: implement) or `stub` (action: refine) ticket in `todo` whose dependencies are all `done`
 - [x] `kanban_claim` / `kanban_release` — take and give back a ticket
 - [x] `kanban_move` — move a ticket to a column, at a position
 - [x] `kanban_create_ticket` / `kanban_create_epic`
 - [x] `kanban_note` — append to a ticket's progress log
 - [x] `kanban_bind_external` — record (or clear) a ticket's binding to an external work item; used by `/kanban:delegate`
-- [x] `kanban_refine` — flesh out a `stub` ticket or epic into a detailed spec, splitting into subtasks or sub-epics when it's too big; everything it touches or creates lands in `review`
+- [x] `kanban_refine` — flesh out a `stub` ticket or epic into a detailed spec, splitting into subtasks or sub-epics when it's too big; everything it touches or creates lands in `review`. A stub claimed for refinement sits pink in `doing` while the spec is written; `kanban_refine` returns it to the top of `todo` and drops the claim
 - [x] `kanban_worktree_start` / `kanban_worktree_finish` — the worktree lifecycle, mirroring the CLI (claiming itself stays a pure board mutation)
 
 ### Store

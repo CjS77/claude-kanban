@@ -105,6 +105,8 @@ pub struct CardCtx {
     pub status_badge: &'static str,
     pub done: bool,
     pub blocked: bool,
+    /// A stub sitting in `doing` is having its spec written right now — the card renders pink while that lasts.
+    pub refining: bool,
     pub labels: Vec<String>,
     pub external: Option<String>,
     pub claim: Option<ClaimCtx>,
@@ -189,6 +191,7 @@ fn card(t: &TicketView, view: &BoardView) -> CardCtx {
         status_badge: status_badge(t.ticket.status),
         done: t.ticket.column.id() == ColumnId::Done,
         blocked: t.blocked,
+        refining: t.ticket.status == Status::Stub && t.ticket.column.id() == ColumnId::Doing,
         labels: t.ticket.labels.clone(),
         external: t.ticket.external.as_ref().map(|e| format!("{} {}#{}", e.provider, e.kind, e.number)),
         claim: t.claim.as_ref().map(claim_ctx),

@@ -56,13 +56,13 @@ pub fn blocked(ticket: &Ticket, board: &Board) -> bool {
         .any(|dep| !matches!(board.ticket(dep).map(|t| &t.column), Some(Column::Done { .. })))
 }
 
-/// The handoff contract: the highest ticket in `todo` that is `ready`, unblocked, unclaimed, and not `external` (external
-/// tickets are worked elsewhere). `None` when nothing is eligible.
-#[must_use] 
+/// The handoff contract: the highest ticket in `todo` that is unblocked, unclaimed, not `external` (external tickets are
+/// worked elsewhere), and either `ready` (implement it) or `stub` (refine it into a spec). `None` when nothing is eligible.
+#[must_use]
 pub fn next_ticket<'a>(board: &'a Board, claims: &[Claim]) -> Option<&'a Ticket> {
     board
         .tickets_in(ColumnId::Todo)
-        .find(|t| t.status == Status::Ready && t.external.is_none() && !blocked(t, board) && claims::find(claims, &t.id).is_none())
+        .find(|t| matches!(t.status, Status::Ready | Status::Stub) && t.external.is_none() && !blocked(t, board) && claims::find(claims, &t.id).is_none())
 }
 
 /// The full read model: the board joined with its live claims and every derived fact, ready to serialize. Built fresh on
@@ -214,17 +214,24 @@ mod tests {
     #[test]
     fn next_ticket_takes_the_highest_eligible_and_skips_the_rest() {
         let mut b = board(vec![
-            ticket("K-1", Column::Todo), // status stub → skipped
+            ticket("K-1", Column::Todo), // status draft → skipped
             ticket("K-2", Column::Todo), // blocked → skipped
             ticket("K-3", Column::Todo), // claimed → skipped
             ticket("K-4", Column::Todo), // external → skipped
             ticket("K-5", Column::Todo), // eligible — but lower than all of the above
         ]);
-        b.tickets[0].status = Status::Stub;
+        b.tickets[0].status = Status::Draft;
         b.tickets[1].depends_on = vec![TicketId("K-1".into())];
         b.tickets[3].external = Some(crate::store::model::External { provider: "github".into(), kind: "issue".into(), number: 1 });
         let claims = vec![Claim { ticket: TicketId("K-3".into()), agent: "claude".into(), since: Utc::now(), path: None }];
         assert_eq!(next_ticket(&b, &claims).unwrap().id.0, "K-5");
+    }
+
+    #[test]
+    fn next_ticket_offers_stubs_for_refinement() {
+        let mut b = board(vec![ticket("K-1", Column::Todo), ticket("K-2", Column::Todo)]);
+        b.tickets[0].status = Status::Stub;
+        assert_eq!(next_ticket(&b, &[]).unwrap().id.0, "K-1", "a stub above a ready ticket wins — position is priority");
     }
 
     #[test]

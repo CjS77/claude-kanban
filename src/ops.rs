@@ -187,7 +187,7 @@ fn transition(op: Op, board: &mut Board, claims: &mut Vec<Claim>) -> Result<OpOu
         Op::Release { id } => release(board, claims, &id),
         Op::AddNote { id, text, author } => add_note(board, &id, text, author),
         Op::BindExternal { id, external } => bind_external(board, &id, external),
-        Op::Refine { target, title, body, split_tickets, split_epics } => refine(board, &target, title, body, split_tickets, split_epics),
+        Op::Refine { target, title, body, split_tickets, split_epics } => refine(board, claims, &target, title, body, split_tickets, split_epics),
         Op::StampWorktree { id, branch, path } => stamp_worktree(board, claims, &id, &branch, &path),
         Op::ClearWorktreePath { id } => Ok(clear_worktree_path(claims, &id)),
     }
@@ -341,8 +341,9 @@ fn set_epic_status(board: &mut Board, id: &EpicId, status: Status) -> Result<OpO
     Ok(OpOutput::plain(json!({ "id": id, "status": status })))
 }
 
-/// Claiming enforces the handoff contract: `ready`, unblocked, unclaimed, not already done. (External tickets *are*
-/// claimable — delegating claims them on the delegate's behalf; they just never get a worktree.)
+/// Claiming enforces the handoff contract: unblocked, unclaimed, not already done, and either `ready` (to implement) or
+/// `stub` (to refine — the card sits in `doing`, tinted pink, while the spec is written; `refine` returns it to `todo`).
+/// (External tickets *are* claimable — delegating claims them on the delegate's behalf; they just never get a worktree.)
 fn claim(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, agent: &str) -> Result<OpOutput, OpError> {
     if let Some(existing) = find_claim(claims, id) {
         return Err(OpError::AlreadyClaimed { id: id.clone(), agent: existing.agent.clone() });
@@ -356,16 +357,17 @@ fn claim(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, agent: &str)
         }
         _ => {}
     }
-    if ticket.status != Status::Ready {
-        return Err(OpError::Invalid(format!("{id} is {} — only ready tickets can be claimed", ticket.status)));
+    if !matches!(ticket.status, Status::Ready | Status::Stub) {
+        return Err(OpError::Invalid(format!("{id} is {} — only ready tickets (to implement) or stubs (to refine) can be claimed", ticket.status)));
     }
     if blocked {
         let deps = ticket.depends_on.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ");
         return Err(OpError::Invalid(format!("{id} is blocked — its dependencies ({deps}) are not all done")));
     }
     ticket.column = Column::Doing { owner: agent.to_owned(), branch: ticket.column.branch().map(str::to_owned) };
+    let refining = ticket.status == Status::Stub;
     upsert_claim(claims, Claim { ticket: id.clone(), agent: agent.to_owned(), since: Utc::now(), path: None });
-    Ok(OpOutput::plain(json!({ "id": id, "owner": agent })))
+    Ok(OpOutput::plain(json!({ "id": id, "owner": agent, "refining": refining })))
 }
 
 /// Releasing undoes a claim: the live claim is dropped and the card returns to the *top* of `todo` — it was priority work
@@ -397,6 +399,7 @@ fn bind_external(board: &mut Board, id: &TicketId, external: Option<crate::store
 /// tickets, then the top-level split tickets. `new:<i>` placeholders resolve against the top-level `split_tickets` only.
 fn refine(
     board: &mut Board,
+    claims: &mut Vec<Claim>,
     target: &RefineTarget,
     title: Option<String>,
     body: String,
@@ -404,6 +407,17 @@ fn refine(
     split_epics: Vec<NewEpicSpec>,
 ) -> Result<OpOutput, OpError> {
     let inherited_epic = retitle_target(board, target, title, body)?;
+
+    // A stub claimed for refinement sat in `doing` while its spec was written — hand it back for the human's verdict:
+    // the claim drops and the card returns to the top of `todo`, mirroring `release`.
+    if let RefineTarget::Ticket(id) = target {
+        remove_claim(claims, id);
+        if matches!(ticket_mut(board, id)?.column, Column::Doing { .. }) {
+            ticket_mut(board, id)?.column = Column::Todo;
+            reposition(board, id, ColumnId::Todo, Some(0));
+        }
+    }
+
     let mut created: Vec<String> = Vec::new();
 
     // Split epics first: their tickets belong to them, and their ids must exist before the tickets reference them.
@@ -586,13 +600,35 @@ mod tests {
     }
 
     #[test]
+    fn refining_a_claimed_stub_returns_it_to_todo_and_drops_the_claim() {
+        let (_dir, store) = scratch();
+        let filler = create(&store, "filler at the top of todo");
+        let id = create(&store, "vague idea");
+        apply(&store, None, Op::SetTicketStatus { id: id.clone(), status: Status::Stub }).unwrap();
+
+        apply(&store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
+        let board = store.read_board().unwrap();
+        assert!(matches!(&board.ticket(&id).unwrap().column, Column::Doing { owner, .. } if owner == "claude"), "a claimed stub sits in doing while its spec is written");
+        assert_eq!(store.read_claims().unwrap().len(), 1);
+
+        let op = Op::Refine { target: RefineTarget::Ticket(id.clone()), title: None, body: "now specific".into(), split_tickets: vec![], split_epics: vec![] };
+        apply(&store, None, op).unwrap();
+        let board = store.read_board().unwrap();
+        let refined = board.ticket(&id).unwrap();
+        assert_eq!(refined.status, Status::Review);
+        assert_eq!(refined.body, "now specific");
+        assert_eq!(board.tickets_in(ColumnId::Todo).next().unwrap().id, id, "the refined stub returns to the TOP of todo, above {filler}");
+        assert!(store.read_claims().unwrap().is_empty(), "refine drops the live claim");
+    }
+
+    #[test]
     fn claiming_enforces_the_handoff_contract() {
         let (_dir, store) = scratch();
         let a = create(&store, "first");
         let b = create(&store, "second");
 
-        // Not ready.
-        apply(&store, None, Op::SetTicketStatus { id: a.clone(), status: Status::Stub }).unwrap();
+        // Not ready (and not a stub — those are claimable for refinement).
+        apply(&store, None, Op::SetTicketStatus { id: a.clone(), status: Status::Draft }).unwrap();
         let err = apply(&store, None, Op::Claim { id: a.clone(), agent: "claude".into() }).unwrap_err();
         assert!(err.to_string().contains("only ready"), "{err}");
         apply(&store, None, Op::SetTicketStatus { id: a.clone(), status: Status::Ready }).unwrap();

@@ -29,11 +29,14 @@ const DEFAULT_AGENT: &str = "claude";
 
 /// The workflow contract, shipped to the client as server instructions.
 const INSTRUCTIONS: &str = "A local Kanban board shared with a human (who sees it live in a browser). \
-The lifecycle of a ticket: kanban_claim → kanban_worktree_start → work in the worktree, committing as you go → \
+The lifecycle of a ready ticket: kanban_claim → kanban_worktree_start → work in the worktree, committing as you go → \
 kanban_note progress → kanban_worktree_finish → kanban_move to done. \
-Only claim tickets that are ready, in todo, and unblocked — kanban_next finds exactly those; never claim spontaneously \
-outside an explicit work loop. Never touch draft tickets. Tickets you create default to status=review so the human vets \
-them. Mutating tools need expected_version from your latest kanban_board read; on a version conflict, re-read and retry.";
+Stubs are specs to write, not code to build: kanban_claim (the card sits pink in doing) → research → kanban_refine, \
+which lands it back in todo at status=review for the human — no worktree. \
+Only claim tickets kanban_next surfaces — ready (implement) or stub (refine), in todo, unblocked; never claim \
+spontaneously outside an explicit work loop. Never touch draft tickets. Tickets you create default to status=review so \
+the human vets them. Mutating tools need expected_version from your latest kanban_board read; on a version conflict, \
+re-read and retry.";
 
 /// The MCP server: a thin adapter from tools onto the shared ops layer and read model.
 #[derive(Debug, Clone)]
@@ -270,24 +273,29 @@ impl KanbanServer {
         .await
     }
 
-    /// The next thing to work on: the highest ticket in todo that is ready, unblocked, unclaimed, and not external.
-    /// Returns the full ticket, or explains that nothing is eligible.
+    /// The next thing to work on: the highest ticket in todo that is unblocked, unclaimed, non-external, and either
+    /// ready (action "implement") or stub (action "refine" — write its spec, don't build it). Returns the full ticket
+    /// plus the action, or explains that nothing is eligible.
     #[tool]
     async fn kanban_next(&self) -> Result<CallToolResult, ErrorData> {
         self.read(|store| {
             let board = store.read_board()?;
             let claims = store.read_claims()?;
             Ok(match derive::next_ticket(&board, &claims) {
-                Some(t) => serde_json::json!({ "version": board.version, "ticket": t }),
+                Some(t) => {
+                    let action = if t.status == Status::Stub { "refine" } else { "implement" };
+                    serde_json::json!({ "version": board.version, "ticket": t, "action": action })
+                }
                 None => serde_json::json!({ "version": board.version, "ticket": null,
-                    "reason": "no eligible ticket: nothing in todo is ready, unblocked, unclaimed, and non-external" }),
+                    "reason": "no eligible ticket: nothing in todo is ready or stub, unblocked, unclaimed, and non-external" }),
             })
         })
         .await
     }
 
-    /// Claim a ticket: moves it to doing owned by you and records the live claim. Requires ready + unblocked + unclaimed.
-    /// A pure board mutation — create the worktree with `kanban_worktree_start` afterwards.
+    /// Claim a ticket: moves it to doing owned by you and records the live claim. Requires unblocked + unclaimed, and
+    /// status ready (to implement) or stub (to refine — the card shows pink while you write the spec). A pure board
+    /// mutation — create the worktree with `kanban_worktree_start` afterwards (implementation only; refining needs none).
     #[tool]
     async fn kanban_claim(&self, Parameters(p): Parameters<ClaimParams>) -> Result<CallToolResult, ErrorData> {
         let op = Op::Claim { id: TicketId(p.ticket), agent: p.agent.unwrap_or_else(|| DEFAULT_AGENT.into()) };
@@ -386,7 +394,8 @@ impl KanbanServer {
     }
 
     /// Record a refinement of a stub: replace its spec (you did the thinking — this records it), optionally splitting off
-    /// new tickets/epics. Everything touched or created lands in `status=review` for the human's verdict. Atomic.
+    /// new tickets/epics. Everything touched or created lands in `status=review` for the human's verdict. A ticket claimed
+    /// for refinement returns to the top of todo and its claim drops — no worktree is ever involved. Atomic.
     #[tool]
     async fn kanban_refine(&self, Parameters(p): Parameters<RefineParams>) -> Result<CallToolResult, ErrorData> {
         let target = if p.target.starts_with("EP-") { RefineTarget::Epic(EpicId(p.target)) } else { RefineTarget::Ticket(TicketId(p.target)) };
