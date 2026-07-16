@@ -1,6 +1,6 @@
 //! The board's wire format: serde shapes that match the JSON in `.kanban/board.json` exactly.
 //!
-//! The README's example board is the contract, and a round-trip test in this module pins it. Two properties of the shape are
+//! The example board in design.md is the contract, and a round-trip test in this module pins it. Two properties of the shape are
 //! load-bearing and worth restating here:
 //!
 //! - [`Column`] is an internally-tagged enum on `"id"`, so a ticket structurally cannot sit in one column while carrying another
@@ -317,9 +317,9 @@ fn next_numeric_suffix<'a>(ids: impl Iterator<Item = &'a str>, prefix: &str) -> 
 mod tests {
     use super::*;
 
-    /// The literal example board from the README. This test pins the wire format: if the model drifts from the README, one of
+    /// The literal example board from design.md. This test pins the wire format: if the model drifts from design.md, one of
     /// the two is wrong and the build should say so.
-    const README_BOARD: &str = r##"{
+    const DESIGN_MD_BOARD: &str = r##"{
   "version": 12,
   "columns": [
     { "id": "todo", "title": "To do" },
@@ -357,16 +357,16 @@ mod tests {
 }"##;
 
     #[test]
-    fn readme_example_round_trips() {
-        let board: Board = serde_json::from_str(README_BOARD).expect("README example must parse");
+    fn design_md_example_round_trips() {
+        let board: Board = serde_json::from_str(DESIGN_MD_BOARD).expect("design.md example must parse");
         let reserialized = serde_json::to_value(&board).expect("board must serialize");
-        let original: serde_json::Value = serde_json::from_str(README_BOARD).unwrap();
-        assert_eq!(reserialized, original, "re-serializing the README example must not add, drop, or alter fields");
+        let original: serde_json::Value = serde_json::from_str(DESIGN_MD_BOARD).unwrap();
+        assert_eq!(reserialized, original, "re-serializing the design.md example must not add, drop, or alter fields");
     }
 
     #[test]
     fn readme_example_parses_into_the_right_shapes() {
-        let board: Board = serde_json::from_str(README_BOARD).unwrap();
+        let board: Board = serde_json::from_str(DESIGN_MD_BOARD).unwrap();
         assert_eq!(board.version, 12);
         assert_eq!(board.columns.len(), 3);
         let k1 = board.ticket(&TicketId("K-1".into())).unwrap();
@@ -431,7 +431,7 @@ mod tests {
 
     #[test]
     fn completed_at_serializes_as_rfc3339_z() {
-        // Pins the chrono serde format against the README's "2026-07-14T09:12:00Z" (internally-tagged enums buffer content
+        // Pins the chrono serde format against design.md's "2026-07-14T09:12:00Z" (internally-tagged enums buffer content
         // through serde's Content type — this also guards that path).
         let col = Column::Done { branch: None, completed_at: "2026-07-14T09:12:00Z".parse().unwrap() };
         let v = serde_json::to_value(&col).unwrap();

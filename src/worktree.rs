@@ -377,7 +377,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn slugs_condense_like_the_readme_says() {
+    fn slugs_condense_like_design_md_says() {
         assert_eq!(derive_slug("Rate-limit the login route"), "rate-limit-login");
         assert_eq!(derive_slug("Add session refresh"), "add-session-refresh");
         assert_eq!(derive_slug("Add authorization based on OAuth from Google"), "add-authorization-oauth");
