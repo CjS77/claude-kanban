@@ -20,6 +20,7 @@ pub enum GitError {
 
 /// Run `git <args>` in `dir`, returning trimmed stdout. Non-zero exit becomes [`GitError::Failed`] carrying stderr.
 pub fn git(dir: &Path, args: &[&str]) -> Result<String, GitError> {
+    tracing::trace!(dir = %dir.display(), args = args.join(" "), "git");
     let output = Command::new("git").current_dir(dir).args(args).output()?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).trim_end().to_owned())

@@ -181,6 +181,9 @@ fn worktree(store: &Store, command: WorktreeCommand) -> anyhow::Result<()> {
 
 /// Logs go to STDERR, always — the `mcp` subcommand owns stdout for the MCP protocol, and mixing a log line into a JSON-RPC
 /// stream corrupts the session. Filter with `RUST_LOG` (default: this crate at info).
+///
+/// Level discipline: `info` = lifecycle milestones and applied ops; `warn` = refusals (stale versions, the security guard,
+/// error toasts); `debug` = op payloads, store writes, SSE broadcasts; `trace` = every git invocation.
 fn init_tracing() {
     use tracing_subscriber::EnvFilter;
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("claude_kanban=info,tower_http=warn"));

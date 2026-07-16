@@ -148,10 +148,45 @@ impl OpError {
     }
 }
 
-/// Apply one operation under the full write discipline. See the module docs; this is the only path that mutates the board.
+/// Apply one operation under the full write discipline. See the module docs; this is the only path that mutates the board,
+/// so one log line here covers every mutation from both faces (UI and MCP).
 pub fn apply(store: &Store, expected_version: Option<u64>, op: Op) -> Result<Applied, OpError> {
-    let (out, version) = store.mutate(expected_version, |board, claims| transition(op, board, claims))?;
-    Ok(Applied { version, created_ids: out.created_ids, result: out.result })
+    let name = op.name();
+    tracing::debug!(?op, "applying {name}");
+    match store.mutate(expected_version, |board, claims| transition(op, board, claims)) {
+        Ok((out, version)) => {
+            tracing::info!(version, created = ?out.created_ids, "{name} applied");
+            Ok(Applied { version, created_ids: out.created_ids, result: out.result })
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "{name} refused");
+            Err(e)
+        }
+    }
+}
+
+impl Op {
+    /// The op's name for log lines: the discriminant without its payload.
+    fn name(&self) -> &'static str {
+        match self {
+            Op::CreateTicket { .. } => "create_ticket",
+            Op::CreateEpic { .. } => "create_epic",
+            Op::UpdateTicket { .. } => "update_ticket",
+            Op::UpdateEpic { .. } => "update_epic",
+            Op::DeleteTicket { .. } => "delete_ticket",
+            Op::DeleteEpic { .. } => "delete_epic",
+            Op::MoveTicket { .. } => "move_ticket",
+            Op::SetTicketStatus { .. } => "set_ticket_status",
+            Op::SetEpicStatus { .. } => "set_epic_status",
+            Op::Claim { .. } => "claim",
+            Op::Release { .. } => "release",
+            Op::AddNote { .. } => "add_note",
+            Op::BindExternal { .. } => "bind_external",
+            Op::Refine { .. } => "refine",
+            Op::StampWorktree { .. } => "stamp_worktree",
+            Op::ClearWorktreePath { .. } => "clear_worktree_path",
+        }
+    }
 }
 
 /// A transition's output before the store stamps the new version on it.

@@ -53,6 +53,7 @@ pub fn spawn_watcher(store: Store, shutdown: CancellationToken) -> anyhow::Resul
         }
     })?;
     watcher.watch(store.dir(), RecursiveMode::NonRecursive)?;
+    tracing::debug!(dir = %store.dir().display(), "watching the store for changes");
 
     let sender = tx.clone();
     tokio::spawn(async move {
@@ -69,7 +70,13 @@ pub fn spawn_watcher(store: Store, shutdown: CancellationToken) -> anyhow::Resul
             tokio::time::sleep(DEBOUNCE).await;
             while raw_rx.try_recv().is_ok() {}
             // Version 0 on a read failure is fine: it never equals the browser's current version, so it still refreshes.
-            let version = store.read_board().map_or(0, |b| b.version);
+            let version = store.read_board().map_or_else(
+                |e| {
+                    tracing::warn!(error = %e, "board unreadable during refresh — broadcasting version 0");
+                    0
+                },
+                |b| b.version,
+            );
             tracing::debug!(version, subscribers = sender.receiver_count(), "store changed — broadcasting refresh");
             let _ = sender.send(version);
         }

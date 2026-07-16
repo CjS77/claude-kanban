@@ -277,6 +277,11 @@ just css               # regenerate assets/app.css after template edits (Tailwin
 just css-watch         # …or continuously, while hacking on the UI (pair with `serve --assets-dir assets`)
 ```
 
+Diagnostics go to stderr (stdout belongs to the MCP protocol) and are filtered with `RUST_LOG` — the default is
+`claude_kanban=info,tower_http=warn`. `info` covers lifecycle milestones and every applied op; `warn` covers refusals
+(stale versions, the security guard, error toasts); `debug` adds op payloads, store writes, and SSE broadcasts;
+`trace` logs every git invocation. E.g. `RUST_LOG=claude_kanban=debug claude-kanban serve`.
+
 ## Licence
 
 MIT OR Apache-2.0.

@@ -75,6 +75,7 @@ impl From<askama::Error> for AppError {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
+        tracing::warn!(status = %self.status, reason = %self.message, "request refused — rendering toast");
         let toast = views::ToastTpl::error(self.message).render().unwrap_or_default();
         let mut headers = HeaderMap::new();
         headers.insert(HeaderName::from_static("hx-retarget"), "#toasts".parse().expect("static"));

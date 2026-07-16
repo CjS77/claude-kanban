@@ -32,11 +32,13 @@ pub async fn guard(State(app): State<AppState>, req: Request, next: Next) -> Res
         .and_then(|h| h.to_str().ok())
         .is_some_and(|host| app.allowed_hosts.iter().any(|allowed| allowed == host));
     if !host_ok {
+        tracing::warn!(host = ?req.headers().get(header::HOST), uri = %req.uri(), "refused: host not in the allowlist (DNS rebinding?)");
         return refuse("this board only answers to localhost");
     }
 
     if req.method() != Method::GET && req.method() != Method::HEAD {
         if !req.headers().contains_key(VERSION_HEADER) {
+            tracing::warn!(method = %req.method(), uri = %req.uri(), "refused mutation: missing X-Board-Version header (CSRF?)");
             return refuse("mutations need the X-Board-Version header (are you using the board UI?)");
         }
         let origin_ok = match req.headers().get(header::ORIGIN).and_then(|o| o.to_str().ok()) {
@@ -44,6 +46,7 @@ pub async fn guard(State(app): State<AppState>, req: Request, next: Next) -> Res
             Some(origin) => app.allowed_origins.iter().any(|allowed| allowed == origin),
         };
         if !origin_ok {
+            tracing::warn!(origin = ?req.headers().get(header::ORIGIN), uri = %req.uri(), "refused mutation: cross-origin");
             return refuse("cross-origin mutations are not allowed");
         }
     }

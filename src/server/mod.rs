@@ -72,6 +72,7 @@ async fn run(store: Store, port: u16, no_open: bool, assets_dir: Option<PathBuf>
 
     let url = format!("http://127.0.0.1:{port}/");
     println!("Serving the board on {url}  (ctrl-c to stop)");
+    tracing::info!(%url, store = %store.dir().display(), "board UI listening");
     if !no_open {
         let _ = open::that_detached(&url);
     }
@@ -80,6 +81,7 @@ async fn run(store: Store, port: u16, no_open: bool, assets_dir: Option<PathBuf>
         let shutdown = shutdown.clone();
         async move {
             let _ = tokio::signal::ctrl_c().await;
+            tracing::info!("ctrl-c — shutting down");
             shutdown.cancel();
         }
     });

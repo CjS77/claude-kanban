@@ -120,6 +120,7 @@ impl Store {
         if !gitignore.exists() {
             fs::write(&gitignore, STORE_GITIGNORE).map_err(|source| StoreError::Io { path: gitignore, source })?;
         }
+        tracing::info!(path = %self.board_path().display(), "board initialised");
         Ok(())
     }
 
@@ -160,6 +161,7 @@ impl Store {
         let mut board = self.read_board()?;
         if let Some(expected) = expected_version {
             if board.version != expected {
+                tracing::warn!(expected, actual = board.version, "version conflict — the caller acted on a stale board");
                 return Err(StoreError::VersionConflict { expected, actual: board.version }.into());
             }
         }
@@ -173,10 +175,12 @@ impl Store {
             problems: problems.join("\n  - "),
         })?;
         board.version += 1;
+        let claims_changed = claims != claims_before;
         io::write_json_atomic(&self.board_path(), &board)?;
-        if claims != claims_before {
+        if claims_changed {
             io::write_json_atomic(&self.claims_path(), &claims)?;
         }
+        tracing::debug!(version = board.version, claims_changed, "store written");
         Ok((out, board.version))
     }
 }

@@ -46,10 +46,12 @@ pub struct KanbanServer {
 
 /// Run the stdio MCP server until the client disconnects.
 pub fn run(store: Store) -> anyhow::Result<()> {
+    tracing::info!(store = %store.dir().display(), "MCP server on stdio");
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     runtime.block_on(async {
         let service = KanbanServer { store }.serve(stdio()).await?;
         service.waiting().await?;
+        tracing::info!("MCP client disconnected");
         Ok(())
     })
 }
