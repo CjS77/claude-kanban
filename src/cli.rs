@@ -30,9 +30,10 @@ pub enum Command {
 
     /// Serve the interactive board UI on localhost.
     Serve {
-        /// Port to bind. 0 picks a free one.
-        #[arg(long, env = "KANBAN_PORT", default_value_t = 4747)]
-        port: u16,
+        /// Port to bind: this flag, `KANBAN_PORT`, or config `port` — an explicit choice fails loudly when taken; 0 picks
+        /// a free one. Omitted entirely: try 4747, and hunt for a free port when another project already holds it.
+        #[arg(long, env = "KANBAN_PORT")]
+        port: Option<u16>,
 
         /// Do not open a browser on start.
         #[arg(long)]

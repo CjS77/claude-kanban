@@ -26,6 +26,9 @@ pub struct Config {
     /// How many tickets `/kanban:work` may drive concurrently. Absent or `0` means `1` (the sequential loop). Config-only:
     /// no flag or env var.
     pub max_workers: Option<usize>,
+    /// Port for `serve`. An explicit port — here, `--port`, or `KANBAN_PORT` — is honoured or fails loudly; when none is
+    /// given, `serve` tries 4747 and hunts for a free port if another project holds it.
+    pub port: Option<u16>,
 }
 
 impl Config {
@@ -45,6 +48,13 @@ impl Config {
     #[must_use]
     pub fn max_workers(&self) -> usize {
         self.max_workers.filter(|&n| n > 0).unwrap_or(1)
+    }
+
+    /// The explicitly chosen serve port, if any: `--port` flag / `KANBAN_PORT` (already merged by clap) > config.
+    /// `None` means nobody chose — the server tries the default port and hunts instead of failing.
+    #[must_use]
+    pub fn port(&self, flag: Option<u16>) -> Option<u16> {
+        flag.or(self.port)
     }
 }
 
@@ -96,5 +106,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("config.json"), r#"{ "max_workers": 3 }"#).unwrap();
         assert_eq!(Config::load(dir.path()).unwrap().max_workers(), 3);
+    }
+
+    #[test]
+    fn port_precedence_is_flag_env_then_config_then_nobody() {
+        let cfg = Config { port: Some(5050), ..Config::default() };
+        assert_eq!(cfg.port(Some(8080)), Some(8080), "flag/env (merged by clap) beats config");
+        assert_eq!(cfg.port(None), Some(5050), "config beats the default");
+        assert_eq!(Config::default().port(None), None, "None means: try 4747, hunt on AddrInUse");
     }
 }

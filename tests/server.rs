@@ -201,6 +201,61 @@ async fn detail_and_edit_panes_render_and_404_cleanly() {
 }
 
 #[tokio::test]
+async fn the_default_port_hunts_but_an_explicit_port_fails_loudly() {
+    use claude_kanban::server::{Bound, bind_listener};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::at(dir.path().join(".kanban"));
+    store.init().unwrap();
+
+    // Another project holds the would-be default port.
+    let stranger = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let taken = stranger.local_addr().unwrap().port();
+
+    // No explicit choice and no serve.pid → hunt to a free port…
+    let Bound::Listener(listener) = bind_listener(&store, None, taken).await.unwrap() else {
+        panic!("without a live serve.pid the default must hunt, not report a running serve");
+    };
+    let port = listener.local_addr().unwrap().port();
+    assert_ne!(port, taken);
+
+    // …and the hunted port genuinely serves: a real socket, a real request.
+    let (refresh, _) = tokio::sync::broadcast::channel(4);
+    let app = Arc::new(App {
+        store: store.clone(),
+        assets_dir: None,
+        allowed_hosts: vec![format!("127.0.0.1:{port}")],
+        allowed_origins: vec![format!("http://127.0.0.1:{port}")],
+        title: "test".into(),
+        ui_owner: "tester".into(),
+        refresh,
+        shutdown: tokio_util::sync::CancellationToken::new(),
+    });
+    tokio::spawn(async move { axum::serve(listener, router(app)).await });
+    let mut conn = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    conn.write_all(format!("GET /ui/board HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+    let mut response = String::new();
+    conn.read_to_string(&mut response).await.unwrap();
+    assert!(response.starts_with("HTTP/1.1 200"), "the hunted port must answer /ui/board: {response}");
+
+    // An explicit port that is taken stays a loud failure, hinting at the live serve the pid file names.
+    std::fs::write(store.dir().join("serve.pid"), format!(r#"{{"pid": {}, "port": {port}}}"#, std::process::id())).unwrap();
+    let err = bind_listener(&store, Some(taken), taken).await.unwrap_err();
+    assert!(format!("{err:#}").contains("already seems to be running"), "{err:#}");
+
+    // The default port taken while *this* store's serve.pid names a live process → report it, don't duplicate.
+    let Bound::AlreadyServed { pid, port: reported } = bind_listener(&store, None, taken).await.unwrap() else {
+        panic!("a live serve.pid must be reported, not duplicated");
+    };
+    assert_eq!((pid, reported), (std::process::id(), port));
+
+    // A dead pid is a stale file: hunt again instead of refusing to serve.
+    std::fs::write(store.dir().join("serve.pid"), r#"{"pid": 4009999999, "port": 4747}"#).unwrap();
+    assert!(matches!(bind_listener(&store, None, taken).await.unwrap(), Bound::Listener(_)));
+}
+
+#[tokio::test]
 async fn the_file_watcher_broadcasts_on_store_writes() {
     let (_dir, _router, store) = test_app();
     let shutdown = tokio_util::sync::CancellationToken::new();

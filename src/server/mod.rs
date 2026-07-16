@@ -16,7 +16,10 @@ use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use tower_http::trace::TraceLayer;
 
-use crate::store::Store;
+use crate::{config::Config, store::Store};
+
+/// The UI port when nothing chooses one explicitly. Not a hard address: taken by another project, `serve` hunts.
+pub const DEFAULT_PORT: u16 = 4747;
 
 /// Shared state for every handler.
 #[derive(Debug)]
@@ -41,17 +44,23 @@ pub struct App {
 pub type AppState = Arc<App>;
 
 /// Run the server until ctrl-c. Fails fast — before binding — if the store can't produce a valid board.
-pub fn serve(store: Store, port: u16, no_open: bool, assets_dir: Option<PathBuf>) -> anyhow::Result<()> {
+/// `port: None` means nobody chose one (flag or env): try [`DEFAULT_PORT`], hunting for a free port when it's taken.
+pub fn serve(store: Store, port: Option<u16>, no_open: bool, assets_dir: Option<PathBuf>) -> anyhow::Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     runtime.block_on(run(store, port, no_open, assets_dir))
 }
 
-async fn run(store: Store, port: u16, no_open: bool, assets_dir: Option<PathBuf>) -> anyhow::Result<()> {
+async fn run(store: Store, port: Option<u16>, no_open: bool, assets_dir: Option<PathBuf>) -> anyhow::Result<()> {
     store.read_board().context("cannot serve this store")?;
 
-    let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], port)))
-        .await
-        .with_context(|| bind_failure_hint(&store, port))?;
+    let explicit = Config::load(store.dir())?.port(port);
+    let listener = match bind_listener(&store, explicit, DEFAULT_PORT).await? {
+        Bound::Listener(listener) => listener,
+        Bound::AlreadyServed { pid, port } => {
+            println!("This board is already being served on http://127.0.0.1:{port}/ (pid {pid}) — not starting a duplicate.");
+            return Ok(());
+        }
+    };
     let port = listener.local_addr()?.port();
 
     let shutdown = CancellationToken::new();
@@ -117,6 +126,62 @@ pub fn router(app: AppState) -> Router {
         .layer(middleware::from_fn_with_state(app.clone(), security::guard))
         .layer(TraceLayer::new_for_http())
         .with_state(app)
+}
+
+/// Where the serve socket comes from: a freshly bound listener, or the discovery that this store is already served.
+#[derive(Debug)]
+pub enum Bound {
+    /// Bound and ready to serve.
+    Listener(tokio::net::TcpListener),
+    /// This store's `serve.pid` names a live process — starting a duplicate would be noise, not service.
+    AlreadyServed { pid: u32, port: u16 },
+}
+
+/// Choose and bind the serve socket. An explicit port (flag / env / config) is honoured or fails loudly with the hint —
+/// an explicit choice is never silently overridden. No choice tries `default_port`; when that's taken, either this store
+/// is already being served (report it, don't duplicate) or another project owns the port (let the OS pick a free one).
+pub async fn bind_listener(store: &Store, explicit: Option<u16>, default_port: u16) -> anyhow::Result<Bound> {
+    if let Some(port) = explicit {
+        let listener = bind(port).await.with_context(|| bind_failure_hint(store, port))?;
+        return Ok(Bound::Listener(listener));
+    }
+    match bind(default_port).await {
+        Ok(listener) => Ok(Bound::Listener(listener)),
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+            if let Some((pid, port)) = live_serve(store) {
+                return Ok(Bound::AlreadyServed { pid, port });
+            }
+            tracing::info!("port {default_port} is taken by someone else — asking the OS for a free one");
+            Ok(Bound::Listener(bind(0).await.context("could not bind any loopback port")?))
+        }
+        Err(e) => Err(e).with_context(|| format!("could not bind 127.0.0.1:{default_port}")),
+    }
+}
+
+async fn bind(port: u16) -> std::io::Result<tokio::net::TcpListener> {
+    tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], port))).await
+}
+
+/// The `{pid, port}` from this store's `serve.pid`, when it names a process that is still alive.
+fn live_serve(store: &Store) -> Option<(u32, u16)> {
+    let raw = std::fs::read_to_string(store.dir().join("serve.pid")).ok()?;
+    let info: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let pid = u32::try_from(info["pid"].as_u64()?).ok()?;
+    let port = u16::try_from(info["port"].as_u64()?).ok()?;
+    pid_alive(pid).then_some((pid, port))
+}
+
+/// `kill -0` semantics without unsafe code: ask the `kill` utility whether the process exists. Errs towards "dead"
+/// (non-unix, no `kill` binary, someone else's process) — a stale verdict only costs a redundant second server on a
+/// fresh port, never a wrong refusal to serve.
+fn pid_alive(pid: u32) -> bool {
+    cfg!(unix)
+        && std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
 }
 
 /// A friendlier bind error: if a pid file exists, another `serve` is probably already running.

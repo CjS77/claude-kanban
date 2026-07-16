@@ -243,6 +243,8 @@ cargo build --release                    # the whole build — the web UI is emb
 ./target/release/claude-kanban serve     # open the board at http://127.0.0.1:4747
 ```
 
+Several projects can serve at once with zero coordination. An explicit port (`--port`, `KANBAN_PORT`, or `"port"` in `.kanban/config.json` — in that order) is honoured or fails loudly when taken. With no explicit choice, `serve` tries 4747; if another project holds it, the OS picks a free port, and if *this* project already holds it, `serve` prints the running board's URL and exits instead of starting a duplicate (liveness judged by `serve.pid`).
+
 Installed as a Claude Code plugin, `.mcp.json` registers the MCP server automatically and `/kanban:work` drives the loop.
 
 ## Layout

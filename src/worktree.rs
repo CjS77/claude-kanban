@@ -386,6 +386,22 @@ mod tests {
     }
 
     #[test]
+    fn same_named_repos_get_distinct_worktree_paths() {
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let (repo_a, repo_b) = (a.path().join("api"), b.path().join("api"));
+        std::fs::create_dir_all(&repo_a).unwrap();
+        std::fs::create_dir_all(&repo_b).unwrap();
+        let id = TicketId("K-1".into());
+        let path_a = worktree_path(&Store::at(repo_a.join(".kanban")), &repo_a, &id, &StartOpts::default()).unwrap();
+        let path_b = worktree_path(&Store::at(repo_b.join(".kanban")), &repo_b, &id, &StartOpts::default()).unwrap();
+        assert_ne!(path_a, path_b, "the path hash keeps two repos both named `api` apart");
+        for p in [&path_a, &path_b] {
+            assert!(p.ends_with("K-1"), "{}", p.display());
+            assert!(p.parent().unwrap().file_name().unwrap().to_string_lossy().starts_with("api-"), "{}", p.display());
+        }
+    }
+
+    #[test]
     fn branch_to_ticket_mapping_is_strict() {
         assert_eq!(ticket_for_branch("k-7/rate-limit-login").as_deref(), Some("K-7"));
         assert_eq!(ticket_for_branch("k-12/x").as_deref(), Some("K-12"));
