@@ -100,7 +100,11 @@
 
     // --- 5. client-side markdown ------------------------------------------------------------------------------------
     const renderMarkdown = (scope) => {
-        scope.querySelectorAll("[data-md-src]").forEach((el) => {
+        // htmx:load fires once per TOP-LEVEL element of a swapped-in fragment, so a pane can BE the scope itself
+        // (detail.html's <article> is one) — querySelectorAll alone only sees descendants and would skip it.
+        const panes = [...scope.querySelectorAll("[data-md-src]")];
+        if (scope.matches && scope.matches("[data-md-src]")) panes.unshift(scope);
+        panes.forEach((el) => {
             const src = el.dataset.mdSrc;
             el.removeAttribute("data-md-src");
             fetch(src)
