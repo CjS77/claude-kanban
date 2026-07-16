@@ -20,6 +20,7 @@ use rmcp::{
 use serde::Deserialize;
 
 use crate::{
+    config::Config,
     ops::{self, Applied, NewEpicSpec, NewTicketSpec, Op, OpError, RefineTarget},
     store::{Store, derive, model::{EpicId, Status, TicketId}},
 };
@@ -256,8 +257,9 @@ pub struct WorktreeFinishParams {
 
 #[tool_router]
 impl KanbanServer {
-    /// Read the whole board: columns, tickets (with derived blocked/claim facts), epics (with derived columns), and the
-    /// current version — pass that version as `expected_version` to mutating tools.
+    /// Read the whole board: columns, tickets (with derived blocked/claim facts), epics (with derived columns), the
+    /// current version — pass that version as `expected_version` to mutating tools — and `max_workers`, how many tickets
+    /// a work loop may drive concurrently.
     #[tool]
     async fn kanban_board(&self, Parameters(p): Parameters<BoardParams>) -> Result<CallToolResult, ErrorData> {
         let column = match p.column.as_deref() {
@@ -265,12 +267,17 @@ impl KanbanServer {
             Some(c) => Some(c.parse::<crate::store::model::ColumnId>().map_err(|e| ErrorData::invalid_params(e, None))?),
         };
         self.read(move |store| {
+            let max_workers = Config::load(store.dir())?.max_workers();
             let mut view = derive::board_view(&store.read_board()?, &store.read_claims()?);
             if let Some(col) = column {
                 view.tickets.retain(|t| t.ticket.column.id() == col);
                 view.epics.retain(|e| e.column == col);
             }
-            Ok(serde_json::to_value(&view).unwrap_or_default())
+            let mut value = serde_json::to_value(&view).unwrap_or_default();
+            if let Some(obj) = value.as_object_mut() {
+                obj.insert("max_workers".into(), max_workers.into());
+            }
+            Ok(value)
         })
         .await
     }

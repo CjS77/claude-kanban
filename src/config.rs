@@ -23,6 +23,9 @@ pub struct Config {
     /// Gitignored files (relative to the repo root) to copy into each new worktree — `.env`, local certs. Only files git
     /// actually ignores are copied; anything else is skipped with a warning, so the config can't smuggle tracked files.
     pub copy_to_worktrees: Vec<String>,
+    /// How many tickets `/kanban:work` may drive concurrently. Absent or `0` means `1` (the sequential loop). Config-only:
+    /// no flag or env var.
+    pub max_workers: Option<usize>,
 }
 
 impl Config {
@@ -33,9 +36,15 @@ impl Config {
     }
 
     /// The effective worktree root: `--dir` flag / `KANBAN_WORKTREE_DIR` (already merged by clap) > config > default.
-    #[must_use] 
+    #[must_use]
     pub fn worktree_root(&self, flag: Option<PathBuf>) -> PathBuf {
         flag.or_else(|| self.worktree_root.clone()).unwrap_or_else(|| PathBuf::from(DEFAULT_WORKTREE_ROOT))
+    }
+
+    /// The effective worker count for `/kanban:work`: absent or `0` collapses to `1`.
+    #[must_use]
+    pub fn max_workers(&self) -> usize {
+        self.max_workers.filter(|&n| n > 0).unwrap_or(1)
     }
 }
 
@@ -53,7 +62,7 @@ mod tests {
 
     #[test]
     fn precedence_is_flag_then_config_then_default() {
-        let cfg = Config { worktree_root: Some(PathBuf::from("/from/config")), copy_to_worktrees: vec![] };
+        let cfg = Config { worktree_root: Some(PathBuf::from("/from/config")), ..Config::default() };
         assert_eq!(cfg.worktree_root(Some(PathBuf::from("/from/flag"))), PathBuf::from("/from/flag"));
         assert_eq!(cfg.worktree_root(None), PathBuf::from("/from/config"));
         assert_eq!(Config::default().worktree_root(None), PathBuf::from(DEFAULT_WORKTREE_ROOT));
@@ -73,5 +82,19 @@ mod tests {
         let cfg = Config::load(dir.path()).unwrap();
         assert_eq!(cfg.worktree_root.unwrap(), PathBuf::from("/data/wt"));
         assert_eq!(cfg.copy_to_worktrees, vec![".env"]);
+    }
+
+    #[test]
+    fn max_workers_absent_and_zero_collapse_to_one() {
+        assert_eq!(Config::default().max_workers(), 1);
+        assert_eq!(Config { max_workers: Some(0), ..Config::default() }.max_workers(), 1);
+        assert_eq!(Config { max_workers: Some(4), ..Config::default() }.max_workers(), 4);
+    }
+
+    #[test]
+    fn max_workers_parses_from_config_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.json"), r#"{ "max_workers": 3 }"#).unwrap();
+        assert_eq!(Config::load(dir.path()).unwrap().max_workers(), 3);
     }
 }

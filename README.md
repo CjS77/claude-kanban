@@ -226,7 +226,7 @@ What v1 does.
 
 ### Plugin glue
 
-- [x] `/kanban:work` — the policy loop: claim the next `ready`, unblocked ticket, start its worktree, implement with sensibly-sized commits, note progress, finish, report the branch. Starting the loop is the user's opt-in: inside a running loop Claude claims tickets on its own, one after the next, but it never claims spontaneously outside one. Pushing and PR creation live here in the skill, never in the binary — "nothing leaves the machine" stays literally true of it.
+- [x] `/kanban:work` — the policy loop: claim the next `ready`, unblocked ticket, start its worktree, implement with sensibly-sized commits, note progress, finish, report the branch. Starting the loop is the user's opt-in: inside a running loop Claude claims tickets on its own, one after the next, but it never claims spontaneously outside one. Pushing and PR creation live here in the skill, never in the binary — "nothing leaves the machine" stays literally true of it. With `"max_workers": N` (N > 1) in `.kanban/config.json`, the loop goes parallel: the session claims tickets itself and fans each one out to a subagent in its own worktree, keeping at most N in flight; `kanban_board` reports the effective value.
 - [x] `/kanban:delegate` — mirror a `ready`, unblocked ticket to a GitHub issue, apply the eligibility label, record the `external` binding, and claim it into `doing` on the daemon's behalf; the skill owns the `gh` calls
 
 ## Open design questions

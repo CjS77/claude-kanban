@@ -99,6 +99,12 @@ fn the_mcp_face_reads_claims_and_recovers_from_conflicts() {
 
     let board = mcp.call_tool(4, "kanban_board", &json!({}));
     assert_eq!(board["structuredContent"]["tickets"][0]["title"], "From Claude");
+    assert_eq!(board["structuredContent"]["max_workers"], 1, "unconfigured board defaults to one worker: {board}");
+
+    // max_workers comes from config.json at read time — no server restart needed.
+    std::fs::write(store_dir.join("config.json"), r#"{ "max_workers": 2 }"#).unwrap();
+    let board = mcp.call_tool(40, "kanban_board", &json!({}));
+    assert_eq!(board["structuredContent"]["max_workers"], 2, "{board}");
 
     // kanban_next nominates it; claim it; next then reports nothing eligible.
     let next = mcp.call_tool(5, "kanban_next", &json!({}));

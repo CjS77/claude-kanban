@@ -14,6 +14,14 @@ Arguments given: `$ARGUMENTS`
 - `--push` means after finishing each ticket, push its branch and open a PR with `gh`. WITHOUT this flag nothing
   leaves the machine: no pushes, no PRs — report branch names and stop there.
 
+## Picking the mode
+
+Your first `kanban_board` read carries `max_workers` (from `.kanban/config.json`; absent means 1).
+
+- `max_workers` = 1 → **The loop** below: one ticket at a time, worked by you.
+- `max_workers` = N > 1 → **The parallel loop** below: up to N tickets in flight at once, each worked by a subagent.
+- A ticket-id argument or `--one` caps useful parallelism at 1: use the sequential loop regardless of config.
+
 ## The loop
 
 Repeat until `kanban_next` reports nothing eligible (or you've done the one requested ticket):
@@ -38,6 +46,34 @@ Repeat until `kanban_next` reports nothing eligible (or you've done the one requ
 8. **Close out** — `kanban_move` the ticket to `done`. Report the branch name prominently: integrating it is the
    user's explicit next step. With `--push`: `git push -u origin <branch>` and `gh pr create` (title from the ticket,
    body summarising the work and linking the ticket id), then include the PR URL in the report.
+
+## The parallel loop (max_workers > 1)
+
+You become the orchestrator: you own every board mutation, subagents do the work. Keep at most `max_workers`
+tickets in flight; a refinement counts as one worker, an implementation counts as one worker.
+
+1. **Pick and claim yourself** — `kanban_board`, then `kanban_next`, then `kanban_claim`, exactly as in the
+   sequential loop. Never let subagents race `kanban_next`: claim first, then delegate. (Claims are CAS-guarded by
+   `expected_version` and refused when already claimed, so even a race only costs a re-read and retry.)
+2. **Delegate** — launch one subagent per claimed ticket via the Agent tool, passing the ticket id, its full `body`
+   as the spec, and the action. Launch independent subagents in a single message so they run concurrently. Every
+   subagent starts in the **main checkout** — never inside another ticket's worktree.
+   - `implement` → the subagent runs `kanban_worktree_start` (tell it to supply a short kebab-case `slug`), `cd`s into
+     the reported worktree and stays there, works the spec, commits logical chunks, `kanban_note`s progress, runs
+     the tests/build, and calls `kanban_worktree_finish` once everything is committed. It reports back: branch name,
+     what landed, and whether verification passed. It does NOT move the card — closing out is yours.
+   - `refine` → the subagent researches the codebase (no worktree, no commits, no board writes) and returns the
+     fleshed-out spec text, a sharper title if it found one, and any splits. You call `kanban_refine` with what it
+     returned — subagents never hold board-version state.
+3. **Close out as results arrive** — re-read `kanban_board` for a fresh version, then: reported success →
+   `kanban_move` to `done` (with `--push`, push the branch and open the PR first); reported failure or an unusable
+   result → `kanban_note` what happened and `kanban_release` the ticket. If the subagent died leaving the worktree
+   dirty, leave the worktree for the human — never `force_discard`.
+4. **Top up** — after each close-out, pick and claim the next eligible ticket while others are still running. The
+   loop ends when `kanban_next` reports nothing eligible AND every in-flight ticket is closed out.
+
+The store is safe under concurrency (advisory lock, version CAS, one worktree per ticket, per-ticket branches) —
+what needs discipline is the policy above: one claimer, one board-writer, subagents in their own worktrees.
 
 ## Refining a stub
 
