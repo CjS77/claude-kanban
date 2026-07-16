@@ -44,7 +44,7 @@
     <div class="join" title="draft: still being defined · stub: for Claude to flesh out · review: awaiting your verdict · ready: fully specified">
         {% for status in epic.statuses %}
         <button class="join-item btn btn-xs {% if status.current %}btn-active btn-primary{% endif %}"
-                hx-post="/ui/epic/{{ epic.id }}/status" hx-vals='{"status": "{{ status.name }}"}' hx-swap="none">{{ status.name }}</button>
+                hx-post="/ui/epic/{{ epic.id }}/status" hx-vals='{"status": "{{ status.name }}"}' hx-target="#detail" hx-swap="innerHTML">{{ status.name }}</button>
         {% endfor %}
     </div>
     <div class="flex gap-2">
