@@ -1,0 +1,14 @@
+{#-
+  THE board fragment — the one rendering path for initial load, post-action refreshes, and SSE-driven live updates.
+  `data-version` is the optimistic-concurrency token: glue.js copies it into the X-Board-Version header of every mutating
+  request. `data-draggable` turns dragging off while filters hide cards — a drop position among *visible* cards would be
+  meaningless against the full column.
+-#}
+<div id="board-root" class="grid grid-cols-1 md:grid-cols-3 gap-4 items-start"
+     data-version="{{ version }}"
+     data-draggable="{{ draggable }}">
+    {% for col in columns %}
+    {% include "column.html" %}
+    {% endfor %}
+</div>
+{% include "filter_epic.html" %}

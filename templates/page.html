@@ -1,0 +1,124 @@
+{#-
+  The page shell, rendered once per browser visit. Everything dynamic lives in the `#board` fragment, which htmx loads on
+  page load and reloads on every `kanban:refresh` event (fired by glue.js when the SSE stream reports a change) — one
+  rendering path for initial load, user actions, and live updates alike.
+
+  The filter bar sits OUTSIDE #board so swaps never clobber a half-typed label filter; the epic dropdown alone is refreshed
+  out-of-band by the board fragment (it re-renders with the current selection, so nothing is lost).
+-#}
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ title }} — kanban</title>
+    <link rel="stylesheet" href="/assets/app.css">
+    <script src="/assets/htmx.min.js" defer></script>
+    <script src="/assets/sortable.min.js" defer></script>
+    <script src="/assets/marked.min.js" defer></script>
+    <script src="/assets/purify.min.js" defer></script>
+    <script src="/assets/glue.js" defer></script>
+</head>
+<body class="min-h-screen bg-base-200">
+    <header class="navbar bg-base-100 shadow-sm px-4 gap-3 flex-wrap">
+        <div class="flex-1 min-w-40">
+            <span class="text-lg font-semibold">{{ title }}</span>
+            <span class="badge badge-ghost badge-sm ml-2">claude-kanban</span>
+        </div>
+        <div id="filters" class="flex gap-2 items-center flex-wrap">
+            {% include "filter_epic.html" %}
+            <input name="label" placeholder="filter label" class="input input-sm w-32"
+                   hx-get="/ui/board" hx-target="#board" hx-include="#filters" hx-trigger="input changed delay:300ms">
+            <select name="status" class="select select-sm w-32" aria-label="Filter by status"
+                    hx-get="/ui/board" hx-target="#board" hx-include="#filters" hx-trigger="change">
+                <option value="">Any status</option>
+                <option value="draft">draft</option>
+                <option value="stub">stub</option>
+                <option value="review">review</option>
+                <option value="ready">ready</option>
+            </select>
+        </div>
+        <div class="flex gap-2">
+            <button class="btn btn-sm btn-primary" onclick="document.getElementById('new-ticket-modal').showModal()">+ Ticket</button>
+            <button class="btn btn-sm" onclick="document.getElementById('new-epic-modal').showModal()">+ Epic</button>
+        </div>
+    </header>
+
+    <main class="p-4">
+        <div id="board"
+             hx-get="/ui/board"
+             hx-trigger="load, kanban:refresh from:body"
+             hx-include="#filters"
+             hx-swap="innerHTML"></div>
+    </main>
+
+    {# Detail pane: cards hx-get their detail into #detail; glue.js opens the dialog when content lands. #}
+    <dialog id="detail-modal" class="modal">
+        <div class="modal-box max-w-3xl">
+            <div id="detail"></div>
+        </div>
+        <form method="dialog" class="modal-backdrop"><button aria-label="close">close</button></form>
+    </dialog>
+
+    <dialog id="new-ticket-modal" class="modal">
+        <div class="modal-box max-w-xl">
+            <h2 class="text-lg font-semibold mb-3">New ticket</h2>
+            <form hx-post="/ui/ticket" hx-swap="none" class="flex flex-col gap-3" data-reset-on-success data-close-modal>
+                <input name="title" required placeholder="Title" class="input w-full">
+                <textarea name="body" placeholder="Markdown body (the spec of the work)" rows="6" class="textarea w-full font-mono text-sm"></textarea>
+                <div class="grid grid-cols-2 gap-3">
+                    <label class="flex flex-col gap-1 text-sm">Epic
+                        <select name="epic" class="select w-full" data-epic-options>
+                            <option value="">none</option>
+                            {% for epic in epics %}<option value="{{ epic.id }}">{{ epic.title }}</option>{% endfor %}
+                        </select>
+                    </label>
+                    <label class="flex flex-col gap-1 text-sm">Status
+                        <select name="status" class="select w-full">
+                            <option value="draft" selected>draft — still defining it</option>
+                            <option value="stub">stub — for Claude to flesh out</option>
+                            <option value="ready">ready — fully specified</option>
+                        </select>
+                    </label>
+                </div>
+                <input name="labels" placeholder="labels, comma-separated" class="input w-full">
+                <input name="depends_on" placeholder="depends on, comma-separated ticket ids (e.g. K-1, K-4)" class="input w-full">
+                <div class="modal-action mt-1">
+                    <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Create</button>
+                </div>
+            </form>
+        </div>
+        <form method="dialog" class="modal-backdrop"><button aria-label="close">close</button></form>
+    </dialog>
+
+    <dialog id="new-epic-modal" class="modal">
+        <div class="modal-box max-w-xl">
+            <h2 class="text-lg font-semibold mb-3">New epic</h2>
+            <form hx-post="/ui/epic" hx-swap="none" class="flex flex-col gap-3" data-reset-on-success data-close-modal>
+                <input name="title" required placeholder="Title" class="input w-full">
+                <textarea name="body" placeholder="Markdown body" rows="4" class="textarea w-full font-mono text-sm"></textarea>
+                <div class="grid grid-cols-2 gap-3">
+                    <label class="flex flex-col gap-1 text-sm">Colour
+                        <input name="color" type="color" value="#7c9cf5" class="input w-full h-10 p-1">
+                    </label>
+                    <label class="flex flex-col gap-1 text-sm">Status
+                        <select name="status" class="select w-full">
+                            <option value="draft" selected>draft</option>
+                            <option value="stub">stub</option>
+                            <option value="ready">ready</option>
+                        </select>
+                    </label>
+                </div>
+                <div class="modal-action mt-1">
+                    <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Create</button>
+                </div>
+            </form>
+        </div>
+        <form method="dialog" class="modal-backdrop"><button aria-label="close">close</button></form>
+    </dialog>
+
+    <div id="toasts" class="toast toast-end z-50"></div>
+</body>
+</html>

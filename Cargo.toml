@@ -1,0 +1,65 @@
+[package]
+name = "claude-kanban"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "A Claude Code plugin providing a local-only Kanban board for planning and tracking work with Claude"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+keywords = ["kanban", "claude", "mcp", "project-management"]
+categories = ["command-line-utilities", "development-tools"]
+
+[dependencies]
+anyhow = "1.0.103"
+clap = { version = "4.6.2", features = ["derive", "env"] }
+
+# Board store
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+chrono = { version = "0.4.45", features = ["serde"] }
+fs4 = { version = "1.1.0", features = ["sync"] }            # cross-process advisory lock around read-modify-write
+thiserror = "2.0.18"
+
+# Async runtime
+tokio = { version = "1.52.4", features = ["rt-multi-thread", "macros", "signal", "sync", "io-std"] }
+
+# Web UI
+axum = "0.8.9"
+tower-http = { version = "0.6.6", features = ["trace"] }
+askama = "0.14"                                             # compile-time templates; handlers render() to Html<String>
+rust-embed = "8"                                            # web assets baked into the binary (--assets-dir overrides for dev)
+open = "5"                                                  # open the board in a browser on `serve`
+
+# Live updates (SSE)
+tokio-stream = { version = "0.1.18", features = ["sync"] }  # BroadcastStream over the refresh channel
+tokio-util = "0.7"                                          # CancellationToken so open SSE streams don't wedge shutdown
+futures-util = { version = "0.3", default-features = false } # StreamExt::take_until for exactly that
+notify = "8.2.0"                                            # watch board.json so the UI live-updates when Claude moves a card
+
+# MCP server — the official Rust SDK.
+rmcp = { version = "2.2.0", features = ["server", "transport-io"] }
+
+# Diagnostics
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[dev-dependencies]
+tempfile = "3.24.0"
+tower = { version = "0.5", features = ["util"] }            # ServiceExt::oneshot to drive the router in tests
+http-body-util = "0.1"                                      # collect response bodies in handler tests
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+# Lint groups sit at `warn`, not `deny`, so a new clippy release cannot break the build while still surfacing in output.
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
+
+[profile.release]
+lto = "thin"
+strip = true

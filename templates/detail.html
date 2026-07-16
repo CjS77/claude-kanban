@@ -1,0 +1,97 @@
+{#- The ticket detail pane, rendered into the #detail modal. The body is raw markdown fetched once from /raw/ticket/{id}
+    and rendered client-side (marked + DOMPurify) — see glue.js [data-md-src]. -#}
+<div class="flex items-start justify-between gap-3">
+    <div class="min-w-0">
+        <span class="font-mono text-sm opacity-60">{{ ticket.id }}</span>
+        <h2 class="text-xl font-semibold leading-snug">{{ ticket.title }}</h2>
+    </div>
+    <form method="dialog"><button class="btn btn-sm btn-circle btn-ghost" aria-label="close">✕</button></form>
+</div>
+
+<div class="flex flex-wrap items-center gap-2 mt-2">
+    <span class="badge {{ ticket.status_badge }}">{{ ticket.status }}</span>
+    <span class="badge badge-outline">{{ ticket.column }}</span>
+    {% if ticket.blocked %}<span class="badge badge-error">blocked</span>{% endif %}
+    {% if let Some(ext) = ticket.external %}<span class="badge badge-neutral" title="worked elsewhere — this board never touches it">↗ {{ ext }}</span>{% endif %}
+    {% if let Some(epic) = ticket.epic %}
+    <span class="badge text-white cursor-pointer" style="background-color: {{ epic.color }}; border-color: {{ epic.color }}"
+          hx-get="/ui/epic/{{ epic.id }}" hx-target="#detail" hx-swap="innerHTML">{{ epic.title }}</span>
+    {% endif %}
+    {% for label in ticket.labels %}<span class="badge badge-ghost">{{ label }}</span>{% endfor %}
+</div>
+
+{% if let Some(claim) = ticket.claim %}
+<div class="mt-3 p-3 rounded-lg bg-base-200 text-sm flex flex-col gap-1">
+    {% if claim.worktree_missing %}
+    <span class="text-warning font-medium">⚠ worktree missing — restore with <code>claude-kanban worktree start {{ ticket.id }}</code></span>
+    {% else %}
+    <span class="text-success font-medium flex items-center gap-1.5">
+        <span class="inline-grid *:[grid-area:1/1]"><span class="status status-success animate-ping"></span><span class="status status-success"></span></span>
+        {{ claim.agent }} is working on this
+    </span>
+    {% endif %}
+    <span class="opacity-70">claimed {{ claim.since }}</span>
+    {% if let Some(path) = claim.path %}<span class="font-mono text-xs opacity-70 break-all">{{ path }}</span>{% endif %}
+</div>
+{% endif %}
+{% if let Some(branch) = ticket.branch %}
+<div class="mt-2 text-sm font-mono opacity-70">⎇ {{ branch }}</div>
+{% endif %}
+{% if let Some(done_at) = ticket.completed_at %}
+<div class="mt-2 text-sm opacity-70">completed {{ done_at }}</div>
+{% endif %}
+
+<article class="prose prose-sm max-w-none mt-4" data-md-src="/raw/ticket/{{ ticket.id }}">
+    <span class="loading loading-dots loading-sm"></span>
+</article>
+
+{% if !ticket.deps.is_empty() %}
+<div class="mt-4">
+    <h3 class="font-semibold text-sm mb-1">Depends on</h3>
+    <ul class="flex flex-col gap-1">
+        {% for dep in ticket.deps %}
+        <li class="flex items-center gap-2 text-sm cursor-pointer hover:underline"
+            hx-get="/ui/ticket/{{ dep.id }}" hx-target="#detail" hx-swap="innerHTML">
+            <input type="checkbox" class="checkbox checkbox-xs pointer-events-none" {% if dep.done %}checked{% endif %} tabindex="-1">
+            <span class="font-mono text-xs opacity-60">{{ dep.id }}</span>
+            <span class="{% if dep.done %}line-through opacity-50{% endif %}">{{ dep.title }}</span>
+        </li>
+        {% endfor %}
+    </ul>
+</div>
+{% endif %}
+
+{% if !ticket.notes.is_empty() %}
+<div class="mt-4">
+    <h3 class="font-semibold text-sm mb-1">Progress</h3>
+    <ul class="flex flex-col gap-2">
+        {% for note in ticket.notes %}
+        <li class="text-sm p-2 rounded bg-base-200">
+            <div class="text-xs opacity-60 mb-0.5">{{ note.at }}{% if let Some(author) = note.author %} — {{ author }}{% endif %}</div>
+            <div class="whitespace-pre-wrap">{{ note.text }}</div>
+        </li>
+        {% endfor %}
+    </ul>
+</div>
+{% endif %}
+
+<form class="mt-3 flex gap-2" hx-post="/ui/ticket/{{ ticket.id }}/note" hx-swap="none" data-reset-on-success>
+    <input name="text" required placeholder="Add a progress note…" class="input input-sm grow">
+    <button type="submit" class="btn btn-sm">Note</button>
+</form>
+
+<div class="mt-5 flex flex-wrap items-center justify-between gap-3">
+    {# Status is the user's call, made here: draft/stub/review/ready, current one highlighted. #}
+    <div class="join" title="draft: still being defined · stub: for Claude to flesh out · review: awaiting your verdict · ready: eligible for pickup">
+        {% for status in ticket.statuses %}
+        <button class="join-item btn btn-xs {% if status.current %}btn-active btn-primary{% endif %}"
+                hx-post="/ui/ticket/{{ ticket.id }}/status" hx-vals='{"status": "{{ status.name }}"}' hx-swap="none">{{ status.name }}</button>
+        {% endfor %}
+    </div>
+    <div class="flex gap-2">
+        <button class="btn btn-sm" hx-get="/ui/ticket/{{ ticket.id }}/edit" hx-target="#detail" hx-swap="innerHTML">Edit</button>
+        <button class="btn btn-sm btn-error btn-outline"
+                hx-post="/ui/ticket/{{ ticket.id }}/delete" hx-swap="none" data-close-modal
+                hx-confirm="Delete {{ ticket.id }} — {{ ticket.title }}? Other tickets' dependencies on it are removed too.">Delete</button>
+    </div>
+</div>

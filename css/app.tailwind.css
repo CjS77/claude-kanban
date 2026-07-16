@@ -1,0 +1,26 @@
+/* Tailwind v4 source for the board UI. Compiled by the STANDALONE Tailwind CLI — no node, no npm:
+ *
+ *     just css        (or: tailwindcss -i css/app.tailwind.css -o assets/app.css --minify)
+ *
+ * The generated assets/app.css is COMMITTED, so `cargo build` alone always yields a working plugin; regenerating is only
+ * needed after editing templates/classes. daisyUI is the vendored bundle in vendor/ (used only here, at CSS build time).
+ */
+@import "tailwindcss" source(none);
+
+/* Class detection: the Askama templates and the one hand-written JS file. */
+@source "../templates";
+@source "../assets/glue.js";
+
+/* daisyUI component classes + typography (for the markdown `prose` panes; bundled with the standalone CLI). */
+@plugin "../vendor/daisyui.js" {
+    themes: light --default, dark --prefersdark;
+}
+@plugin "@tailwindcss/typography";
+
+/* Drag affordances: SortableJS toggles these classes while a card is in flight. */
+.sortable-ghost {
+    @apply opacity-40;
+}
+.sortable-drag {
+    @apply rotate-1 shadow-lg;
+}

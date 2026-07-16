@@ -1,0 +1,56 @@
+{#- The epic detail pane. An epic's column is derived from its tickets and shown, never set, here. -#}
+<div class="flex items-start justify-between gap-3">
+    <div class="min-w-0">
+        <span class="font-mono text-sm opacity-60">{{ epic.id }}</span>
+        <h2 class="text-xl font-semibold leading-snug flex items-center gap-2">
+            <span class="inline-block w-3 h-3 rounded-full" style="background-color: {{ epic.color }}"></span>
+            {{ epic.title }}
+        </h2>
+    </div>
+    <form method="dialog"><button class="btn btn-sm btn-circle btn-ghost" aria-label="close">✕</button></form>
+</div>
+
+<div class="flex flex-wrap items-center gap-2 mt-2">
+    <span class="badge {{ epic.status_badge }}">{{ epic.status }}</span>
+    <span class="badge badge-outline" title="derived from this epic's tickets">{{ epic.column }}</span>
+    <span class="badge badge-ghost">epic</span>
+</div>
+
+{% if epic.has_body %}
+<article class="prose prose-sm max-w-none mt-4" data-md-src="/raw/epic/{{ epic.id }}">
+    <span class="loading loading-dots loading-sm"></span>
+</article>
+{% endif %}
+
+<div class="mt-4">
+    <h3 class="font-semibold text-sm mb-1">Tickets</h3>
+    {% if epic.items.is_empty() %}
+    <p class="text-sm opacity-60">No tickets yet — assign tickets to this epic from their edit pane.</p>
+    {% else %}
+    <ul class="flex flex-col gap-1">
+        {% for item in epic.items %}
+        <li class="flex items-center gap-2 text-sm cursor-pointer hover:underline"
+            hx-get="/ui/ticket/{{ item.ticket }}" hx-target="#detail" hx-swap="innerHTML">
+            <input type="checkbox" class="checkbox checkbox-xs pointer-events-none" {% if item.done %}checked{% endif %} tabindex="-1">
+            <span class="font-mono text-xs opacity-60">{{ item.ticket }}</span>
+            <span class="{% if item.done %}line-through opacity-50{% endif %}">{{ item.title }}</span>
+        </li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+</div>
+
+<div class="mt-5 flex flex-wrap items-center justify-between gap-3">
+    <div class="join" title="draft: still being defined · stub: for Claude to flesh out · review: awaiting your verdict · ready: fully specified">
+        {% for status in epic.statuses %}
+        <button class="join-item btn btn-xs {% if status.current %}btn-active btn-primary{% endif %}"
+                hx-post="/ui/epic/{{ epic.id }}/status" hx-vals='{"status": "{{ status.name }}"}' hx-swap="none">{{ status.name }}</button>
+        {% endfor %}
+    </div>
+    <div class="flex gap-2">
+        <button class="btn btn-sm" hx-get="/ui/epic/{{ epic.id }}/edit" hx-target="#detail" hx-swap="innerHTML">Edit</button>
+        <button class="btn btn-sm btn-error btn-outline"
+                hx-post="/ui/epic/{{ epic.id }}/delete" hx-swap="none" data-close-modal
+                hx-confirm="Delete {{ epic.id }} — {{ epic.title }}? Its tickets survive, detached.">Delete</button>
+    </div>
+</div>

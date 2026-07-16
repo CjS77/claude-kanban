@@ -1,0 +1,38 @@
+{#- The ticket edit form. The body is the RAW markdown in a textarea — editing shows source, viewing renders it.
+    Saving returns the refreshed detail view into #detail; Cancel just re-fetches the view. -#}
+<div class="flex items-start justify-between gap-3">
+    <div>
+        <span class="font-mono text-sm opacity-60">{{ ticket.id }}</span>
+        <h2 class="text-xl font-semibold">Edit</h2>
+    </div>
+    <form method="dialog"><button class="btn btn-sm btn-circle btn-ghost" aria-label="close">✕</button></form>
+</div>
+
+<form hx-post="/ui/ticket/{{ ticket.id }}" hx-target="#detail" hx-swap="innerHTML" class="flex flex-col gap-3 mt-3">
+    <label class="flex flex-col gap-1 text-sm">Title
+        <input name="title" required class="input w-full" value="{{ ticket.title }}">
+    </label>
+    <label class="flex flex-col gap-1 text-sm">Body <span class="opacity-60">(markdown, raw)</span>
+        <textarea name="body" rows="12" class="textarea w-full font-mono text-sm">{{ ticket.body }}</textarea>
+    </label>
+    <div class="grid grid-cols-2 gap-3">
+        <label class="flex flex-col gap-1 text-sm">Epic
+            <select name="epic" class="select w-full">
+                <option value="">none</option>
+                {% for epic in epics %}
+                <option value="{{ epic.id }}"{% if epic.selected %} selected{% endif %}>{{ epic.title }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label class="flex flex-col gap-1 text-sm">Labels <span class="opacity-60">(comma-separated)</span>
+            <input name="labels" class="input w-full" value="{{ ticket.labels_csv }}">
+        </label>
+    </div>
+    <label class="flex flex-col gap-1 text-sm">Depends on <span class="opacity-60">(comma-separated ticket ids)</span>
+        <input name="depends_on" class="input w-full" value="{{ ticket.deps_csv }}" placeholder="K-1, K-4">
+    </label>
+    <div class="modal-action mt-1">
+        <button type="button" class="btn btn-ghost" hx-get="/ui/ticket/{{ ticket.id }}" hx-target="#detail" hx-swap="innerHTML">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save</button>
+    </div>
+</form>

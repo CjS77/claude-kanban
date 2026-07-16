@@ -1,0 +1,15 @@
+max_width = 140
+tab_spaces = 4
+hard_tabs = false
+edition = "2024"
+newline_style = "Unix"
+use_field_init_shorthand = true
+use_try_shorthand = true
+
+# Options below require a nightly rustfmt (`cargo +nightly fmt`).
+imports_granularity = "Crate"
+group_imports = "StdExternalCrate"
+wrap_comments = true
+comment_width = 140
+format_code_in_doc_comments = true
+normalize_comments = true

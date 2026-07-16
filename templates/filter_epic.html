@@ -1,0 +1,13 @@
+{#-
+  The epic filter dropdown. Included by the page shell (initial render) AND by the board fragment with `filter_oob` set,
+  where htmx swaps it out-of-band — that's how newly created epics appear in the filter without a page reload. The current
+  selection is re-rendered from the request's own filter state, so refreshes never lose it.
+-#}
+<select id="filter-epic" name="epic" class="select select-sm w-40" aria-label="Filter by epic"
+        {% if filter_oob %}hx-swap-oob="true"{% endif %}
+        hx-get="/ui/board" hx-target="#board" hx-include="#filters" hx-trigger="change">
+    <option value="">All epics</option>
+    {% for epic in epics %}
+    <option value="{{ epic.id }}"{% if epic.selected %} selected{% endif %}>{{ epic.title }}</option>
+    {% endfor %}
+</select>

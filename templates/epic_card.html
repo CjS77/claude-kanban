@@ -1,0 +1,26 @@
+{#- An epic on the board: a checklist, one line per ticket, ticked when done. Epics are not draggable — their column is
+    derived from their tickets, so they move themselves. Clicking a line opens that ticket; the title opens the epic. -#}
+<article class="card bg-base-100/70 border-2 border-dashed shadow-none" style="border-color: {{ epic.color }}">
+    <div class="card-body p-3 gap-1">
+        <div class="flex items-start justify-between gap-2">
+            <span class="text-xs opacity-60 font-mono">{{ epic.id }}</span>
+            <div class="flex gap-1">
+                <span class="badge badge-xs {{ epic.status_badge }}">{{ epic.status }}</span>
+                <span class="badge badge-xs text-white" style="background-color: {{ epic.color }}; border-color: {{ epic.color }}">epic</span>
+            </div>
+        </div>
+        <h3 class="font-medium leading-snug cursor-pointer hover:underline"
+            hx-get="/ui/epic/{{ epic.id }}" hx-target="#detail" hx-swap="innerHTML">{{ epic.title }}</h3>
+        {% if !epic.items.is_empty() %}
+        <ul class="flex flex-col gap-1 mt-1">
+            {% for item in epic.items %}
+            <li class="flex items-center gap-2 text-sm cursor-pointer hover:underline"
+                hx-get="/ui/ticket/{{ item.ticket }}" hx-target="#detail" hx-swap="innerHTML">
+                <input type="checkbox" class="checkbox checkbox-xs pointer-events-none" {% if item.done %}checked{% endif %} tabindex="-1">
+                <span class="{% if item.done %}line-through opacity-50{% endif %}">{{ item.title }}</span>
+            </li>
+            {% endfor %}
+        </ul>
+        {% endif %}
+    </div>
+</article>

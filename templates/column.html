@@ -1,0 +1,20 @@
+{#- One column: header, the epics whose derived place is here (not draggable — epics move themselves), then the sortable
+    ticket list. `data-column` on the list is what the drag handler posts as the destination. -#}
+<section class="flex flex-col gap-2 min-w-0">
+    <header class="flex items-center justify-between px-1">
+        <h2 class="font-semibold text-sm uppercase tracking-wide opacity-70">{{ col.title }}</h2>
+        <span class="badge badge-ghost badge-sm">{{ col.cards.len() }}</span>
+    </header>
+    {% if !col.epics.is_empty() %}
+    <div class="flex flex-col gap-2">
+        {% for epic in col.epics %}
+        {% include "epic_card.html" %}
+        {% endfor %}
+    </div>
+    {% endif %}
+    <div class="ticket-list flex flex-col gap-2 grow min-h-16 rounded-lg" data-column="{{ col.id }}">
+        {% for card in col.cards %}
+        {% include "card.html" %}
+        {% endfor %}
+    </div>
+</section>
