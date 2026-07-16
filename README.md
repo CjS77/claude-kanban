@@ -6,15 +6,24 @@ You drag cards around in a browser to say what matters. Claude reads the same bo
 
 ## Install
 
-Build the binary, then load the repo as a plugin:
+You need git and a Rust toolchain ([rustup.rs](https://rustup.rs)) — the binary compiles on your machine. In Claude Code:
+
+```
+/plugin marketplace add CjS77/claude-kanban
+/plugin install kanban@claude-kanban
+```
+
+Restart Claude Code (or `/reload-plugins`). The plugin registers the `kanban` MCP server and adds the `/kanban:work` and `/kanban:delegate` commands. The first session builds the crate (a minute or two); if MCP startup gives up waiting, the build carries on and the next session attaches normally. Running `cargo build --release` in the plugin directory yourself always works too — and is the required route on Windows, where the launcher script needs a POSIX shell.
+
+To hack on the plugin itself, load your clone directly:
 
 ```bash
-git clone <this-repo> && cd claude-kanban
+git clone https://github.com/CjS77/claude-kanban && cd claude-kanban
 cargo build --release        # self-contained — the web UI is embedded, no node required
 claude --plugin-dir .        # start Claude Code with the plugin loaded
 ```
 
-`--plugin-dir` works from any project directory; point it at your clone. Marketplace installation (`/plugin install`) will come with publication. The plugin registers the `kanban` MCP server automatically and adds the `/kanban:work` and `/kanban:delegate` commands.
+Releasing (maintainer): push `main` to origin and tag the version, e.g. `v1.0.0` — installs and updates pull from the repo.
 
 ## Use
 

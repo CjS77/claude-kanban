@@ -1,6 +1,6 @@
 {
   "name": "kanban",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "A local-only Kanban board for your project. Three classic columns, interactive epic and task cards in the browser, backed by a plain JSON file in your repo. Claude picks up tickets, works them, and moves them across the board alongside you.",
   "author": {
     "name": "claude-kanban"

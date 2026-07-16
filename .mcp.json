@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "kanban": {
-      "command": "${CLAUDE_PLUGIN_ROOT}/target/release/claude-kanban",
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/kanban-mcp",
       "args": ["mcp"]
     }
   }

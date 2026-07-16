@@ -1,0 +1,20 @@
+#!/bin/sh
+# MCP entry point for the installed plugin: an installed plugin is a fresh clone
+# with no target/, so build the binary on first launch, then exec it.
+# stdout belongs to JSON-RPC — one stray line corrupts the session, so every
+# build/diagnostic line goes to stderr.
+set -eu
+
+root="${CLAUDE_PLUGIN_ROOT:-$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)}"
+bin="$root/target/release/claude-kanban"
+
+if [ ! -x "$bin" ]; then
+    if ! command -v cargo >/dev/null 2>&1; then
+        echo "kanban-mcp: cargo not found — install Rust from https://rustup.rs, or run 'cargo build --release' in $root" >&2
+        exit 1
+    fi
+    echo "kanban-mcp: first run — building claude-kanban (a minute or two)..." >&2
+    cargo build --release --manifest-path "$root/Cargo.toml" >&2
+fi
+
+exec "$bin" "$@"
