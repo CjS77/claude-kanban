@@ -6,6 +6,7 @@ rust-version = "1.88"
 description = "A Claude Code plugin providing a local-only Kanban board for planning and tracking work with Claude"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
+repository = "https://github.com/CjS77/claude-kanban"
 keywords = ["kanban", "claude", "mcp", "project-management"]
 categories = ["command-line-utilities", "development-tools"]
 

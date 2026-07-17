@@ -63,6 +63,10 @@ impl Filters {
 #[template(path = "page.html")]
 pub struct PageTpl {
     pub title: String,
+    /// Crate version for the header badge, e.g. "1.1.0" — from the manifest, so it never drifts from the real build.
+    pub version: &'static str,
+    /// The plugin's repo, behind the header's GitHub mark. Also manifest-sourced (`[package] repository`).
+    pub repo_url: &'static str,
     pub epics: Vec<EpicOptionCtx>,
     pub filter_oob: bool,
 }
@@ -77,7 +81,13 @@ pub struct EpicOptionCtx {
 
 #[must_use] 
 pub fn page(title: String, board: &Board) -> PageTpl {
-    PageTpl { title, epics: epic_options(board, None), filter_oob: false }
+    PageTpl {
+        title,
+        version: env!("CARGO_PKG_VERSION"),
+        repo_url: env!("CARGO_PKG_REPOSITORY"),
+        epics: epic_options(board, None),
+        filter_oob: false,
+    }
 }
 
 fn epic_options(board: &Board, selected: Option<&str>) -> Vec<EpicOptionCtx> {

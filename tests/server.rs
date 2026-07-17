@@ -89,6 +89,18 @@ async fn the_board_fragment_renders_seeded_tickets_with_the_version_stamp() {
 }
 
 #[tokio::test]
+async fn the_header_badges_the_crate_version_and_links_the_repo() {
+    let (_dir, router, _store) = test_app();
+    let html = body_text(router.oneshot(get("/")).await.unwrap()).await;
+
+    let version = format!("v{}", env!("CARGO_PKG_VERSION"));
+    assert!(html.contains(&format!(">{version}</span>")), "the ghost badge must show the real crate version: {html}");
+    assert!(!html.contains(">claude-kanban</span>"), "the badge's old static name must be gone: {html}");
+    assert!(html.contains(&format!(r#"href="{}""#, env!("CARGO_PKG_REPOSITORY"))), "the mark must link the repo: {html}");
+    assert!(html.contains("<svg viewBox=\"0 0 16 16\""), "the GitHub mark is inlined, not fetched: {html}");
+}
+
+#[tokio::test]
 async fn filters_hide_cards_and_disable_dragging() {
     let (_dir, router, store) = test_app();
     seed_ticket(&store, "Labelled ui");
