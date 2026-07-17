@@ -42,3 +42,16 @@ fn mcp_manifest_launches_the_first_run_builder() {
         assert_ne!(mode & 0o111, 0, "bin/kanban-mcp must be executable, mode is {mode:o}");
     }
 }
+
+#[test]
+fn windows_shim_backs_the_same_mcp_command() {
+    let bin_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("bin");
+    let cmd = fs::read_to_string(bin_dir.join("kanban-mcp.cmd"))
+        .expect("bin/kanban-mcp.cmd must exist: Windows resolves .mcp.json's extensionless command to it via PATHEXT");
+    assert!(cmd.contains("kanban-mcp.ps1"), "the .cmd is a trampoline and must hand off to the PowerShell launcher");
+
+    let shim = fs::read_to_string(bin_dir.join("kanban-mcp.ps1")).expect("bin/kanban-mcp.ps1 must exist: the .cmd only trampolines");
+    assert!(shim.contains("x86_64-pc-windows-msvc"), "the shim must pin the published Windows release target");
+    assert!(shim.contains("claude-kanban.exe"), "the shim must install the exe name the release zip ships");
+    assert!(shim.is_ascii(), "kanban-mcp.ps1 must stay ASCII: Windows PowerShell 5.1 reads an unmarked .ps1 as ANSI");
+}

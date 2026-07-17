@@ -172,6 +172,28 @@ The board is designed to feed more than one kind of worker. A Claude Code sessio
 - **`external` tickets are worked elsewhere, and the board knows it.** Delegating a ticket means mirroring it to a GitHub issue, applying the eligibility label minesweeper watches for (`autofix` / `tryFix`), and recording `{provider, kind, number}` on the ticket — the plugin's skill does this with `gh`; the binary stays offline. A claimed `external` ticket moves to `doing` and simply sits there: claude-kanban never creates a worktree or branch for it. The board waits passively and never polls — when the external work lands (PR merged, issue closed), a human moves the card to `done` by hand. A polling skill or a small hook taught to the daemon could automate that translation later.
 - **`branch` is data, not a format.** Tickets worked by this plugin get `{id}/{slug}` branches; an external ticket's `branch`, if recorded at all, is whatever the delegate created (minesweeper's `myrepo-issue0042`). Nothing in the board assumes it can parse a branch name.
 
+## Distribution: one MCP command, three launchers
+
+`.mcp.json` names a single command on every platform — `${CLAUDE_PLUGIN_ROOT}/bin/kanban-mcp` — because the plugin manifest offers no
+per-platform mechanism: neither the plugins reference nor the MCP docs define os-conditional `mcpServers` entries (checked July 2026,
+code.claude.com/docs/en/plugins-reference and /en/mcp; the official plugin-dev skill is silent too). What makes the one entry work
+everywhere is how Claude Code spawns stdio servers: its bundled MCP SDK transport launches the command through a vendored cross-spawn
+with `shell: false`. On unix that execs the POSIX-sh `bin/kanban-mcp` via its shebang. On Windows, cross-spawn resolves the
+extensionless path with node-which + PATHEXT — landing on `bin\kanban-mcp.cmd` — and, because a `.cmd` is not directly executable,
+re-wraps the launch as `cmd.exe /d /s /c`, whose own PATHEXT search is a second net for the same resolution. (Read out of the 2.1.212
+binary, where the Linux build's vendored cross-spawn/which visibly carries the win32 branches constant-folded away — the Windows build
+keeps them. If a future Claude Code drops cross-spawn for a raw `CreateProcess`, no shim filename could save the extensionless entry,
+and only then would a manifest change be on the table.)
+
+The `.cmd` itself stays a four-line trampoline into `bin/kanban-mcp.ps1` (`powershell -NoProfile -NonInteractive -ExecutionPolicy
+Bypass -File`, falling back to `pwsh`), which mirrors the sh launcher decision for decision: version pinned from plugin.json, the
+`KANBAN_RELEASE_BASE_URL` seam, first-field `.sha256` parsing, staging inside `target/release` so the install is a same-filesystem
+rename, staleness arbitrated by `--version`, every failure one stderr line then the cargo fallback. The one Windows-only wrinkle is the
+final launch: PowerShell's call operator re-decodes a native child's stdout through its object pipeline, so the shim hands over with
+`Start-Process -NoNewWindow -Wait`, which passes the raw inherited stdio handles straight to `claude-kanban.exe` — stdout carries
+nothing but JSON-RPC. A batch-only or polyglot single file was rejected: batch has no `Get-FileHash`/`Expand-Archive`, and sh/batch
+polyglots die on the first parser quirk. Windows arm64 has no published binary and falls through to cargo with a clear stderr line.
+
 ## What v1 does
 
 The implementation checklist, kept as the record of scope.

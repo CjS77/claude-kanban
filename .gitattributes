@@ -1,0 +1,3 @@
+# cmd.exe has documented parsing quirks with LF-only batch files, so the Windows shim always checks out CRLF,
+# whatever core.autocrlf says. PowerShell is line-ending agnostic; everything else stays LF.
+bin/kanban-mcp.cmd text eol=crlf
