@@ -23,7 +23,7 @@ cargo build --release        # self-contained — the web UI is embedded, no nod
 claude --plugin-dir .        # start Claude Code with the plugin loaded
 ```
 
-Releasing (maintainer): push `main` to origin and tag the version, e.g. `v1.0.0` — installs and updates pull from the repo.
+Releasing (maintainer): push `main` to origin, tag the version, and push the tag — installs and updates pull from the repo, and the tag publishes prebuilt binaries (see Development → Releasing).
 
 ## Use
 
@@ -75,6 +75,13 @@ Diagnostics go to stderr (stdout belongs to the MCP protocol) and are filtered w
 Several projects can serve at once with zero coordination. An explicit port (`--port`, `KANBAN_PORT`, or `"port"` in `.kanban/config.json` — in that order) is honoured or fails loudly when taken. With no explicit choice, `serve` tries 4747; if another project holds it, the OS picks a free port, and if *this* project already holds it, `serve` prints the running board's URL and exits instead of starting a duplicate (liveness judged by `serve.pid`).
 
 Installed as a Claude Code plugin, `.mcp.json` registers the MCP server automatically and `/kanban:work` drives the loop.
+
+Releasing: bump the version in `Cargo.toml`, `.claude-plugin/plugin.json`, and `.claude-plugin/marketplace.json` in lockstep
+(tests/manifests.rs pins the agreement), then `just release <version>` — it verifies the lockstep and creates the `v<version>`
+tag without pushing anything. Pushing the tag (`git push origin v<version>`) fires `.github/workflows/release.yml`, which builds
+`claude-kanban` for Linux (x86_64/arm64, static musl), macOS (arm64/x86_64), and Windows (x86_64) and attaches
+`claude-kanban-<target>.tar.gz` archives (`.zip` on Windows), their `.sha256` checksums, and build-provenance attestations to a
+GitHub Release. Binaries live only in Releases, never in git.
 
 ## Layout
 
