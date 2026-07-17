@@ -4,6 +4,8 @@
 //! [`crate::store::derive`], so the `.html` files stay declarative. Handlers call `render()` and wrap the result in
 //! [`axum::response::Html`] — no askama/axum integration crate, which keeps us off that version treadmill.
 
+use std::collections::HashSet;
+
 use askama::Template;
 use chrono::{DateTime, Utc};
 
@@ -26,11 +28,22 @@ pub struct Filters {
     pub label: String,
     #[serde(default)]
     pub status: String,
+    /// The "show merged" toggle: an unchecked checkbox submits nothing, checked submits `merged=1`.
+    #[serde(default)]
+    pub merged: String,
 }
 
 impl Filters {
+    /// Deliberately ignores `merged`: it drives `draggable`, and disabling drag on the default view would kill the
+    /// board's core interaction. Consequence: with merged cards hidden, a drop *into* the Done column can land at an
+    /// index offset by the hidden cards above it — cosmetic only, since order in `done` carries no priority semantics;
+    /// todo/doing are untouched (only done tickets are ever hidden).
     fn is_empty(&self) -> bool {
         self.epic.is_empty() && self.label.is_empty() && self.status.is_empty()
+    }
+
+    fn show_merged(&self) -> bool {
+        !self.merged.is_empty()
     }
 
     fn admits_ticket(&self, t: &TicketView) -> bool {
@@ -94,8 +107,13 @@ pub struct ColumnCtx {
     pub title: String,
     pub cards: Vec<CardCtx>,
     pub epics: Vec<EpicCardCtx>,
+    /// Merged done cards dropped by the default view — the Done header hints at them so they never look lost.
+    /// Always 0 except Done.
+    pub hidden_merged: usize,
 }
 
+// Not a state machine: each bool is an independent display flag with its own badge or styling.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug)]
 pub struct CardCtx {
     pub id: String,
@@ -107,6 +125,8 @@ pub struct CardCtx {
     pub blocked: bool,
     /// A stub sitting in `doing` is having its spec written right now — the card renders pink while that lasts.
     pub refining: bool,
+    /// A done ticket whose branch has landed in the main checkout's HEAD (or is gone) — purple badge, hidden by default.
+    pub merged: bool,
     pub labels: Vec<String>,
     pub external: Option<String>,
     pub claim: Option<ClaimCtx>,
@@ -143,26 +163,31 @@ pub struct ItemCtx {
 /// The default colour of a ticket with no epic: a neutral grey stripe.
 const NO_EPIC_COLOR: &str = "#9ca3af";
 
-#[must_use] 
-pub fn board(view: &BoardView, filters: &Filters) -> BoardTpl {
+// A view-model builder has one caller and no use for custom hashers.
+#[allow(clippy::implicit_hasher)]
+#[must_use]
+pub fn board(view: &BoardView, filters: &Filters, unmerged: Option<&HashSet<String>>) -> BoardTpl {
     let columns = view
         .columns
         .iter()
-        .map(|meta| ColumnCtx {
-            id: meta.id,
-            title: meta.title.clone(),
-            cards: view
+        .map(|meta| {
+            let (shown, hidden): (Vec<_>, Vec<_>) = view
                 .tickets
                 .iter()
                 .filter(|t| t.ticket.column.id() == meta.id && filters.admits_ticket(t))
-                .map(|t| card(t, view))
-                .collect(),
-            epics: view
-                .epics
-                .iter()
-                .filter(|e| e.column == meta.id && filters.admits_epic(e))
-                .map(epic_card)
-                .collect(),
+                .partition(|t| filters.show_merged() || !is_merged(t, unmerged));
+            ColumnCtx {
+                id: meta.id,
+                title: meta.title.clone(),
+                cards: shown.into_iter().map(|t| card(t, view, unmerged)).collect(),
+                epics: view
+                    .epics
+                    .iter()
+                    .filter(|e| e.column == meta.id && filters.admits_epic(e))
+                    .map(epic_card)
+                    .collect(),
+                hidden_merged: hidden.len(),
+            }
         })
         .collect();
     BoardTpl {
@@ -182,7 +207,16 @@ pub fn board(view: &BoardView, filters: &Filters) -> BoardTpl {
     }
 }
 
-fn card(t: &TicketView, view: &BoardView) -> CardCtx {
+/// Whether the ticket reads as merged: done, with a recorded branch that is *absent* from the unmerged set — either its
+/// tip is an ancestor of HEAD or the branch is gone (merged-and-deleted; see [`crate::git::unmerged_branches`]). Done
+/// tickets with no branch are never merged — there is nothing to check; they stay visible. `unmerged: None` (no git
+/// answer) flags nothing.
+fn is_merged(t: &TicketView, unmerged: Option<&HashSet<String>>) -> bool {
+    t.ticket.column.id() == ColumnId::Done
+        && t.ticket.column.branch().is_some_and(|b| unmerged.is_some_and(|u| !u.contains(b)))
+}
+
+fn card(t: &TicketView, view: &BoardView, unmerged: Option<&HashSet<String>>) -> CardCtx {
     CardCtx {
         id: t.ticket.id.to_string(),
         title: t.ticket.title.clone(),
@@ -192,6 +226,7 @@ fn card(t: &TicketView, view: &BoardView) -> CardCtx {
         done: t.ticket.column.id() == ColumnId::Done,
         blocked: t.blocked,
         refining: t.ticket.status == Status::Stub && t.ticket.column.id() == ColumnId::Doing,
+        merged: is_merged(t, unmerged),
         labels: t.ticket.labels.clone(),
         external: t.ticket.external.as_ref().map(|e| format!("{} {}#{}", e.provider, e.kind, e.number)),
         claim: t.claim.as_ref().map(claim_ctx),

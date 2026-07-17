@@ -260,6 +260,62 @@ async fn the_create_pr_button_tracks_eligibility_live() {
 }
 
 #[tokio::test]
+async fn merged_done_tickets_hide_by_default_and_return_with_the_toggle() {
+    // The store's parent is a real repository so merged detection has something to answer.
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    let commit = |msg: &str| {
+        let sign = ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"];
+        let args: Vec<&str> = sign.iter().chain(&["commit", "--allow-empty", "-q", "-m", msg]).copied().collect();
+        git(repo, &args).unwrap();
+    };
+    git(repo, &["init", "-q", "-b", "main"]).unwrap();
+    commit("seed");
+    let store = Store::at(repo.join(".kanban"));
+    store.init().unwrap();
+    let router = router_for(&store);
+
+    // K-1's branch does not exist locally — the merged-and-deleted arm. K-2's branch carries an unmerged commit.
+    seed_ticket(&store, "Merged and deleted");
+    to_done_with_branch(&store, "K-1", "k-1/gone");
+    git(repo, &["checkout", "-q", "-b", "k-2/alive"]).unwrap();
+    commit("work");
+    git(repo, &["checkout", "-q", "main"]).unwrap();
+    seed_ticket(&store, "Still in review");
+    to_done_with_branch(&store, "K-2", "k-2/alive");
+
+    // Default view: the merged card is gone, the Done header hints at it, the live-branch card stays badge-free.
+    let html = body_text(router.clone().oneshot(get("/ui/board")).await.unwrap()).await;
+    assert!(!html.contains("Merged and deleted"), "{html}");
+    assert!(html.contains("+1 merged"), "{html}");
+    assert!(html.contains("Still in review"), "{html}");
+    assert!(!html.contains(">merged</span>"), "no badge on an unmerged card: {html}");
+
+    // Toggled on: the card returns wearing the purple badge, and the hint disappears.
+    let html = body_text(router.clone().oneshot(get("/ui/board?merged=1")).await.unwrap()).await;
+    assert!(html.contains("Merged and deleted"), "{html}");
+    assert!(html.contains("#a855f7") && html.contains(">merged</span>"), "{html}");
+    assert!(!html.contains("+1 merged"), "{html}");
+
+    // The merged toggle alone must not disable dragging — it is not a card filter in the draggable sense.
+    assert!(html.contains(r#"data-draggable="true""#), "{html}");
+}
+
+#[tokio::test]
+async fn a_done_ticket_outside_a_git_repo_renders_without_a_merged_badge() {
+    // The plain temp store is not a git repository — detection degrades to flagging nothing, never erroring.
+    let (_dir, router, store) = test_app();
+    seed_ticket(&store, "Done, repo-less");
+    to_done_with_branch(&store, "K-1", "k-1/work");
+
+    let res = router.clone().oneshot(get("/ui/board")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body_text(res).await;
+    assert!(html.contains("Done, repo-less"), "{html}");
+    assert!(!html.contains(">merged</span>") && !html.contains("+1 merged"), "{html}");
+}
+
+#[tokio::test]
 async fn a_done_ticket_outside_a_git_repo_renders_with_no_pr_button() {
     // The plain temp store is not a git repository — eligibility must answer false, never error the pane.
     let (_dir, router, store) = test_app();

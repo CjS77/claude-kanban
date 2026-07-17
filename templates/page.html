@@ -38,6 +38,11 @@
                     <option value="review">review</option>
                     <option value="ready">ready</option>
                 </select>
+                <label class="flex items-center gap-1.5 text-sm cursor-pointer" title="show done tickets whose branch has been merged">
+                    <input type="checkbox" name="merged" value="1" class="checkbox checkbox-xs"
+                           hx-get="/ui/board" hx-target="#board" hx-include="#filters" hx-trigger="change">
+                    merged
+                </label>
             </div>
             <div class="flex gap-2">
                 <button class="btn btn-primary" onclick="document.getElementById('new-ticket-modal').showModal()">+ Ticket</button>

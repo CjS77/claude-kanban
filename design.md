@@ -213,6 +213,7 @@ The implementation checklist, kept as the record of scope.
 - [x] Show and set `status` (draft / stub / review / ready) on cards — promoting `review` to `ready` or pushing back to `stub` is the user's call, made here
 - [x] Filter by epic, label, and status
 - [x] Create PR button on eligible done tickets (branch still exists, repo has a remote, not external) — pushes the branch and opens a GitHub PR via `gh` with a body templated from the card, recording the URL as a progress note; the binary's one network egress, behind the explicit click
+- [x] Merged badge on done tickets, hidden by default behind a "merged" filter toggle with a count hint in the Done header — one `git branch --no-merged HEAD` per render, so merged means ancestor-of-HEAD *or* branch deleted (the common rebase/squash-then-delete flows); a squash-merged branch kept alive locally reads as not merged
 
 ### Claude's side (`mcp`)
 

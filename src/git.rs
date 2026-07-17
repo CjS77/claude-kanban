@@ -6,6 +6,7 @@
 //! `pr.rs` know *which* plumbing to run.
 
 use std::{
+    collections::HashSet,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -61,6 +62,22 @@ pub fn main_worktree(cwd: &Path) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// Local branches NOT merged into the main checkout's current HEAD. `None` when it can't be
+/// determined (not a git repo, unborn HEAD) — callers must then flag nothing as merged.
+///
+/// A done ticket's branch counts merged iff it is *absent* from this set, which covers two cases at once: the branch tip
+/// is an ancestor of `HEAD` (a real merge), or the branch no longer exists locally (merged-and-deleted — the main case
+/// here: `merge.sh` rebases, fast-forwards `main`, then deletes the branch, and GitHub's squash-and-delete lands the same
+/// way). Caveat: a branch squash-merged upstream but kept alive locally reads as not merged (its tip is no ancestor);
+/// conversely a branch deleted because the work was *abandoned* reads as merged — accepted, since deleting the branch is
+/// how you retire it either way.
+#[must_use]
+pub fn unmerged_branches(repo: &Path) -> Option<HashSet<String>> {
+    git(repo, &["branch", "--no-merged", "HEAD", "--format=%(refname:short)"])
+        .ok()
+        .map(|out| out.lines().map(str::to_owned).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -93,6 +110,45 @@ mod tests {
         // answer is not the tempdir rather than assuming None — but on a clean /tmp this is simply None.
         let found = main_worktree(dir.path());
         assert!(found.is_none() || found.unwrap().canonicalize().unwrap() != dir.path().canonicalize().unwrap());
+    }
+
+    #[test]
+    fn unmerged_branches_tracks_merge_and_deletion() {
+        let repo = scratch_repo();
+        let sign = ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"];
+        let commit = |msg: &str| {
+            let args: Vec<&str> = sign.iter().chain(&["commit", "--allow-empty", "-q", "-m", msg]).copied().collect();
+            git(repo.path(), &args).unwrap();
+        };
+        commit("seed");
+
+        // A branch with a commit HEAD lacks is unmerged.
+        git(repo.path(), &["checkout", "-q", "-b", "k-9/feature"]).unwrap();
+        commit("work");
+        git(repo.path(), &["checkout", "-q", "main"]).unwrap();
+        assert!(unmerged_branches(repo.path()).unwrap().contains("k-9/feature"));
+
+        // Fast-forwarding main onto it makes the tip an ancestor: merged.
+        git(repo.path(), &["merge", "-q", "--ff-only", "k-9/feature"]).unwrap();
+        assert!(!unmerged_branches(repo.path()).unwrap().contains("k-9/feature"));
+
+        // A deleted branch is simply absent — the merged-and-deleted arm.
+        git(repo.path(), &["checkout", "-q", "-b", "k-10/gone"]).unwrap();
+        commit("orphaned work");
+        git(repo.path(), &["checkout", "-q", "main"]).unwrap();
+        assert!(unmerged_branches(repo.path()).unwrap().contains("k-10/gone"));
+        git(repo.path(), &["branch", "-q", "-D", "k-10/gone"]).unwrap();
+        assert!(!unmerged_branches(repo.path()).unwrap().contains("k-10/gone"));
+    }
+
+    #[test]
+    fn unmerged_branches_is_none_where_it_cannot_answer() {
+        // An unborn HEAD (fresh init, no commit) can't anchor --no-merged.
+        let repo = scratch_repo();
+        assert!(unmerged_branches(repo.path()).is_none());
+        // Neither can a directory that is no repository at all (a clean /tmp is not inside one).
+        let plain = tempfile::tempdir().unwrap();
+        assert!(unmerged_branches(plain.path()).is_none());
     }
 
     #[test]

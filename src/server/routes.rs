@@ -165,7 +165,10 @@ pub async fn page(State(app): State<AppState>) -> Result<Html<String>, AppError>
 pub async fn board(State(app): State<AppState>, Query(filters): Query<views::Filters>) -> Result<Html<String>, AppError> {
     blocking(&app, move |store| {
         let view = derive::board_view(&store.read_board()?, &store.read_claims()?);
-        Ok(Html(views::board(&view, &filters).render()?))
+        // One subprocess per render, in the main checkout (the store's parent — the same derivation `ui_owner` uses).
+        // `None` (no parent, not a repo, unborn HEAD) degrades to flagging nothing merged.
+        let unmerged = store.dir().parent().and_then(crate::git::unmerged_branches);
+        Ok(Html(views::board(&view, &filters, unmerged.as_ref()).render()?))
     })
     .await
 }
