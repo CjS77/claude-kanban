@@ -29,6 +29,14 @@ use std::{
 pub use claims::{Claim, find as find_claim, remove as remove_claim, upsert as upsert_claim};
 use model::Board;
 
+/// Write a seed file, keeping whatever is already there — `init` seeds defaults, it never overrules a choice.
+fn seed_if_absent(path: &Path, contents: &str) -> Result<(), StoreError> {
+    if path.exists() {
+        return Ok(());
+    }
+    fs::write(path, contents).map_err(|source| StoreError::Io { path: path.to_path_buf(), source })
+}
+
 /// Lenient JSON read for sibling store files (e.g. `config.json`): the default value when the file is absent, an error when
 /// it exists but doesn't parse.
 pub(crate) fn read_json_or_default<T: serde::de::DeserializeOwned + Default>(path: &Path) -> Result<T, StoreError> {
@@ -130,18 +138,10 @@ impl Store {
             return Err(StoreError::AlreadyExists(self.board_path()));
         }
         io::write_json_atomic(&self.board_path(), &Board::empty())?;
-        self.seed_if_absent(&self.config_path(), STORE_CONFIG)?;
-        self.seed_if_absent(&self.dir.join(".gitignore"), STORE_GITIGNORE)?;
+        seed_if_absent(&self.config_path(), STORE_CONFIG)?;
+        seed_if_absent(&self.dir.join(".gitignore"), STORE_GITIGNORE)?;
         tracing::info!(path = %self.board_path().display(), "board initialised");
         Ok(())
-    }
-
-    /// Write a seed file, keeping whatever is already there — `init` seeds defaults, it never overrules a choice.
-    fn seed_if_absent(&self, path: &Path, contents: &str) -> Result<(), StoreError> {
-        if path.exists() {
-            return Ok(());
-        }
-        fs::write(path, contents).map_err(|source| StoreError::Io { path: path.to_path_buf(), source })
     }
 
     /// Read and validate the board. Lock-free — see the module docs.

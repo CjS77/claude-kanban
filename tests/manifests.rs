@@ -50,7 +50,7 @@ fn mcp_manifest_launches_the_first_run_builder() {
 /// block in a command file must go through the launcher.
 #[test]
 fn the_setup_commands_drive_the_binary_through_the_launcher() {
-    ["init", "open"].into_iter().for_each(|name| {
+    for name in ["init", "open"] {
         let rel = format!("commands/{name}.md");
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(&rel);
         let body = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{rel} must exist: /kanban:{name} is a command file: {e}"));
@@ -70,11 +70,11 @@ fn the_setup_commands_drive_the_binary_through_the_launcher() {
                  for someone who built from source:\n{block}"
             );
         });
-    });
+    }
 }
 
-/// The ```bash blocks of a markdown document — what the model is told to actually run, as opposed to prose that may
-/// legitimately name `claude-kanban` (quoting its stderr, or warning against calling it directly).
+/// The fenced `bash` blocks of a markdown document — what the model is told to actually run, as opposed to prose that
+/// may legitimately name `claude-kanban` (quoting its stderr, or warning against calling it directly).
 fn bash_blocks(body: &str) -> impl Iterator<Item = &str> {
     body.split("```bash").skip(1).filter_map(|rest| rest.split_once("```")).map(|(block, _)| block)
 }
