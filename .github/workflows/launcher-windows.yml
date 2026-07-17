@@ -1,0 +1,144 @@
+# End-to-end proof that a Windows install needs no Rust toolchain: with cargo stripped from PATH, bin/kanban-mcp.cmd
+# must download the release zip from a local server (the KANBAN_RELEASE_BASE_URL seam), verify its checksum, install
+# target/release/claude-kanban.exe, and stream an MCP initialize exchange with stdout carrying protocol JSON only.
+# Tampered-archive and stale-binary cases ride along. The "binary" is a C# stub compiled with the .NET Framework csc
+# already on every runner — the crate itself is irrelevant here, the contract under test is the shim's.
+
+name: launcher-windows
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "bin/**"
+      - ".github/workflows/launcher-windows.yml"
+
+jobs:
+  shim:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Exercise kanban-mcp.cmd end to end
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repo = $PWD.Path
+          $version = (Get-Content -Raw -Path .claude-plugin/plugin.json | ConvertFrom-Json).version
+          $work = Join-Path $env:RUNNER_TEMP 'kanban-shim'
+          $asset = 'claude-kanban-x86_64-pc-windows-msvc.zip'
+
+          # --- stub exes: the current plugin version and a stale one, compiled with the Framework csc (no cargo, no dotnet restore)
+          $csc = "$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          function New-Stub([string] $ver, [string] $outDir) {
+              $src = @(
+                  'using System;',
+                  'class Stub {',
+                  '    static int Main(string[] args) {',
+                  '        if (args.Length > 0 && args[0] == "--version") { Console.WriteLine("claude-kanban VER"); return 0; }',
+                  '        string line;',
+                  '        while ((line = Console.In.ReadLine()) != null)',
+                  '            if (line.Contains("\"initialize\""))',
+                  '                Console.WriteLine("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":"',
+                  '                    + "{\"serverInfo\":{\"name\":\"stub\",\"version\":\"VER\"}}}");',
+                  '        return 0;',
+                  '    }',
+                  '}'
+              ) -join "`n" -replace 'VER', $ver
+              New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+              Set-Content -Path "$outDir\stub.cs" -Value $src
+              & $csc /nologo "/out:$outDir\claude-kanban.exe" "$outDir\stub.cs"
+              if ($LASTEXITCODE -ne 0) { throw 'csc failed' }
+          }
+          $stub = "$work\stub-current"; New-Stub $version $stub
+          $stale = "$work\stub-stale"; New-Stub '0.0.1' $stale
+
+          # --- release trees: good/ serves a matching zip + sha256 pair ("hash  filename": first-field parsing is under
+          # test), bad/ the same zip with a tampered digest
+          $good = "$work\srv\good\v$version"; New-Item -ItemType Directory -Force -Path $good | Out-Null
+          Compress-Archive -Path "$stub\claude-kanban.exe" -DestinationPath "$good\$asset" -Force
+          $hash = (Get-FileHash -Algorithm SHA256 -Path "$good\$asset").Hash.ToLower()
+          Set-Content -Path "$good\$asset.sha256" -Value "$hash  $asset"
+          $bad = "$work\srv\bad\v$version"; New-Item -ItemType Directory -Force -Path $bad | Out-Null
+          Copy-Item -Path "$good\$asset" -Destination "$bad\$asset"
+          Set-Content -Path "$bad\$asset.sha256" -Value (('0' * 64) + "  $asset")
+
+          # --- local asset server
+          $server = Start-Process -FilePath python -ArgumentList '-m','http.server','8317','--bind','127.0.0.1' `
+              -WorkingDirectory "$work\srv" -PassThru -WindowStyle Hidden
+          $up = $false
+          $probe = "http://127.0.0.1:8317/good/v$version/$asset.sha256"
+          foreach ($i in 1..50) {
+              try { Invoke-WebRequest -UseBasicParsing -Uri $probe | Out-Null; $up = $true; break }
+              catch { Start-Sleep -Milliseconds 200 }
+          }
+          if (-not $up) { throw 'asset server never came up' }
+
+          # --- driver: launch the shim exactly as Claude Code's stdio spawn does (cmd.exe /d /s /c "...") on a PATH that
+          # keeps cmd.exe / where.exe / powershell.exe but loses cargo, and prove the exchange streams while stdin is open
+          $leanPath = "$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\WindowsPowerShell\v1.0"
+          function Invoke-Shim([string] $baseUrl, [string] $stdinLine, [switch] $expectReply) {
+              $psi = New-Object System.Diagnostics.ProcessStartInfo
+              $psi.FileName = "$env:SystemRoot\System32\cmd.exe"
+              $psi.Arguments = '/d /s /c ""' + "$repo\bin\kanban-mcp.cmd" + '" mcp"'
+              $psi.UseShellExecute = $false
+              $psi.RedirectStandardInput = $true
+              $psi.RedirectStandardOutput = $true
+              $psi.RedirectStandardError = $true
+              $psi.WorkingDirectory = $repo
+              $psi.EnvironmentVariables['PATH'] = $leanPath
+              $psi.EnvironmentVariables['KANBAN_RELEASE_BASE_URL'] = $baseUrl
+              $p = [System.Diagnostics.Process]::Start($psi)
+              $errTask = $p.StandardError.ReadToEndAsync()
+              $reply = $null
+              if ($stdinLine) {
+                  $p.StandardInput.WriteLine($stdinLine)
+                  $p.StandardInput.Flush()
+                  if ($expectReply) {
+                      $readTask = $p.StandardOutput.ReadLineAsync()
+                      if (-not $readTask.Wait(120000)) {
+                          try { $p.Kill($true) } catch {}
+                          throw 'no reply in 120s: the stdio chain does not stream'
+                      }
+                      $reply = $readTask.Result
+                  }
+              }
+              $p.StandardInput.Close()
+              $rest = $p.StandardOutput.ReadToEnd()
+              if (-not $p.WaitForExit(120000)) { try { $p.Kill($true) } catch {}; throw 'shim did not exit' }
+              [pscustomobject]@{ Reply = $reply; Rest = $rest; Stderr = $errTask.Result; ExitCode = $p.ExitCode }
+          }
+          $init = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+          $installed = "$repo\target\release\claude-kanban.exe"
+
+          Write-Host '=== case 1: fresh install downloads, verifies, installs, and streams initialize'
+          Remove-Item -Recurse -Force -Path "$repo\target" -ErrorAction SilentlyContinue
+          $r = Invoke-Shim 'http://127.0.0.1:8317/good' $init -ExpectReply
+          if ($r.ExitCode -ne 0) { throw "expected exit 0, got $($r.ExitCode); stderr: $($r.Stderr)" }
+          if ($r.Reply -notmatch '"serverInfo"') { throw "first stdout line is not the initialize reply: $($r.Reply)" }
+          if ("$($r.Rest)".Trim() -ne '') { throw "stdout carried more than the reply: $($r.Rest)" }
+          if ($r.Stderr -notmatch 'kanban-mcp: fetching prebuilt') { throw "download diagnostics missing from stderr: $($r.Stderr)" }
+          if (-not (Test-Path -Path $installed)) { throw 'claude-kanban.exe was not installed' }
+          $want = (Get-FileHash -Algorithm SHA256 -Path "$stub\claude-kanban.exe").Hash
+          if ((Get-FileHash -Algorithm SHA256 -Path $installed).Hash -ne $want) { throw 'installed exe differs from the served one' }
+
+          Write-Host '=== case 2: stale binary is refreshed to the plugin version'
+          Copy-Item -Force -Path "$stale\claude-kanban.exe" -Destination $installed
+          $r = Invoke-Shim 'http://127.0.0.1:8317/good' $init -ExpectReply
+          if ($r.ExitCode -ne 0) { throw "expected exit 0, got $($r.ExitCode); stderr: $($r.Stderr)" }
+          if ($r.Stderr -notmatch "reports '0\.0\.1' but the plugin is v") { throw "no staleness line on stderr: $($r.Stderr)" }
+          if ($r.Reply -notmatch [regex]::Escape("""version"":""$version""")) { throw "reply not from refreshed exe: $($r.Reply)" }
+          if ("$($r.Rest)".Trim() -ne '') { throw "stdout carried more than the reply: $($r.Rest)" }
+
+          Write-Host '=== case 3: tampered checksum refuses the install; missing cargo exits 1 with the hint'
+          Remove-Item -Recurse -Force -Path "$repo\target"
+          $r = Invoke-Shim 'http://127.0.0.1:8317/bad' $null
+          if ($r.ExitCode -eq 0) { throw 'tampered download must not exit 0' }
+          if ($r.Stderr -notmatch 'checksum mismatch') { throw "refusal line missing from stderr: $($r.Stderr)" }
+          if ($r.Stderr -notmatch 'cargo not found') { throw "cargo was reachable, so the no-toolchain path went untested: $($r.Stderr)" }
+          if (Test-Path -Path $installed) { throw 'tampered archive must not install anything' }
+          if ("$($r.Reply)$($r.Rest)".Trim() -ne '') { throw "stdout must stay silent on failure: $($r.Rest)" }
+
+          Stop-Process -Id $server.Id -Force
+          Write-Host 'all cases green'
