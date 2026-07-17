@@ -21,27 +21,31 @@
 </head>
 <body class="min-h-screen bg-base-200">
     <header class="navbar bg-base-100 shadow-sm px-4 gap-3 flex-wrap">
-        <div class="flex-1 min-w-40">
-            <span class="text-lg font-semibold">{{ title }}</span>
-            <span class="badge badge-ghost badge-sm ml-2">claude-kanban</span>
+        <div class="flex-1 min-w-40 flex items-center gap-2">
+            <span class="text-4xl font-semibold">{{ title }}</span>
+            <span class="badge badge-ghost badge-sm">claude-kanban</span>
         </div>
-        <div id="filters" class="flex gap-2 items-center flex-wrap">
-            {% include "filter_epic.html" %}
-            <input name="label" placeholder="filter label" class="input input-sm w-32"
-                   hx-get="/ui/board" hx-target="#board" hx-include="#filters" hx-trigger="input changed delay:300ms">
-            <select name="status" class="select select-sm w-32" aria-label="Filter by status"
-                    hx-get="/ui/board" hx-target="#board" hx-include="#filters" hx-trigger="change">
-                <option value="">Any status</option>
-                <option value="draft">draft</option>
-                <option value="stub">stub</option>
-                <option value="review">review</option>
-                <option value="ready">ready</option>
-            </select>
+        <div class="flex gap-3 items-center justify-center flex-wrap">
+            <div id="filters" class="flex gap-2 items-center flex-wrap">
+                {% include "filter_epic.html" %}
+                <input name="label" placeholder="filter label" class="input input-sm w-32"
+                       hx-get="/ui/board" hx-target="#board" hx-include="#filters" hx-trigger="input changed delay:300ms">
+                <select name="status" class="select select-sm w-32" aria-label="Filter by status"
+                        hx-get="/ui/board" hx-target="#board" hx-include="#filters" hx-trigger="change">
+                    <option value="">Any status</option>
+                    <option value="draft">draft</option>
+                    <option value="stub">stub</option>
+                    <option value="review">review</option>
+                    <option value="ready">ready</option>
+                </select>
+            </div>
+            <div class="flex gap-2">
+                <button class="btn btn-primary" onclick="document.getElementById('new-ticket-modal').showModal()">+ Ticket</button>
+                <button class="btn btn-epic" onclick="document.getElementById('new-epic-modal').showModal()">+ Epic</button>
+            </div>
         </div>
-        <div class="flex gap-2">
-            <button class="btn btn-sm btn-primary" onclick="document.getElementById('new-ticket-modal').showModal()">+ Ticket</button>
-            <button class="btn btn-sm" onclick="document.getElementById('new-epic-modal').showModal()">+ Epic</button>
-        </div>
+        {# Right-hand counterweight to the flex-1 title block, so the controls sit centred rather than flushed right. #}
+        <div class="flex-1 min-w-40 hidden md:block" aria-hidden="true"></div>
     </header>
 
     <main class="p-4">

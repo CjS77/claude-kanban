@@ -24,3 +24,16 @@
 .sortable-drag {
     @apply rotate-1 shadow-lg;
 }
+
+/* The header's "+ Epic" button wears the default epic colour — the same #7c9cf5 the epic badges and card borders use —
+ * so it reads as kin to epics on the board. Hover mixes in a little base-content, which darkens on the light theme and
+ * lightens on the dark one (the same color-mix trick the refining-card tint uses). */
+.btn-epic {
+    color: white;
+    background-color: #7c9cf5;
+    border-color: #7c9cf5;
+}
+.btn-epic:hover {
+    background-color: color-mix(in oklab, #7c9cf5 85%, var(--color-base-content));
+    border-color: color-mix(in oklab, #7c9cf5 85%, var(--color-base-content));
+}
