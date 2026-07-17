@@ -13,7 +13,7 @@ You need git — nothing else on the five released platforms (Linux x86_64/aarch
 /plugin install kanban@claude-kanban
 ```
 
-Restart Claude Code (or `/reload-plugins`). The plugin registers the `kanban` MCP server and adds the `/kanban:work` and `/kanban:delegate` commands. On first run the launcher downloads the release binary matching your platform and plugin version, verifies its checksum, and installs it — seconds, not a compile.
+Restart Claude Code (or `/reload-plugins`), then run `/kanban:init` — it seeds the board and opens it in your browser. The plugin registers the `kanban` MCP server and adds the `/kanban:init`, `/kanban:open`, `/kanban:work`, and `/kanban:delegate` commands. On first run the launcher downloads the release binary matching your platform and plugin version, verifies its checksum, and installs it — seconds, not a compile.
 
 **Fallback / building from source.** On any other platform, offline, or when checksum verification refuses the download, the launcher falls back to `cargo build --release`, which needs a Rust toolchain ([rustup.rs](https://rustup.rs)) — everything that worked before the prebuilt binaries still works. If that first-run build takes long enough that MCP startup gives up waiting, the build carries on and the next session attaches normally. Running `cargo build --release` in the plugin directory yourself always works too. Windows follows the normal flow: `bin/kanban-mcp.cmd` (PowerShell underneath) downloads, verifies, and installs the same way, with the same cargo fallback — only Windows arm64, which has no published binary, needs the toolchain.
 
@@ -29,10 +29,12 @@ Releasing (maintainer): push `main` to origin, tag the version, and push the tag
 
 ## Use
 
-Seed a board in your project (commit the file it creates), then open the UI:
+In Claude Code, `/kanban:init` seeds the board and opens it — that's the whole setup. Commit the two files it creates (`.kanban/board.json` and `.kanban/config.json`); `/kanban:open` puts the board back on screen later, reusing the running server if there is one.
+
+From a clone, the binary does the same two steps directly:
 
 ```bash
-claude-kanban init     # creates .kanban/board.json
+claude-kanban init     # creates .kanban/board.json and .kanban/config.json
 claude-kanban serve    # opens the board at http://127.0.0.1:4747
 ```
 
@@ -42,7 +44,7 @@ The workflow:
 
 1. **Write tickets** on the board — or drop one-line ideas as `stub`s for Claude to flesh out into specs.
 2. **Prioritise by dragging.** Column is workflow state (`todo` / `doing` / `done`); position in the column is priority. A ticket's `status` says how well-defined it is: `draft` (yours, untouchable) → `stub` (flesh me out) → `review` (vet the spec) → `ready` (implementable). Promoting to `ready` is your call, made on the card.
-3. **Run `/kanban:work`** in Claude Code. Claude claims the top eligible ticket, works it in its own worktree on its own branch, notes progress on the card, and moves it to `done` — then takes the next. When the board runs dry the loop doesn't exit: it sleeps and polls again, so you can keep dropping tickets while it runs — interrupt it to stop. Your checkout is never touched; integrating the reported branch is your explicit step — merge it locally, or click **Create PR** on the done ticket's detail pane to push the branch and open a GitHub PR via `gh`, with the PR URL recorded as a note on the card. `.kanban/config.json` tunes the loop: `"max_workers": N` fans out to N tickets at once, `"idle_time"` sets the sleep in seconds (default 300).
+3. **Run `/kanban:work`** in Claude Code. Claude claims the top eligible ticket, works it in its own worktree on its own branch, notes progress on the card, and moves it to `done` — then takes the next. When the board runs dry the loop doesn't exit: it sleeps and polls again, so you can keep dropping tickets while it runs — interrupt it to stop. Your checkout is never touched; integrating the reported branch is your explicit step — merge it locally, or click **Create PR** on the done ticket's detail pane to push the branch and open a GitHub PR via `gh`, with the PR URL recorded as a note on the card. `.kanban/config.json` tunes the loop: `"max_workers": N` fans out to N tickets at once, `"idle_time"` sets the sleep in seconds (default 300). `init` seeds it with both at their defaults, and re-running `init` never overwrites your edits. It leaves `"port"` out on purpose — no port means `serve` tries 4747 and hunts for a free one, whereas naming a port makes a busy port a hard failure; add it only when you want this project pinned to one.
 4. **Or `/kanban:delegate`** a ticket to an external worker: it's mirrored to a GitHub issue and the board tracks it as worked elsewhere.
 
 Dependencies (`depends_on`) block a ticket until they're all done, however high it sits. Epics group tickets, colour their cards, and move themselves — their column is derived from their tickets.
@@ -90,7 +92,7 @@ GitHub Release. Binaries live only in Releases, never in git.
 ```
 .claude-plugin/plugin.json   plugin manifest
 .mcp.json                    registers the `kanban` MCP server with Claude Code
-commands/                    the plugin skills: /kanban:work, /kanban:delegate
+commands/                    the plugin skills: /kanban:init, /kanban:open, /kanban:work, /kanban:delegate
 src/
   store/                     model, atomic IO, advisory lock, validation, derived read model
   ops.rs                     the single typed-mutation funnel both faces share

@@ -1,5 +1,6 @@
 //! The plugin's install surface: plugin.json, marketplace.json, and .mcp.json must parse, agree on names and
-//! versions (including Cargo.toml's), and point at a launcher that actually exists and is executable.
+//! versions (including Cargo.toml's), and point at a launcher that actually exists and is executable. The setup
+//! commands are part of that surface: they are what a user runs before knowing anything else about the tool.
 
 use std::{fs, path::Path};
 
@@ -41,6 +42,41 @@ fn mcp_manifest_launches_the_first_run_builder() {
         let mode = launcher.metadata().unwrap().permissions().mode();
         assert_ne!(mode & 0o111, 0, "bin/kanban-mcp must be executable, mode is {mode:o}");
     }
+}
+
+/// The launcher path is the whole point: `claude-kanban` is not on `PATH` and a fresh install has no binary at all
+/// until `bin/kanban-mcp` fetches or builds one. A command file that drifts to a bare `claude-kanban` still reads
+/// fine and still passes review — it just fails for every user who hasn't built from source. So: every runnable
+/// block in a command file must go through the launcher.
+#[test]
+fn the_setup_commands_drive_the_binary_through_the_launcher() {
+    ["init", "open"].into_iter().for_each(|name| {
+        let rel = format!("commands/{name}.md");
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(&rel);
+        let body = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{rel} must exist: /kanban:{name} is a command file: {e}"));
+
+        let frontmatter = body.strip_prefix("---\n").and_then(|rest| rest.split_once("\n---")).map(|(front, _)| front);
+        let frontmatter = frontmatter.unwrap_or_else(|| panic!("{rel} must open with a --- frontmatter block"));
+        assert!(frontmatter.contains("description:"), "{rel}'s frontmatter must carry a description: it is the command's /help line");
+
+        assert!(
+            body.contains("${CLAUDE_PLUGIN_ROOT}/bin/kanban-mcp"),
+            "{rel} must invoke the launcher — the binary is not on PATH and may not exist yet"
+        );
+        bash_blocks(&body).for_each(|block| {
+            assert!(
+                block.contains("${CLAUDE_PLUGIN_ROOT}/bin/kanban-mcp"),
+                "{rel} has a runnable block that doesn't go through the launcher — a bare claude-kanban only works \
+                 for someone who built from source:\n{block}"
+            );
+        });
+    });
+}
+
+/// The ```bash blocks of a markdown document — what the model is told to actually run, as opposed to prose that may
+/// legitimately name `claude-kanban` (quoting its stderr, or warning against calling it directly).
+fn bash_blocks(body: &str) -> impl Iterator<Item = &str> {
+    body.split("```bash").skip(1).filter_map(|rest| rest.split_once("```")).map(|(block, _)| block)
 }
 
 #[test]
