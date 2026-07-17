@@ -7,8 +7,16 @@
 set -eu
 
 root="${CLAUDE_PLUGIN_ROOT:-$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)}"
-bin="$root/target/release/claude-kanban"
 base_url="${KANBAN_RELEASE_BASE_URL:-https://github.com/CjS77/claude-kanban/releases/download}"
+
+# Windows executables carry .exe, and cargo names them that way too. This must land on the exact path
+# bin/kanban-mcp.ps1 installs: under git-bash both launchers can run on one machine, and an extensionless
+# name here would have each materialise its own copy and re-download over the other forever.
+case "$(uname -s)" in
+    MINGW* | MSYS* | CYGWIN*) exe=".exe" ;;
+    *) exe="" ;;
+esac
+bin="$root/target/release/claude-kanban$exe"
 
 log() { echo "kanban-mcp: $*" >&2; }
 
@@ -22,13 +30,25 @@ plugin_version() {
 binary_version() { "$bin" --version 2>/dev/null | awk '{print $NF; exit}'; }
 
 # The release target triple for this machine, or failure when no prebuilt binary is published for it.
+# The MINGW/MSYS/CYGWIN arms cover git-bash, MSYS2 and Cygwin: a slash command, a hook, or a user at a
+# git-bash prompt reaches this script rather than the .cmd shim, and must resolve the same artefact the
+# shim does. Only x86_64 is published for Windows, so other arches fall through to cargo, as the .ps1 does.
 release_target() {
     case "$(uname -s)/$(uname -m)" in
         Linux/x86_64) echo "x86_64-unknown-linux-musl" ;;
         Linux/aarch64 | Linux/arm64) echo "aarch64-unknown-linux-musl" ;;
         Darwin/arm64) echo "aarch64-apple-darwin" ;;
         Darwin/x86_64) echo "x86_64-apple-darwin" ;;
+        MINGW*/x86_64 | MSYS*/x86_64 | CYGWIN*/x86_64) echo "x86_64-pc-windows-msvc" ;;
         *) return 1 ;;
+    esac
+}
+
+# The published archive for a target: release.yml attaches a .zip on Windows and a .tar.gz everywhere else.
+release_archive() { # $1 target
+    case "$1" in
+        *-windows-*) echo "claude-kanban-$1.zip" ;;
+        *) echo "claude-kanban-$1.tar.gz" ;;
     esac
 }
 
@@ -38,6 +58,29 @@ fetch() { # $1 url, $2 destination file
     elif command -v wget >/dev/null 2>&1; then
         wget -q -O "$2" "$1"
     else
+        return 1
+    fi
+}
+
+# Unpack $1 into directory $2. tar covers the .tar.gz everywhere; the Windows .zip needs more care, because
+# git-bash's own tar is GNU tar, which cannot read a zip. unzip is not part of a stock Git for Windows, so
+# fall back to Expand-Archive — Windows always has a PowerShell. cygpath translates the MSYS-style path,
+# which powershell.exe cannot follow, and its chatter goes to stderr because stdout belongs to JSON-RPC.
+unpack() { # $1 archive, $2 destination directory
+    case "$1" in
+        *.zip) unpack_zip "$1" "$2" ;;
+        *) tar -xzf "$1" -C "$2" ;;
+    esac
+}
+
+unpack_zip() { # $1 archive, $2 destination directory
+    if command -v unzip >/dev/null 2>&1; then
+        unzip -qo "$1" -d "$2" >&2
+    elif command -v cygpath >/dev/null 2>&1 && command -v powershell.exe >/dev/null 2>&1; then
+        powershell.exe -NoProfile -NonInteractive -Command \
+            "Expand-Archive -LiteralPath '$(cygpath -w "$1")' -DestinationPath '$(cygpath -w "$2")' -Force" >&2
+    else
+        log "no unzip and no powershell.exe — cannot unpack $1"
         return 1
     fi
 }
@@ -65,7 +108,7 @@ download_release() {
     target=$(release_target) || { log "no prebuilt binary for $(uname -s)/$(uname -m)"; return 1; }
     version=$(plugin_version)
     [ -n "$version" ] || { log "cannot read \"version\" from $root/.claude-plugin/plugin.json"; return 1; }
-    archive="claude-kanban-$target.tar.gz"
+    archive=$(release_archive "$target")
     url="$base_url/v$version/$archive"
     mkdir -p "$root/target/release" || return 1
     staging=$(mktemp -d "$root/target/release/.fetch.XXXXXX") || return 1
@@ -80,12 +123,12 @@ download_release() {
         log "checksum mismatch for $archive — refusing the download"
         return 1
     fi
-    if ! tar -xzf "$staging/$archive" -C "$staging" || [ ! -f "$staging/claude-kanban" ]; then
+    if ! unpack "$staging/$archive" "$staging" || [ ! -f "$staging/claude-kanban$exe" ]; then
         rm -rf "$staging"
-        log "could not unpack claude-kanban from $archive"
+        log "could not unpack claude-kanban$exe from $archive"
         return 1
     fi
-    chmod +x "$staging/claude-kanban" && mv -f "$staging/claude-kanban" "$bin" || { rm -rf "$staging"; return 1; }
+    chmod +x "$staging/claude-kanban$exe" && mv -f "$staging/claude-kanban$exe" "$bin" || { rm -rf "$staging"; return 1; }
     rm -rf "$staging"
 }
 
@@ -113,6 +156,10 @@ ensure_binary() {
     download_release && return 0
     build_from_source
 }
+
+# Tests source this file (KANBAN_MCP_NO_MAIN=1) to exercise release_target/release_archive against a
+# stubbed uname without launching anything; a normal invocation leaves the var unset and runs the binary.
+[ -n "${KANBAN_MCP_NO_MAIN:-}" ] && return 0 2>/dev/null
 
 ensure_binary
 exec "$bin" "$@"
