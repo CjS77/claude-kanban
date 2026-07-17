@@ -1,20 +1,118 @@
 #!/bin/sh
-# MCP entry point for the installed plugin: an installed plugin is a fresh clone
-# with no target/, so build the binary on first launch, then exec it.
-# stdout belongs to JSON-RPC — one stray line corrupts the session, so every
-# build/diagnostic line goes to stderr.
+# MCP entry point for the installed plugin: a fresh install has no target/, so on first launch fetch
+# the prebuilt release binary for this platform and plugin version. cargo build --release remains the
+# fallback (unmatched platform, offline, verification failure), so no Rust toolchain is required on
+# the released platforms. stdout belongs to JSON-RPC — one stray line corrupts the session, so every
+# diagnostic goes to stderr.
 set -eu
 
 root="${CLAUDE_PLUGIN_ROOT:-$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)}"
 bin="$root/target/release/claude-kanban"
+base_url="${KANBAN_RELEASE_BASE_URL:-https://github.com/CjS77/claude-kanban/releases/download}"
 
-if [ ! -x "$bin" ]; then
+log() { echo "kanban-mcp: $*" >&2; }
+
+# The plugin manifest's "version" — the launcher is pinned to it, never "latest": an updated plugin
+# must never run a stale binary, and a not-yet-updated plugin must never fetch a newer one.
+plugin_version() {
+    sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([0-9][^"]*\)".*/\1/p' "$root/.claude-plugin/plugin.json" | head -n 1
+}
+
+# What the installed binary reports ("claude-kanban 1.0.0" → "1.0.0"); empty when it won't run.
+binary_version() { "$bin" --version 2>/dev/null | awk '{print $NF; exit}'; }
+
+# The release target triple for this machine, or failure when no prebuilt binary is published for it.
+release_target() {
+    case "$(uname -s)/$(uname -m)" in
+        Linux/x86_64) echo "x86_64-unknown-linux-musl" ;;
+        Linux/aarch64 | Linux/arm64) echo "aarch64-unknown-linux-musl" ;;
+        Darwin/arm64) echo "aarch64-apple-darwin" ;;
+        Darwin/x86_64) echo "x86_64-apple-darwin" ;;
+        *) return 1 ;;
+    esac
+}
+
+fetch() { # $1 url, $2 destination file
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL -o "$2" "$1"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q -O "$2" "$1"
+    else
+        return 1
+    fi
+}
+
+sha256_of() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" | awk '{print $1}'
+    else
+        return 1
+    fi
+}
+
+verify_checksum() { # $1 archive, $2 its .sha256 sibling (first field is the digest)
+    expected=$(awk '{print $1; exit}' "$2")
+    actual=$(sha256_of "$1") || return 1
+    [ -n "$expected" ] && [ "$expected" = "$actual" ]
+}
+
+# Fetch, verify, and install the release binary. Staging happens in a mktemp dir inside target/release
+# so the final mv -f is an atomic same-filesystem rename: with parallel workers or two projects, two
+# sessions can race the first launch, and a half-written binary must never be exec'd.
+download_release() {
+    target=$(release_target) || { log "no prebuilt binary for $(uname -s)/$(uname -m)"; return 1; }
+    version=$(plugin_version)
+    [ -n "$version" ] || { log "cannot read \"version\" from $root/.claude-plugin/plugin.json"; return 1; }
+    archive="claude-kanban-$target.tar.gz"
+    url="$base_url/v$version/$archive"
+    mkdir -p "$root/target/release" || return 1
+    staging=$(mktemp -d "$root/target/release/.fetch.XXXXXX") || return 1
+    log "fetching prebuilt v$version for $target..."
+    if ! fetch "$url" "$staging/$archive" || ! fetch "$url.sha256" "$staging/$archive.sha256"; then
+        rm -rf "$staging"
+        log "download failed ($url)"
+        return 1
+    fi
+    if ! verify_checksum "$staging/$archive" "$staging/$archive.sha256"; then
+        rm -rf "$staging"
+        log "checksum mismatch for $archive — refusing the download"
+        return 1
+    fi
+    if ! tar -xzf "$staging/$archive" -C "$staging" || [ ! -f "$staging/claude-kanban" ]; then
+        rm -rf "$staging"
+        log "could not unpack claude-kanban from $archive"
+        return 1
+    fi
+    chmod +x "$staging/claude-kanban" && mv -f "$staging/claude-kanban" "$bin" || { rm -rf "$staging"; return 1; }
+    rm -rf "$staging"
+}
+
+build_from_source() {
     if ! command -v cargo >/dev/null 2>&1; then
-        echo "kanban-mcp: cargo not found — install Rust from https://rustup.rs, or run 'cargo build --release' in $root" >&2
+        log "cargo not found — install Rust from https://rustup.rs and run 'cargo build --release' in $root, or download"
+        log "the release asset for your platform from https://github.com/CjS77/claude-kanban/releases into $root/target/release/"
         exit 1
     fi
-    echo "kanban-mcp: first run — building claude-kanban (a minute or two)..." >&2
+    log "building claude-kanban from source (a minute or two)..."
     cargo build --release --manifest-path "$root/Cargo.toml" >&2
-fi
+}
 
+# Make $bin exist and match the plugin version: keep a current binary, refresh a stale or broken one
+# (Cargo.toml and plugin.json move in lockstep, so --version is the arbiter), download when missing,
+# and only then fall back to cargo.
+ensure_binary() {
+    if [ -x "$bin" ]; then
+        want=$(plugin_version) || want=""
+        [ -n "$want" ] || return 0
+        have=$(binary_version) || have=""
+        [ "$have" = "$want" ] && return 0
+        log "installed binary reports '${have:-nothing}' but the plugin is v$want — refreshing"
+    fi
+    download_release && return 0
+    build_from_source
+}
+
+ensure_binary
 exec "$bin" "$@"
