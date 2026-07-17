@@ -1,5 +1,5 @@
 ---
-description: "Work the board: claim the next eligible ticket — implement it (ready) or flesh out its spec (stub) — move it across, repeat. Running this is the opt-in — never claim tickets outside a loop the user started."
+description: "Work the board: claim the next eligible ticket — implement it (ready) or flesh out its spec (stub) — move it across, repeat; when the board runs dry, idle and re-poll. Running this is the opt-in — never claim tickets outside a loop the user started."
 argument-hint: "[ticket-id] [--one] [--push]"
 ---
 
@@ -16,7 +16,8 @@ Arguments given: `$ARGUMENTS`
 
 ## Picking the mode
 
-Your first `kanban_board` read carries `max_workers` (from `.kanban/config.json`; absent means 1).
+Your first `kanban_board` read carries `max_workers` and `idle_time` (both from `.kanban/config.json`; absent means
+1 worker and a 300-second idle).
 
 - `max_workers` = 1 → **The loop** below: one ticket at a time, worked by you.
 - `max_workers` = N > 1 → **The parallel loop** below: up to N tickets in flight at once, each worked by a subagent.
@@ -24,12 +25,12 @@ Your first `kanban_board` read carries `max_workers` (from `.kanban/config.json`
 
 ## The loop
 
-Repeat until `kanban_next` reports nothing eligible (or you've done the one requested ticket):
+Repeat until the user stops you (or you've done the one requested ticket — a ticket-id argument or `--one` ends the
+loop after it):
 
 1. **Pick** — call `kanban_board` (remember the `version`), then `kanban_next`. Its `action` field says what the ticket
    needs: `implement` (a ready ticket — steps 2–8) or `refine` (a stub — see **Refining a stub** below). If nothing is
-   eligible, report why the remaining todo tickets don't qualify (draft/review status? blocked? claimed? external?)
-   and stop the loop.
+   eligible, go idle instead of ending the loop — see **Idling** below.
 2. **Claim** — `kanban_claim` the ticket. A pure board mutation; git is untouched.
 3. **Start** — `kanban_worktree_start`. Supply a `slug` yourself: a short kebab-case digest of the title
    (2–3 words, e.g. "Add authorization based on OAuth from Google" → `google-oauth`) beats the mechanical default.
@@ -69,11 +70,27 @@ tickets in flight; a refinement counts as one worker, an implementation counts a
    `kanban_move` to `done` (with `--push`, push the branch and open the PR first); reported failure or an unusable
    result → `kanban_note` what happened and `kanban_release` the ticket. If the subagent died leaving the worktree
    dirty, leave the worktree for the human — never `force_discard`.
-4. **Top up** — after each close-out, pick and claim the next eligible ticket while others are still running. The
-   loop ends when `kanban_next` reports nothing eligible AND every in-flight ticket is closed out.
+4. **Top up** — after each close-out, pick and claim the next eligible ticket while others are still running. When
+   `kanban_next` reports nothing eligible AND every in-flight ticket is closed out, go idle — see **Idling** below.
 
 The store is safe under concurrency (advisory lock, version CAS, one worktree per ticket, per-ticket branches) —
 what needs discipline is the policy above: one claimer, one board-writer, subagents in their own worktrees.
+
+## Idling
+
+Running dry doesn't end the loop: the human keeps feeding the board, so wait and look again. When nothing is
+eligible (and, in the parallel loop, nothing is in flight):
+
+1. **Report, briefly** — why the remaining todo tickets don't qualify (draft/review status? blocked? claimed?
+   external?) and that you're idling for `idle_time` seconds.
+2. **Wait `idle_time` seconds** — the value from your latest `kanban_board` read. Use whatever wait or scheduling
+   mechanism your harness provides for sitting out a delay; a plain Bash `sleep <idle_time>` is the fallback when
+   nothing better exists.
+3. **Re-poll** — a fresh `kanban_board` (which also picks up any config change), then `kanban_next`. Work whatever
+   became eligible, or idle again.
+
+Only the user ends an idling loop — by interrupting or saying stop. The exceptions never reach idling at all: a
+ticket-id argument or `--one` means one ticket, so finish it, report, and end.
 
 ## Refining a stub
 
