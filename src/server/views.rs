@@ -250,6 +250,9 @@ pub struct TicketCtx {
     pub claim: Option<ClaimCtx>,
     pub branch: Option<String>,
     pub completed_at: Option<String>,
+    /// Whether the pane shows the Create PR button — computed by the handlers via `pr::eligible` (it needs subprocesses,
+    /// and views stay pure).
+    pub can_pr: bool,
     pub deps: Vec<DepCtx>,
     pub notes: Vec<NoteCtx>,
     pub statuses: Vec<StatusOptCtx>,
@@ -282,7 +285,7 @@ pub struct StatusOptCtx {
     pub current: bool,
 }
 
-pub fn detail(board: &Board, claims: &[Claim], id: &crate::store::model::TicketId) -> Option<DetailTpl> {
+pub fn detail(board: &Board, claims: &[Claim], id: &crate::store::model::TicketId, can_pr: bool) -> Option<DetailTpl> {
     use crate::store::model::Column;
     let t = board.ticket(id)?;
     let claim = crate::store::find_claim(claims, id).map(|c| claim_ctx(&ClaimView::from(c)));
@@ -308,6 +311,7 @@ pub fn detail(board: &Board, claims: &[Claim], id: &crate::store::model::TicketI
             claim,
             branch: t.column.branch().map(str::to_owned),
             completed_at,
+            can_pr,
             deps: t
                 .depends_on
                 .iter()

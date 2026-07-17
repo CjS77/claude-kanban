@@ -4,7 +4,8 @@
 //!   - `serve` runs the web UI and its JSON API for the human.
 //!   - `mcp` runs a stdio MCP server so Claude can read and move the board.
 //!
-//! Both read and write `.kanban/board.json`. Nothing leaves the machine.
+//! Both read and write `.kanban/board.json`. Nothing leaves the machine except on an explicit user action (the Create PR
+//! button is the one egress).
 //!
 //! This library target exists so integration tests can reach the modules; the binary in `main.rs` is a one-line shim over
 //! [`cli::run`]. The important layering, enforced by the module tree:
@@ -19,6 +20,7 @@ pub mod config;
 pub mod git;
 pub mod mcp;
 pub mod ops;
+pub mod pr;
 pub mod server;
 pub mod store;
 pub mod worktree;

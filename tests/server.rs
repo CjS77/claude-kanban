@@ -10,9 +10,13 @@ use axum::{
     response::Response,
 };
 use claude_kanban::{
+    git::git,
     ops::{self, Op},
     server::{App, router},
-    store::{Store, model::Status},
+    store::{
+        Store,
+        model::{ColumnId, Status, TicketId},
+    },
 };
 use http_body_util::BodyExt;
 use tower::ServiceExt;
@@ -23,6 +27,11 @@ fn test_app() -> (tempfile::TempDir, Router, Store) {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::at(dir.path().join(".kanban"));
     store.init().unwrap();
+    let router = router_for(&store);
+    (dir, router, store)
+}
+
+fn router_for(store: &Store) -> Router {
     let (refresh, _) = tokio::sync::broadcast::channel(4);
     let app = Arc::new(App {
         store: store.clone(),
@@ -34,7 +43,7 @@ fn test_app() -> (tempfile::TempDir, Router, Store) {
         refresh,
         shutdown: tokio_util::sync::CancellationToken::new(),
     });
-    (dir, router(app), store)
+    router(app)
 }
 
 fn get(path: &str) -> Request<Body> {
@@ -198,6 +207,74 @@ async fn detail_and_edit_panes_render_and_404_cleanly() {
     let res = router.oneshot(get("/ui/ticket/K-99")).await.unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
     assert_eq!(res.headers()["hx-retarget"], "#toasts", "a missing ticket toasts instead of breaking the pane");
+}
+
+/// Walk a seeded ticket to `done` carrying `branch`, the shape `pr::eligible` inspects.
+fn to_done_with_branch(store: &Store, id: &str, branch: &str) {
+    let id = TicketId(id.into());
+    ops::apply(store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
+    ops::apply(store, None, Op::StampWorktree { id: id.clone(), branch: branch.into(), path: "/tmp/unused".into() }).unwrap();
+    ops::apply(store, None, Op::MoveTicket { id, to: ColumnId::Done, position: None, owner: None }).unwrap();
+}
+
+#[tokio::test]
+async fn the_create_pr_button_tracks_eligibility_live() {
+    // The store's parent is a real repository with the ticket's branch; the remote arrives mid-test.
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    git(repo, &["init", "-q", "-b", "main"]).unwrap();
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "seed"]).unwrap();
+    git(repo, &["branch", "k-1/work"]).unwrap();
+    let store = Store::at(repo.join(".kanban"));
+    store.init().unwrap();
+    let router = router_for(&store);
+
+    seed_ticket(&store, "Done with branch");
+    to_done_with_branch(&store, "K-1", "k-1/work");
+
+    // Done + branch, but no remote: no button.
+    let html = body_text(router.clone().oneshot(get("/ui/ticket/K-1")).await.unwrap()).await;
+    assert!(!html.contains("Create PR"), "{html}");
+
+    // A remote added mid-session shows the button without a server restart.
+    git(repo, &["remote", "add", "origin", "https://example.invalid/repo.git"]).unwrap();
+    let html = body_text(router.clone().oneshot(get("/ui/ticket/K-1")).await.unwrap()).await;
+    assert!(html.contains("Create PR") && html.contains("/ui/ticket/K-1/create-pr"), "{html}");
+
+    // A todo ticket never shows it, remote or not.
+    seed_ticket(&store, "Still todo");
+    let html = body_text(router.clone().oneshot(get("/ui/ticket/K-2")).await.unwrap()).await;
+    assert!(!html.contains("Create PR"), "{html}");
+
+    // Clicking it on the branchless todo ticket refuses with a toast, not a push.
+    let res = router.clone().oneshot(post("/ui/ticket/K-2/create-pr", 4, "")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(res.headers()["hx-retarget"], "#toasts");
+    let toast = body_text(res).await;
+    assert!(toast.contains("not a done ticket with a branch"), "{toast}");
+
+    // Deleting the local branch (merged and cleaned up) hides the button again.
+    git(repo, &["branch", "-D", "k-1/work"]).unwrap();
+    let html = body_text(router.oneshot(get("/ui/ticket/K-1")).await.unwrap()).await;
+    assert!(!html.contains("Create PR"), "{html}");
+}
+
+#[tokio::test]
+async fn a_done_ticket_outside_a_git_repo_renders_with_no_pr_button() {
+    // The plain temp store is not a git repository — eligibility must answer false, never error the pane.
+    let (_dir, router, store) = test_app();
+    seed_ticket(&store, "Done, repo-less");
+    to_done_with_branch(&store, "K-1", "k-1/work");
+
+    let res = router.clone().oneshot(get("/ui/ticket/K-1")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body_text(res).await;
+    assert!(!html.contains("Create PR"), "{html}");
+
+    // And the POST refuses with a 422 toast rather than pushing from nowhere.
+    let res = router.oneshot(post("/ui/ticket/K-1/create-pr", 3, "")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(res.headers()["hx-retarget"], "#toasts");
 }
 
 #[tokio::test]

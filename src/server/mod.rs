@@ -113,6 +113,7 @@ pub fn router(app: AppState) -> Router {
         .route("/ui/ticket/{id}/move", post(routes::move_ticket))
         .route("/ui/ticket/{id}/status", post(routes::ticket_status))
         .route("/ui/ticket/{id}/note", post(routes::add_note))
+        .route("/ui/ticket/{id}/create-pr", post(routes::create_pr))
         .route("/ui/ticket/{id}/delete", post(routes::delete_ticket))
         .route("/ui/epic", post(routes::create_epic))
         .route("/ui/epic/{id}", get(routes::epic_detail).post(routes::update_epic))

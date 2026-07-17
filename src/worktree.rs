@@ -226,7 +226,8 @@ pub fn list(store: &Store) -> anyhow::Result<Vec<WorktreeRow>> {
 // ---- the git plumbing --------------------------------------------------------------------------------------------------
 
 /// The repository the store belongs to: the store's parent directory, which by anchoring *is* the main working tree.
-fn repo_root(store: &Store) -> anyhow::Result<PathBuf> {
+/// Shared with `pr.rs`, whose git questions are about the same repository.
+pub(crate) fn repo_root(store: &Store) -> anyhow::Result<PathBuf> {
     let parent = store.dir().parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new(".")).to_path_buf();
     git::main_worktree(&parent).with_context(|| format!("{} is not inside a git repository — worktrees need one", parent.display()))
 }

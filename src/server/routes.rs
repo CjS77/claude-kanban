@@ -17,6 +17,7 @@ use serde::Deserialize;
 use super::{AppState, security::VERSION_HEADER, views};
 use crate::{
     ops::{self, Op, TicketPatch},
+    pr,
     store::{
         Store, StoreError,
         derive,
@@ -140,12 +141,18 @@ async fn mutate_then_detail(app: &AppState, headers: &HeaderMap, op: Op, id: Tic
     let version = client_version(headers)?;
     blocking(app, move |store| {
         ops::apply(store, Some(version), op)?;
-        let board = store.read_board()?;
-        let claims = store.read_claims()?;
-        let tpl = views::detail(&board, &claims, &id).ok_or_else(|| AppError::not_found(&id.to_string()))?;
-        Ok(Html(tpl.render()?))
+        rendered_detail(store, &id)
     })
     .await
+}
+
+/// Render the ticket's detail pane from fresh state, computing Create PR eligibility live (see [`pr::eligible`]).
+fn rendered_detail(store: &Store, id: &TicketId) -> Result<Html<String>, AppError> {
+    let board = store.read_board()?;
+    let claims = store.read_claims()?;
+    let can_pr = board.ticket(id).is_some_and(|t| pr::eligible(store, t));
+    let tpl = views::detail(&board, &claims, id, can_pr).ok_or_else(|| AppError::not_found(&id.to_string()))?;
+    Ok(Html(tpl.render()?))
 }
 
 // ---- pages and fragments (read-only — these bypass ops entirely) ---------------------------------------------------
@@ -164,13 +171,7 @@ pub async fn board(State(app): State<AppState>, Query(filters): Query<views::Fil
 }
 
 pub async fn ticket_detail(State(app): State<AppState>, Path(id): Path<String>) -> Result<Html<String>, AppError> {
-    blocking(&app, move |store| {
-        let board = store.read_board()?;
-        let claims = store.read_claims()?;
-        let tpl = views::detail(&board, &claims, &TicketId(id.clone())).ok_or_else(|| AppError::not_found(&id))?;
-        Ok(Html(tpl.render()?))
-    })
-    .await
+    blocking(&app, move |store| rendered_detail(store, &TicketId(id))).await
 }
 
 pub async fn ticket_edit(State(app): State<AppState>, Path(id): Path<String>) -> Result<Html<String>, AppError> {
@@ -338,6 +339,22 @@ pub async fn add_note(
     let id = TicketId(id);
     let op = Op::AddNote { id: id.clone(), text: form.text, author: Some(app.ui_owner.clone()) };
     mutate_then_detail(&app, &headers, op, id).await
+}
+
+/// The Create PR button: push the done ticket's branch and open a GitHub PR — the binary's one network egress, behind
+/// this explicit click. The URL lands as a progress note with `expected_version: None`: a server-derived outcome, the
+/// same documented exception as `Op::StampWorktree` (a slow git action must not be voided by a board that moved
+/// underneath it; glue.js still stamps `X-Board-Version` on the POST, which is all the CSRF guard needs).
+pub async fn create_pr(State(app): State<AppState>, Path(id): Path<String>) -> Result<Html<String>, AppError> {
+    let id = TicketId(id);
+    let author = app.ui_owner.clone();
+    blocking(&app, move |store| {
+        let report = pr::create_pr(store, &id).map_err(|e| AppError::bad_request(format!("{e:#}")))?;
+        let text = if report.created { format!("PR created: {}", report.url) } else { format!("PR already open: {}", report.url) };
+        ops::apply(store, None, Op::AddNote { id: id.clone(), text, author: Some(author) })?;
+        rendered_detail(store, &id)
+    })
+    .await
 }
 
 pub async fn delete_ticket(State(app): State<AppState>, Path(id): Path<String>, headers: HeaderMap) -> Result<StatusCode, AppError> {

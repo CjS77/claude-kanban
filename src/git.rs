@@ -1,35 +1,42 @@
-//! A thin runner around the `git` binary, plus the two queries the store and worktree code build on.
+//! A thin runner around the `git` binary (and, for the PR button, `gh`), plus the two queries the store and worktree
+//! code build on.
 //!
-//! Everything shells out to `git` via [`std::process::Command`] — argument vectors, never a shell string, so paths and
-//! branch names need no quoting. This module is deliberately dumb: it knows how to *run* git, while `worktree.rs` knows
-//! *which* plumbing to run.
+//! Everything shells out via [`std::process::Command`] — argument vectors, never a shell string, so paths and branch
+//! names need no quoting. This module is deliberately dumb: it knows how to *run* a program, while `worktree.rs` and
+//! `pr.rs` know *which* plumbing to run.
 
 use std::{
     path::{Path, PathBuf},
     process::Command,
 };
 
-/// A failed git invocation.
+/// A failed invocation. `args` carries the whole command line, program included, so the message names what actually ran.
 #[derive(Debug, thiserror::Error)]
 pub enum GitError {
-    #[error("`git {args}` failed: {stderr}")]
+    #[error("`{args}` failed: {stderr}")]
     Failed { args: String, stderr: String },
-    #[error("could not run git: {0}")]
+    #[error("could not run: {0}")]
     Spawn(#[from] std::io::Error),
 }
 
-/// Run `git <args>` in `dir`, returning trimmed stdout. Non-zero exit becomes [`GitError::Failed`] carrying stderr.
-pub fn git(dir: &Path, args: &[&str]) -> Result<String, GitError> {
-    tracing::trace!(dir = %dir.display(), args = args.join(" "), "git");
-    let output = Command::new("git").current_dir(dir).args(args).output()?;
+/// Run `<program> <args>` in `dir` with `envs` set, returning trimmed stdout. Non-zero exit becomes [`GitError::Failed`]
+/// carrying stderr.
+pub fn run(program: &str, dir: &Path, args: &[&str], envs: &[(&str, &str)]) -> Result<String, GitError> {
+    tracing::trace!(dir = %dir.display(), args = args.join(" "), "{program}");
+    let output = Command::new(program).current_dir(dir).args(args).envs(envs.iter().copied()).output()?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).trim_end().to_owned())
     } else {
         Err(GitError::Failed {
-            args: args.join(" "),
+            args: format!("{program} {}", args.join(" ")),
             stderr: String::from_utf8_lossy(&output.stderr).trim_end().to_owned(),
         })
     }
+}
+
+/// Run `git <args>` in `dir`, returning trimmed stdout.
+pub fn git(dir: &Path, args: &[&str]) -> Result<String, GitError> {
+    run("git", dir, args, &[])
 }
 
 /// The installed git's `(major, minor)`, or `None` when git is missing or its version string is unparseable.
