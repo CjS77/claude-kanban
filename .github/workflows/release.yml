@@ -66,4 +66,4 @@ jobs:
         with:
           subject-path: >-
             ${{ runner.os == 'Windows' && format('claude-kanban-{0}.zip', matrix.target)
-             || format('claude-kanban-{0}.tar.gz', matrix.target) }}
+            || format('claude-kanban-{0}.tar.gz', matrix.target) }}
