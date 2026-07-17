@@ -6,14 +6,16 @@ You drag cards around in a browser to say what matters. Claude reads the same bo
 
 ## Install
 
-You need git and a Rust toolchain ([rustup.rs](https://rustup.rs)) — the binary compiles on your machine. In Claude Code:
+You need git — nothing else on the five released platforms (Linux x86_64/aarch64, macOS Intel/Apple silicon, Windows x86_64): prebuilt binaries ship with each release. In Claude Code:
 
 ```
 /plugin marketplace add CjS77/claude-kanban
 /plugin install kanban@claude-kanban
 ```
 
-Restart Claude Code (or `/reload-plugins`). The plugin registers the `kanban` MCP server and adds the `/kanban:work` and `/kanban:delegate` commands. The first session builds the crate (a minute or two); if MCP startup gives up waiting, the build carries on and the next session attaches normally. Running `cargo build --release` in the plugin directory yourself always works too — and is the required route on Windows, where the launcher script needs a POSIX shell.
+Restart Claude Code (or `/reload-plugins`). The plugin registers the `kanban` MCP server and adds the `/kanban:work` and `/kanban:delegate` commands. On first run the launcher downloads the release binary matching your platform and plugin version, verifies its checksum, and installs it — seconds, not a compile.
+
+**Fallback / building from source.** On any other platform, offline, or when checksum verification refuses the download, the launcher falls back to `cargo build --release`, which needs a Rust toolchain ([rustup.rs](https://rustup.rs)) — everything that worked before the prebuilt binaries still works. If that first-run build takes long enough that MCP startup gives up waiting, the build carries on and the next session attaches normally. Running `cargo build --release` in the plugin directory yourself always works too — and is the required route on Windows, where the launcher script needs a POSIX shell (or unpack the Windows release zip into `target/release/` by hand).
 
 To hack on the plugin itself, load your clone directly:
 
