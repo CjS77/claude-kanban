@@ -41,7 +41,7 @@ impl Config {
     /// Load the config from `store_dir`, or defaults when the file is absent. A malformed file is an error — silently
     /// ignoring a broken config would be worse than stopping.
     pub fn load(store_dir: &Path) -> Result<Config, StoreError> {
-        crate::store::read_json_or_default(&store_dir.join("config.json"))
+        crate::store::read_json_or_default(&store_dir.join(crate::store::CONFIG_FILE))
     }
 
     /// The effective worktree root: `--dir` flag / `KANBAN_WORKTREE_DIR` (already merged by clap) > config > default.

@@ -191,10 +191,15 @@ fn init_tracing() {
     tracing_subscriber::fmt().with_env_filter(filter).with_writer(std::io::stderr).init();
 }
 
-/// `claude-kanban init` — seed an empty board and the store-local gitignore.
+/// `claude-kanban init` — seed an empty board, a default config, and the store-local gitignore.
 fn init(store: &Store) -> anyhow::Result<()> {
     store.init()?;
     println!("Initialised an empty board at {}", store.board_path().display());
-    println!("Commit {} and {} — claims, locks, and pid files stay untracked.", store.board_path().display(), store.dir().join(".gitignore").display());
+    println!(
+        "Commit {}, {}, and {} — claims, locks, and pid files stay untracked.",
+        store.board_path().display(),
+        store.config_path().display(),
+        store.dir().join(".gitignore").display()
+    );
     Ok(())
 }

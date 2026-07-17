@@ -57,7 +57,9 @@ async fn run(store: Store, port: Option<u16>, no_open: bool, assets_dir: Option<
     let listener = match bind_listener(&store, explicit, DEFAULT_PORT).await? {
         Bound::Listener(listener) => listener,
         Bound::AlreadyServed { pid, port } => {
-            println!("This board is already being served on http://127.0.0.1:{port}/ (pid {pid}) — not starting a duplicate.");
+            let url = format!("http://127.0.0.1:{port}/");
+            println!("This board is already being served on {url} (pid {pid}) — not starting a duplicate.");
+            open_browser(&url, no_open);
             return Ok(());
         }
     };
@@ -82,9 +84,7 @@ async fn run(store: Store, port: Option<u16>, no_open: bool, assets_dir: Option<
     let url = format!("http://127.0.0.1:{port}/");
     println!("Serving the board on {url}  (ctrl-c to stop)");
     tracing::info!(%url, store = %store.dir().display(), "board UI listening");
-    if !no_open {
-        let _ = open::that_detached(&url);
-    }
+    open_browser(&url, no_open);
 
     tokio::spawn({
         let shutdown = shutdown.clone();
@@ -100,6 +100,17 @@ async fn run(store: Store, port: Option<u16>, no_open: bool, assets_dir: Option<
         .await;
     let _ = std::fs::remove_file(&pid_file);
     result.map_err(Into::into)
+}
+
+/// Show the board to the user, unless `no_open` says they didn't ask for it. Returns whether the open was attempted —
+/// both the fresh-bind and the already-served paths call this, so `serve` ends with a browser on the board either way.
+fn open_browser(url: &str, no_open: bool) -> bool {
+    if no_open {
+        tracing::debug!(%url, "not opening a browser — --no-open");
+        return false;
+    }
+    let _ = open::that_detached(url);
+    true
 }
 
 /// The full route table. Public so handler tests can drive it with `tower::ServiceExt::oneshot`.
@@ -216,4 +227,16 @@ fn ui_owner(store: &Store) -> String {
         .filter(|name| !name.is_empty())
         .or_else(|| std::env::var("USER").ok().filter(|u| !u.is_empty()))
         .unwrap_or_else(|| "user".to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The half of the contract a test may assert without hijacking the developer's browser: `--no-open` reaches no
+    /// browser at all. The other half — that both serve paths call this helper — is structural, not observable here.
+    #[test]
+    fn no_open_opens_nothing() {
+        assert!(!open_browser("http://127.0.0.1:4747/", true));
+    }
 }

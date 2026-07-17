@@ -39,8 +39,15 @@ pub(crate) fn read_json_or_default<T: serde::de::DeserializeOwned + Default>(pat
 const BOARD_FILE: &str = "board.json";
 /// File name of the live-claims sidecar inside the store directory.
 const CLAIMS_FILE: &str = "claims.json";
+/// File name of the store config inside the store directory.
+pub(crate) const CONFIG_FILE: &str = "config.json";
 /// Store-local gitignore written by `init`, covering the runtime artifacts (never the board itself).
 const STORE_GITIGNORE: &str = "# claude-kanban runtime artifacts — machine-local, never committed. (board.json and this file ARE committed.)\n.lock\n*.tmp\nserve.pid\nclaims.json\n";
+/// Store-local config written by `init`, and committed like the board. Seeds only the two `/kanban:work` dials at their
+/// defaults; `port` is deliberately absent, since an explicit port fails loudly when taken while no choice means
+/// "try 4747, then hunt". Strict JSON — [`crate::config::Config`] is serde-parsed and a malformed file is a loud error,
+/// so this cannot carry comments.
+const STORE_CONFIG: &str = "{\n  \"max_workers\": 1,\n  \"idle_time\": 300\n}\n";
 
 /// Everything that can go wrong below the operation layer.
 #[derive(Debug, thiserror::Error)]
@@ -107,8 +114,15 @@ impl Store {
         self.dir.join(CLAIMS_FILE)
     }
 
-    /// Create the store directory, seed an empty board, and drop in a store-local `.gitignore` covering the runtime
-    /// artifacts. Refuses to touch an existing board. Runs under the lock so two racing `init`s can't both win.
+    /// Path of the store config.
+    #[must_use]
+    pub fn config_path(&self) -> PathBuf {
+        self.dir.join(CONFIG_FILE)
+    }
+
+    /// Create the store directory, seed an empty board, a default `config.json`, and a store-local `.gitignore` covering
+    /// the runtime artifacts. Refuses to touch an existing board; an existing config or gitignore is left alone, so a
+    /// hand-edited one survives. Runs under the lock so two racing `init`s can't both win.
     pub fn init(&self) -> Result<(), StoreError> {
         fs::create_dir_all(&self.dir).map_err(|source| StoreError::Io { path: self.dir.clone(), source })?;
         let _lock = lock::acquire(&self.dir)?;
@@ -116,12 +130,18 @@ impl Store {
             return Err(StoreError::AlreadyExists(self.board_path()));
         }
         io::write_json_atomic(&self.board_path(), &Board::empty())?;
-        let gitignore = self.dir.join(".gitignore");
-        if !gitignore.exists() {
-            fs::write(&gitignore, STORE_GITIGNORE).map_err(|source| StoreError::Io { path: gitignore, source })?;
-        }
+        self.seed_if_absent(&self.config_path(), STORE_CONFIG)?;
+        self.seed_if_absent(&self.dir.join(".gitignore"), STORE_GITIGNORE)?;
         tracing::info!(path = %self.board_path().display(), "board initialised");
         Ok(())
+    }
+
+    /// Write a seed file, keeping whatever is already there — `init` seeds defaults, it never overrules a choice.
+    fn seed_if_absent(&self, path: &Path, contents: &str) -> Result<(), StoreError> {
+        if path.exists() {
+            return Ok(());
+        }
+        fs::write(path, contents).map_err(|source| StoreError::Io { path: path.to_path_buf(), source })
     }
 
     /// Read and validate the board. Lock-free — see the module docs.
@@ -220,6 +240,26 @@ mod tests {
         assert_eq!(board.columns.len(), 3);
         assert!(matches!(store.init(), Err(StoreError::AlreadyExists(_))));
         assert!(store.dir().join(".gitignore").exists());
+
+        assert!(store.config_path().exists(), "init seeds a config beside the board");
+        let config = crate::config::Config::load(store.dir()).expect("the seeded config must parse");
+        assert_eq!(config.max_workers(), 1);
+        assert_eq!(config.idle_time(), 300);
+        assert!(config.port.is_none(), "no seeded port: that is what lets serve try 4747 and then hunt");
+    }
+
+    #[test]
+    fn init_leaves_an_existing_config_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::at(dir.path().join(".kanban"));
+        std::fs::create_dir_all(store.dir()).unwrap();
+        std::fs::write(store.config_path(), r#"{ "max_workers": 4, "port": 5050 }"#).unwrap();
+
+        store.init().unwrap();
+
+        let config = crate::config::Config::load(store.dir()).unwrap();
+        assert_eq!(config.max_workers(), 4, "a hand-edited config survives init");
+        assert_eq!(config.port, Some(5050));
     }
 
     #[test]
