@@ -70,8 +70,19 @@ tickets in flight; a refinement counts as one worker, an implementation counts a
    `kanban_move` to `done` (with `--push`, push the branch and open the PR first); reported failure or an unusable
    result → `kanban_note` what happened and `kanban_release` the ticket. If the subagent died leaving the worktree
    dirty, leave the worktree for the human — never `force_discard`.
-4. **Top up** — after each close-out, pick and claim the next eligible ticket while others are still running. When
-   `kanban_next` reports nothing eligible AND every in-flight ticket is closed out, go idle — see **Idling** below.
+4. **Top up** — after each close-out, pick and claim the next eligible ticket while others are still running.
+   Between close-outs, while tickets are in flight and fewer than `max_workers` are running, don't only wait for a
+   completion: re-poll the board on a fixed 60-second cadence. Workers are active, so the human is likely at the
+   board creating tickets — new work should start promptly, and a re-poll costs one cheap `kanban_board` +
+   `kanban_next` read. Wait out each interval the same way **Idling** does (your harness's wait or scheduling
+   mechanism; plain Bash `sleep 60` as the fallback). `idle_time` (default 300 s) stays the empty-board cadence:
+   waiting with workers in flight is a different situation from a dry board.
+   - Each re-poll is the normal pick step: fresh `kanban_board` (new version), `kanban_next`, claim and delegate
+     up to the cap, exactly as steps 1–2. Nothing eligible → keep waiting for completions on the same cadence.
+   - At capacity (in-flight = `max_workers`), don't re-poll — nothing could be claimed anyway. The next close-out
+     frees a slot and resumes the cadence.
+   The loop-end condition is unchanged: when `kanban_next` reports nothing eligible AND every in-flight ticket is
+   closed out, go idle — see **Idling** below.
 
 The store is safe under concurrency (advisory lock, version CAS, one worktree per ticket, per-ticket branches) —
 what needs discipline is the policy above: one claimer, one board-writer, subagents in their own worktrees.
