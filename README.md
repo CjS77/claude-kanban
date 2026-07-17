@@ -42,7 +42,7 @@ The workflow:
 
 1. **Write tickets** on the board — or drop one-line ideas as `stub`s for Claude to flesh out into specs.
 2. **Prioritise by dragging.** Column is workflow state (`todo` / `doing` / `done`); position in the column is priority. A ticket's `status` says how well-defined it is: `draft` (yours, untouchable) → `stub` (flesh me out) → `review` (vet the spec) → `ready` (implementable). Promoting to `ready` is your call, made on the card.
-3. **Run `/kanban:work`** in Claude Code. Claude claims the top eligible ticket, works it in its own worktree on its own branch, notes progress on the card, and moves it to `done` — then takes the next. When the board runs dry the loop doesn't exit: it sleeps and polls again, so you can keep dropping tickets while it runs — interrupt it to stop. Your checkout is never touched; integrating the reported branch is your explicit step. `.kanban/config.json` tunes the loop: `"max_workers": N` fans out to N tickets at once, `"idle_time"` sets the sleep in seconds (default 300).
+3. **Run `/kanban:work`** in Claude Code. Claude claims the top eligible ticket, works it in its own worktree on its own branch, notes progress on the card, and moves it to `done` — then takes the next. When the board runs dry the loop doesn't exit: it sleeps and polls again, so you can keep dropping tickets while it runs — interrupt it to stop. Your checkout is never touched; integrating the reported branch is your explicit step — merge it locally, or click **Create PR** on the done ticket's detail pane to push the branch and open a GitHub PR via `gh`, with the PR URL recorded as a note on the card. `.kanban/config.json` tunes the loop: `"max_workers": N` fans out to N tickets at once, `"idle_time"` sets the sleep in seconds (default 300).
 4. **Or `/kanban:delegate`** a ticket to an external worker: it's mirrored to a GitHub issue and the board tracks it as worked elsewhere.
 
 Dependencies (`depends_on`) block a ticket until they're all done, however high it sits. Epics group tickets, colour their cards, and move themselves — their column is derived from their tickets.
@@ -54,7 +54,7 @@ Dependencies (`depends_on`) block a ticket until they're all done, however high 
 - Claimed cards show who's working, the branch, and the worktree; blocked tickets wear a badge
 - Typed MCP tools for Claude (`kanban_board`, `kanban_next`, `kanban_claim`, `kanban_move`, `kanban_refine`, …) — every write goes through the same validated operations as the UI, guarded by an advisory lock and an optimistic version counter
 - One ticket, one git worktree, one branch (`k-7/rate-limit-login`) — parallel sessions can't trample each other or your checkout
-- Everything local: one binary, a JSON file, a loopback server; nothing leaves the machine unless you push
+- Everything local: one binary, a JSON file, a loopback server; nothing leaves the machine except on an explicit action of yours — pushing yourself, or clicking a done ticket's **Create PR** button
 
 The reasoning behind these choices — store shape, worktree anchoring, statuses, interop — is in [design.md](design.md).
 

@@ -190,6 +190,7 @@ The implementation checklist, kept as the record of scope.
 - [x] Claimed cards show owner, branch, and worktree path; a claim whose worktree has vanished reads "worktree missing — restore with `worktree start`" rather than looking like live work
 - [x] Show and set `status` (draft / stub / review / ready) on cards — promoting `review` to `ready` or pushing back to `stub` is the user's call, made here
 - [x] Filter by epic, label, and status
+- [x] Create PR button on eligible done tickets (branch still exists, repo has a remote, not external) — pushes the branch and opens a GitHub PR via `gh` with a body templated from the card, recording the URL as a progress note; the binary's one network egress, behind the explicit click
 
 ### Claude's side (`mcp`)
 
@@ -222,7 +223,7 @@ The implementation checklist, kept as the record of scope.
 
 ### Plugin glue
 
-- [x] `/kanban:work` — the policy loop: claim the next `ready`, unblocked ticket, start its worktree, implement with sensibly-sized commits, note progress, finish, report the branch. Starting the loop is the user's opt-in: inside a running loop Claude claims tickets on its own, one after the next, but it never claims spontaneously outside one. Pushing and PR creation live here in the skill, never in the binary — "nothing leaves the machine" stays literally true of it. With `"max_workers": N` (N > 1) in `.kanban/config.json`, the loop goes parallel: the session claims tickets itself and fans each one out to a subagent in its own worktree, keeping at most N in flight; `kanban_board` reports the effective value.
+- [x] `/kanban:work` — the policy loop: claim the next `ready`, unblocked ticket, start its worktree, implement with sensibly-sized commits, note progress, finish, report the branch. Starting the loop is the user's opt-in: inside a running loop Claude claims tickets on its own, one after the next, but it never claims spontaneously outside one. Pushing and PR creation for the agent path live here in the skill; the binary's one network egress is the serve face's single handler `POST /ui/ticket/{id}/create-pr` — the Create PR button — which runs only on an explicit button click. The principle was always "nothing leaves the machine without explicit user action", and the click is that action. With `"max_workers": N` (N > 1) in `.kanban/config.json`, the loop goes parallel: the session claims tickets itself and fans each one out to a subagent in its own worktree, keeping at most N in flight; `kanban_board` reports the effective value.
 - [x] `/kanban:delegate` — mirror a `ready`, unblocked ticket to a GitHub issue, apply the eligibility label, record the `external` binding, and claim it into `doing` on the daemon's behalf; the skill owns the `gh` calls
 
 ## Open design questions
