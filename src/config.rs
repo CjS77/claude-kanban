@@ -13,6 +13,9 @@ use crate::store::StoreError;
 /// every commit, the branch, the claim, and the card all survive a wipe.
 pub const DEFAULT_WORKTREE_ROOT: &str = "/tmp/claude-kanban";
 
+/// How long `/kanban:work` idles between polls when the board has nothing eligible: 5 minutes.
+pub const DEFAULT_IDLE_TIME_SECS: u64 = 300;
+
 /// The config file's shape. Unknown keys are ignored (the file is hand-written; a typo shouldn't brick the tool — though it
 /// also won't warn. Keep the schema small.)
 #[derive(Debug, Default, Clone, Deserialize)]
@@ -26,6 +29,9 @@ pub struct Config {
     /// How many tickets `/kanban:work` may drive concurrently. Absent or `0` means `1` (the sequential loop). Config-only:
     /// no flag or env var.
     pub max_workers: Option<usize>,
+    /// How many **seconds** `/kanban:work` sleeps when nothing is eligible before polling the board again. Absent or `0`
+    /// means 300 (5 minutes) — `0` collapses to the default so a typo can't spin a hot loop. Config-only: no flag or env var.
+    pub idle_time: Option<u64>,
     /// Port for `serve`. An explicit port — here, `--port`, or `KANBAN_PORT` — is honoured or fails loudly; when none is
     /// given, `serve` tries 4747 and hunts for a free port if another project holds it.
     pub port: Option<u16>,
@@ -48,6 +54,12 @@ impl Config {
     #[must_use]
     pub fn max_workers(&self) -> usize {
         self.max_workers.filter(|&n| n > 0).unwrap_or(1)
+    }
+
+    /// The effective idle sleep for `/kanban:work`, in seconds: absent or `0` collapses to [`DEFAULT_IDLE_TIME_SECS`].
+    #[must_use]
+    pub fn idle_time(&self) -> u64 {
+        self.idle_time.filter(|&n| n > 0).unwrap_or(DEFAULT_IDLE_TIME_SECS)
     }
 
     /// The explicitly chosen serve port, if any: `--port` flag / `KANBAN_PORT` (already merged by clap) > config.
@@ -106,6 +118,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("config.json"), r#"{ "max_workers": 3 }"#).unwrap();
         assert_eq!(Config::load(dir.path()).unwrap().max_workers(), 3);
+    }
+
+    #[test]
+    fn idle_time_absent_and_zero_collapse_to_five_minutes() {
+        assert_eq!(Config::default().idle_time(), DEFAULT_IDLE_TIME_SECS);
+        assert_eq!(Config { idle_time: Some(0), ..Config::default() }.idle_time(), DEFAULT_IDLE_TIME_SECS);
+        assert_eq!(Config { idle_time: Some(30), ..Config::default() }.idle_time(), 30);
+    }
+
+    #[test]
+    fn idle_time_parses_from_config_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.json"), r#"{ "idle_time": 60 }"#).unwrap();
+        assert_eq!(Config::load(dir.path()).unwrap().idle_time(), 60);
     }
 
     #[test]

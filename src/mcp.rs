@@ -258,8 +258,9 @@ pub struct WorktreeFinishParams {
 #[tool_router]
 impl KanbanServer {
     /// Read the whole board: columns, tickets (with derived blocked/claim facts), epics (with derived columns), the
-    /// current version — pass that version as `expected_version` to mutating tools — and `max_workers`, how many tickets
-    /// a work loop may drive concurrently.
+    /// current version — pass that version as `expected_version` to mutating tools — plus `max_workers`, how many tickets
+    /// a work loop may drive concurrently, and `idle_time`, how many seconds it sleeps between polls when nothing is
+    /// eligible.
     #[tool]
     async fn kanban_board(&self, Parameters(p): Parameters<BoardParams>) -> Result<CallToolResult, ErrorData> {
         let column = match p.column.as_deref() {
@@ -267,7 +268,7 @@ impl KanbanServer {
             Some(c) => Some(c.parse::<crate::store::model::ColumnId>().map_err(|e| ErrorData::invalid_params(e, None))?),
         };
         self.read(move |store| {
-            let max_workers = Config::load(store.dir())?.max_workers();
+            let config = Config::load(store.dir())?;
             let mut view = derive::board_view(&store.read_board()?, &store.read_claims()?);
             if let Some(col) = column {
                 view.tickets.retain(|t| t.ticket.column.id() == col);
@@ -275,7 +276,8 @@ impl KanbanServer {
             }
             let mut value = serde_json::to_value(&view).unwrap_or_default();
             if let Some(obj) = value.as_object_mut() {
-                obj.insert("max_workers".into(), max_workers.into());
+                obj.insert("max_workers".into(), config.max_workers().into());
+                obj.insert("idle_time".into(), config.idle_time().into());
             }
             Ok(value)
         })
