@@ -60,6 +60,9 @@ missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 module_name_repetitions = "allow"
 
+# First-run download size beats compile time here: release binaries ship on GitHub Releases and are fetched at plugin
+# startup, so fat LTO and a single codegen unit pay for themselves on every install.
 [profile.release]
-lto = "thin"
+lto = true
+codegen-units = 1
 strip = true
