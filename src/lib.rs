@@ -18,6 +18,7 @@
 pub mod cli;
 pub mod config;
 pub mod git;
+pub mod land;
 pub mod mcp;
 pub mod ops;
 pub mod pr;

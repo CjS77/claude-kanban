@@ -49,6 +49,8 @@ const BOARD_FILE: &str = "board.json";
 const CLAIMS_FILE: &str = "claims.json";
 /// File name of the store config inside the store directory.
 pub(crate) const CONFIG_FILE: &str = "config.json";
+/// File name of the landing sweep's branch-tip observations, gitignored like the claims sidecar (machine-local facts).
+const LAND_STATE_FILE: &str = "land-state.json";
 /// Store-local gitignore written by `init`, covering the runtime artifacts (never the board itself).
 const STORE_GITIGNORE: &str = "# claude-kanban runtime artifacts — machine-local, never committed. (board.json and this file ARE committed.)\n.lock\n*.tmp\nserve.pid\nclaims.json\nland-state.json\n";
 
@@ -138,6 +140,25 @@ impl Store {
     #[must_use]
     pub fn config_path(&self) -> PathBuf {
         self.dir.join(CONFIG_FILE)
+    }
+
+    /// Path of the landing sweep's observations sidecar.
+    #[must_use]
+    pub fn land_state_path(&self) -> PathBuf {
+        self.dir.join(LAND_STATE_FILE)
+    }
+
+    /// The landing sweep's last-observed branch tips (`branch → sha`). Missing file = nothing observed. Lock-free, like
+    /// every read.
+    pub fn read_land_state(&self) -> Result<std::collections::HashMap<String, String>, StoreError> {
+        read_json_or_default(&self.land_state_path())
+    }
+
+    /// Persist the observations under the store lock. Machine-local, no version counter — last write wins, and losing an
+    /// observation only ever delays a landing until the human confirms by hand.
+    pub fn write_land_state(&self, state: &std::collections::HashMap<String, String>) -> Result<(), StoreError> {
+        let _lock = lock::acquire(&self.dir)?;
+        io::write_json_atomic(&self.land_state_path(), state)
     }
 
     /// Create the store directory, seed an empty board, a default `config.json`, and a store-local `.gitignore` covering

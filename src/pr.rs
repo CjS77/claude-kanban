@@ -105,7 +105,7 @@ fn pick_remote(repo: &Path) -> anyhow::Result<String> {
         .context("this repository has no git remote to push to")
 }
 
-fn has_remote(repo: &Path) -> bool {
+pub(crate) fn has_remote(repo: &Path) -> bool {
     git(repo, &["remote"]).is_ok_and(|out| !out.is_empty())
 }
 
