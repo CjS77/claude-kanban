@@ -31,9 +31,11 @@ impl McpSession {
             &json!({ "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "smoke", "version": "0" } }),
         );
         assert!(init["result"]["capabilities"]["tools"].is_object(), "server must advertise tools: {init}");
+        let instructions = init["result"]["instructions"].as_str().unwrap_or_default();
+        assert!(instructions.contains("kanban_next"), "instructions must carry the workflow contract");
         assert!(
-            init["result"]["instructions"].as_str().unwrap_or_default().contains("kanban_next"),
-            "instructions must carry the workflow contract"
+            instructions.contains("kanban_move to review") && instructions.contains("Done is not yours to declare"),
+            "instructions must carry the v2 close-out contract: {instructions}"
         );
         session.notify("notifications/initialized", &json!({}));
         session
@@ -138,4 +140,58 @@ fn the_mcp_face_reads_claims_and_recovers_from_conflicts() {
         }),
     );
     assert_eq!(refined["structuredContent"]["created"], json!(["K-3", "K-4"]), "{refined}");
+}
+
+#[test]
+fn kanban_next_lands_merged_review_work_and_the_move_records_companion_branches() {
+    use claude_kanban::{
+        git::git,
+        ops::{self, Op},
+        store::model::{Column, ColumnId, Status, TicketId},
+    };
+
+    // A real repo: K-1 sits in review on a branch main already contains; K-2 depends on K-1.
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    git(repo, &["init", "-q", "-b", "main"]).unwrap();
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "seed"]).unwrap();
+    git(repo, &["branch", "k-1/work"]).unwrap();
+    let store_dir = repo.join(".kanban");
+    let store = claude_kanban::store::Store::at(&store_dir);
+    store.init().unwrap();
+
+    let seed = |title: &str, deps: Vec<TicketId>| {
+        ops::apply(
+            &store,
+            None,
+            Op::CreateTicket { title: title.into(), body: String::new(), epic: None, labels: vec![], depends_on: deps, status: Status::Ready },
+        )
+        .unwrap();
+    };
+    seed("predecessor", vec![]);
+    let k1 = TicketId("K-1".into());
+    ops::apply(&store, None, Op::Claim { id: k1.clone(), agent: "claude".into() }).unwrap();
+    ops::apply(&store, None, Op::StampWorktree { id: k1.clone(), branch: "k-1/work".into(), path: "/tmp/unused".into() }).unwrap();
+    ops::apply(&store, None, Op::MoveTicket { id: k1, to: ColumnId::Review, position: None, owner: None, branch: None }).unwrap();
+    seed("dependent", vec![TicketId("K-1".into())]); // board version is now 5
+
+    let mut mcp = McpSession::start(&store_dir);
+
+    // kanban_next sweeps first: K-1 lands (its branch tip is an ancestor of main), which unblocks K-2 — and the
+    // returned version reflects the landing, so the follow-up claim uses it directly.
+    let next = mcp.call_tool(2, "kanban_next", &json!({}));
+    assert_eq!(next["structuredContent"]["ticket"]["id"], "K-2", "{next}");
+    assert_eq!(next["structuredContent"]["version"], 6, "the sweep's landing bumped the version");
+    let board = store.read_board().unwrap();
+    assert!(matches!(board.ticket(&TicketId("K-1".into())).unwrap().column, Column::Done { discarded: false, .. }));
+
+    let claimed = mcp.call_tool(3, "kanban_claim", &json!({ "ticket": "K-2", "expected_version": 6 }));
+    assert_eq!(claimed["structuredContent"]["owner"], "claude");
+
+    // Closing out a companion: the move to review accepts a branch and records it; the claim drops on entry.
+    let moved = mcp.call_tool(4, "kanban_move", &json!({ "ticket": "K-2", "to": "review", "branch": "k-1/work", "expected_version": 7 }));
+    assert_eq!(moved["structuredContent"]["column"], "review", "{moved}");
+    let board = store.read_board().unwrap();
+    assert!(matches!(&board.ticket(&TicketId("K-2".into())).unwrap().column, Column::Review { branch: Some(b) } if b == "k-1/work"));
+    assert!(store.read_claims().unwrap().is_empty(), "entering review drops the claim");
 }

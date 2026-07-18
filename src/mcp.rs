@@ -31,13 +31,17 @@ const DEFAULT_AGENT: &str = "claude";
 /// The workflow contract, shipped to the client as server instructions.
 const INSTRUCTIONS: &str = "A local Kanban board shared with a human (who sees it live in a browser). \
 The lifecycle of a ready ticket: kanban_claim → kanban_worktree_start → work in the worktree, committing as you go → \
-kanban_note progress → kanban_worktree_finish → kanban_move to done. \
+kanban_note progress → kanban_worktree_finish → kanban_move to review. \
+Done is not yours to declare: the board lands review tickets in done automatically once their branch or PR is merged \
+into the local main branch — done means landed, and dependencies unblock only then (a discarded done ticket never \
+unblocks anything). A review ticket can be claimed again for rework (PR feedback); its branch is kept and \
+kanban_worktree_start re-attaches. \
 Stubs are specs to write, not code to build: kanban_claim (the card sits pink in doing) → research → kanban_refine, \
 which lands it back in todo at status=review for the human — no worktree. \
 Only claim tickets kanban_next surfaces — ready (implement) or stub (refine), in todo, unblocked; never claim \
 spontaneously outside an explicit work loop. Never touch draft tickets. Tickets you create default to status=review so \
-the human vets them. Mutating tools need expected_version from your latest kanban_board read; on a version conflict, \
-re-read and retry.";
+the human vets them. Mutating tools need expected_version from your latest kanban_board read (kanban_next also returns \
+one — use it, its landing sweep may have advanced the board); on a version conflict, re-read and retry.";
 
 /// The MCP server: a thin adapter from tools onto the shared ops layer and read model.
 #[derive(Debug, Clone)]
@@ -63,7 +67,7 @@ pub fn run(store: Store) -> anyhow::Result<()> {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 pub struct BoardParams {
-    /// Restrict to one column: "todo", "doing", or "done". Omit for the whole board.
+    /// Restrict to one column: "todo", "doing", "review", or "done". Omit for the whole board.
     #[serde(default)]
     pub column: Option<String>,
 }
@@ -94,11 +98,16 @@ pub struct ReleaseParams {
 pub struct MoveParams {
     /// The ticket id, e.g. "K-7".
     pub ticket: String,
-    /// Destination column: "todo", "doing", or "done".
+    /// Destination column: "todo", "doing", "review", or "done".
     pub to: String,
     /// Position within the destination column, 0 = top. Omit for the bottom. Position IS priority.
     #[serde(default)]
     pub position: Option<usize>,
+    /// Record this git branch on the destination state, overriding whatever the ticket carried. Use when closing out a
+    /// companion subtask worked on its parent ticket's branch — without it the ticket reaches review branchless and the
+    /// auto-lander can never resolve it.
+    #[serde(default)]
+    pub branch: Option<String>,
     /// The board version from your latest `kanban_board` read.
     pub expected_version: u64,
 }
@@ -286,10 +295,17 @@ impl KanbanServer {
 
     /// The next thing to work on: the highest ticket in todo that is unblocked, unclaimed, non-external, and either
     /// ready (action "implement") or stub (action "refine" — write its spec, don't build it). Returns the full ticket
-    /// plus the action, or explains that nothing is eligible.
+    /// plus the action, or explains that nothing is eligible. First auto-lands any review tickets whose branches have
+    /// provably reached the local main branch (offline git, no network), so use the `version` this tool returns for
+    /// your next mutation — the sweep may have advanced it.
     #[tool]
     async fn kanban_next(&self) -> Result<CallToolResult, ErrorData> {
         self.read(|store| {
+            // Land what has already reached local main before computing eligibility — dependents unblock even in an
+            // MCP-only session with no serve process. A failing sweep only delays landings; never fail the read.
+            if let Err(e) = crate::land::sweep(store) {
+                tracing::warn!(error = %e, "landing sweep before kanban_next failed — answering from the board as-is");
+            }
             let board = store.read_board()?;
             let claims = store.read_claims()?;
             Ok(match derive::next_ticket(&board, &claims) {
@@ -307,6 +323,8 @@ impl KanbanServer {
     /// Claim a ticket: moves it to doing owned by you and records the live claim. Requires unblocked + unclaimed, and
     /// status ready (to implement) or stub (to refine — the card shows pink while you write the spec). A pure board
     /// mutation — create the worktree with `kanban_worktree_start` afterwards (implementation only; refining needs none).
+    /// Review tickets are claimable too: that is the rework path (PR feedback) — the branch is kept and
+    /// `kanban_worktree_start` re-attaches to it.
     #[tool]
     async fn kanban_claim(&self, Parameters(p): Parameters<ClaimParams>) -> Result<CallToolResult, ErrorData> {
         let op = Op::Claim { id: TicketId(p.ticket), agent: p.agent.unwrap_or_else(|| DEFAULT_AGENT.into()) };
@@ -319,12 +337,14 @@ impl KanbanServer {
         self.apply(Some(p.expected_version), Op::Release { id: TicketId(p.ticket) }).await
     }
 
-    /// Move a ticket to a column at a position (0 = top; position is priority). Moving to done stamps `completed_at`,
-    /// keeps the branch, and drops the live claim — that's the close-out step.
+    /// Move a ticket to a column at a position (0 = top; position is priority). Moving to review is the close-out for
+    /// finished work: it keeps the branch (pass `branch` for a companion subtask worked on its parent's branch) and
+    /// drops the live claim. Done means *landed in local main* and normally happens automatically — the board lands
+    /// review tickets itself once their branch or PR merges.
     #[tool]
     async fn kanban_move(&self, Parameters(p): Parameters<MoveParams>) -> Result<CallToolResult, ErrorData> {
         let to = p.to.parse().map_err(|e: String| ErrorData::invalid_params(e, None))?;
-        let op = Op::MoveTicket { id: TicketId(p.ticket), to, position: p.position, owner: None, branch: None };
+        let op = Op::MoveTicket { id: TicketId(p.ticket), to, position: p.position, owner: None, branch: p.branch };
         self.apply(Some(p.expected_version), op).await
     }
 
@@ -388,8 +408,8 @@ impl KanbanServer {
     }
 
     /// Remove the ticket's worktree once the work is committed (refuses if dirty), keeping the branch. Close out by
-    /// moving the ticket to done with `kanban_move` afterwards. Merging or pushing the branch is the human's call — never
-    /// do it unasked.
+    /// moving the ticket to **review** with `kanban_move` afterwards — the board lands it in done once the branch or its
+    /// PR merges into local main. Merging or pushing the branch is the human's call — never do it unasked.
     #[tool]
     async fn kanban_worktree_finish(&self, Parameters(p): Parameters<WorktreeFinishParams>) -> Result<CallToolResult, ErrorData> {
         let store = self.store.clone();
