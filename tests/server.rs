@@ -286,8 +286,9 @@ async fn the_create_pr_button_tracks_eligibility_live() {
 }
 
 #[tokio::test]
-async fn merged_done_tickets_hide_by_default_and_return_with_the_toggle() {
-    // The store's parent is a real repository so merged detection has something to answer.
+async fn done_tickets_all_show_whatever_their_branch_did() {
+    // The store's parent is a real repository, so the git state the withdrawn merged surface used to read is really
+    // there — and must now change nothing about the render.
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     let commit = |msg: &str| {
@@ -307,24 +308,19 @@ async fn merged_done_tickets_hide_by_default_and_return_with_the_toggle() {
     git(repo, &["checkout", "-q", "-b", "k-2/alive"]).unwrap();
     commit("work");
     git(repo, &["checkout", "-q", "main"]).unwrap();
-    seed_ticket(&store, "Still in review");
+    seed_ticket(&store, "Branch still alive");
     to_done_with_branch(&store, "K-2", "k-2/alive");
 
-    // Default view: the merged card is gone, the Done header hints at it, the live-branch card stays badge-free.
+    // Both are done, so both show: done is the record of what shipped, with no badge and no hidden-card hint.
     let html = body_text(router.clone().oneshot(get("/ui/board")).await.unwrap()).await;
-    assert!(!html.contains("Merged and deleted"), "{html}");
-    assert!(html.contains("+1 merged"), "{html}");
-    assert!(html.contains("Still in review"), "{html}");
-    assert!(!html.contains(">merged</span>"), "no badge on an unmerged card: {html}");
+    assert!(html.contains("Merged and deleted") && html.contains("Branch still alive"), "{html}");
+    assert!(!html.contains("merged</span>") && !html.contains("#a855f7"), "no merged badge survives: {html}");
+    assert!(!html.contains("+1 merged"), "no hidden-card hint: {html}");
+    assert!(html.contains(r#"data-draggable="true""#), "an unfiltered board still drags: {html}");
 
-    // Toggled on: the card returns wearing the purple badge, and the hint disappears.
-    let html = body_text(router.clone().oneshot(get("/ui/board?merged=1")).await.unwrap()).await;
-    assert!(html.contains("Merged and deleted"), "{html}");
-    assert!(html.contains("#a855f7") && html.contains(">merged</span>"), "{html}");
-    assert!(!html.contains("+1 merged"), "{html}");
-
-    // The merged toggle alone must not disable dragging — it is not a card filter in the draggable sense.
-    assert!(html.contains(r#"data-draggable="true""#), "{html}");
+    // A bookmarked ?merged=1 is inert, not an error: serde ignores the unknown field.
+    let stale = body_text(router.oneshot(get("/ui/board?merged=1")).await.unwrap()).await;
+    assert_eq!(stale, html, "the stale parameter changes nothing");
 }
 
 #[tokio::test]
@@ -398,7 +394,7 @@ async fn discard_closes_the_ticket_and_keeps_dependents_blocked_on_the_board() {
 
     let html = body_text(router.clone().oneshot(get("/ui/board")).await.unwrap()).await;
     assert!(html.contains(">discarded</span>") && html.contains(">blocked</span>"), "{html}");
-    assert!(!html.contains(">merged</span>"), "a discarded ticket never reads as merged: {html}");
+    assert!(!html.contains(">merged</span>"), "no card wears a merged badge — the surface is gone: {html}");
 
     // Discarding anything not in review refuses with a toast.
     let res = router.oneshot(post("/ui/ticket/K-2/discard", 6, "")).await.unwrap();
@@ -419,9 +415,9 @@ async fn dragging_a_card_to_review_closes_it_out() {
 }
 
 #[tokio::test]
-async fn an_external_done_ticket_never_wears_the_merged_badge() {
-    // An external ticket's branch is whatever the delegate created on the far side — never a local branch, so its
-    // absence from the local unmerged set proves nothing. The badge must stay off however the git query answers.
+async fn done_cards_carry_no_merged_badge() {
+    // An external ticket's branch is whatever the delegate created on the far side and never existed locally — the
+    // shape that most tempted the withdrawn badge into guessing. Done cards now say nothing about merge state at all.
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     git(repo, &["init", "-q", "-b", "main"]).unwrap();
@@ -449,22 +445,8 @@ async fn an_external_done_ticket_never_wears_the_merged_badge() {
         })
         .unwrap();
 
-    let html = body_text(router.oneshot(get("/ui/board?merged=1")).await.unwrap()).await;
+    let html = body_text(router.oneshot(get("/ui/board")).await.unwrap()).await;
     assert!(html.contains("Delegated elsewhere"), "{html}");
-    assert!(!html.contains(">merged</span>") && !html.contains("+1 merged"), "{html}");
-}
-
-#[tokio::test]
-async fn a_done_ticket_outside_a_git_repo_renders_without_a_merged_badge() {
-    // The plain temp store is not a git repository — detection degrades to flagging nothing, never erroring.
-    let (_dir, router, store) = test_app();
-    seed_ticket(&store, "Done, repo-less");
-    to_done_with_branch(&store, "K-1", "k-1/work");
-
-    let res = router.clone().oneshot(get("/ui/board")).await.unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
-    let html = body_text(res).await;
-    assert!(html.contains("Done, repo-less"), "{html}");
     assert!(!html.contains(">merged</span>") && !html.contains("+1 merged"), "{html}");
 }
 
