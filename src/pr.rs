@@ -149,7 +149,8 @@ mod tests {
             depends_on: vec![],
             notes,
             external: None,
-            column: Column::Done { branch: Some("k-7/rate-limit-login".into()), completed_at: Utc::now() },
+            pr: None,
+            column: Column::Done { branch: Some("k-7/rate-limit-login".into()), completed_at: Utc::now(), discarded: false },
         }
     }
 

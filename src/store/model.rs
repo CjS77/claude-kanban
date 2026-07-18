@@ -16,9 +16,28 @@ use std::fmt;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+/// The board schema this binary reads and writes. Schema 1 (implicit — the field was absent) had three columns; schema 2
+/// added `review` between `doing` and `done`, per-ticket `pr` bindings, and the `discarded` flag on done.
+pub const CURRENT_SCHEMA: u32 = 2;
+
+/// What an absent `schema` field means: a board written before the field existed.
+fn schema_v1() -> u32 {
+    1
+}
+
+// serde's skip_serializing_if demands fn(&T) — the reference is the contract, not a choice.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 /// The whole of `.kanban/board.json`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Board {
+    /// Board format version, distinct from `version` below: bumped only when the *shape* changes. Absent means 1.
+    /// A schema newer than [`CURRENT_SCHEMA`] refuses to load — see [`migrate`].
+    #[serde(default = "schema_v1")]
+    pub schema: u32,
     /// Optimistic-concurrency counter: bumped on every write; a write whose expected version no longer matches is rejected.
     pub version: u64,
     /// Column metadata only (title etc.) — never membership lists, which could drift out of sync with the tickets.
@@ -28,32 +47,34 @@ pub struct Board {
     pub tickets: Vec<Ticket>,
 }
 
-/// Metadata for one of the three fixed columns. Membership is never stored here.
+/// Metadata for one of the four fixed columns. Membership is never stored here.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ColumnMeta {
     pub id: ColumnId,
     pub title: String,
 }
 
-/// The three workflow states, in board order.
+/// The four workflow states, in board order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ColumnId {
     Todo,
     Doing,
+    Review,
     Done,
 }
 
 impl ColumnId {
     /// All columns in board order — the canonical iteration order for rendering and validation.
-    pub const ALL: [ColumnId; 3] = [ColumnId::Todo, ColumnId::Doing, ColumnId::Done];
+    pub const ALL: [ColumnId; 4] = [ColumnId::Todo, ColumnId::Doing, ColumnId::Review, ColumnId::Done];
 
-    /// The wire name (`todo` / `doing` / `done`).
-    #[must_use] 
+    /// The wire name (`todo` / `doing` / `review` / `done`).
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             ColumnId::Todo => "todo",
             ColumnId::Doing => "doing",
+            ColumnId::Review => "review",
             ColumnId::Done => "done",
         }
     }
@@ -72,8 +93,9 @@ impl std::str::FromStr for ColumnId {
         match s {
             "todo" => Ok(ColumnId::Todo),
             "doing" => Ok(ColumnId::Doing),
+            "review" => Ok(ColumnId::Review),
             "done" => Ok(ColumnId::Done),
-            other => Err(format!("'{other}' is not a column (todo/doing/done)")),
+            other => Err(format!("'{other}' is not a column (todo/doing/review/done)")),
         }
     }
 }
@@ -173,12 +195,18 @@ pub struct Ticket {
     /// given worktrees or branches by this binary; the binding is just an address for other tools to act on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external: Option<External>,
+    /// The GitHub PR tracking this ticket's branch, once one is known: recorded by the Create PR button, or discovered
+    /// by the serve poller by branch (which is how skill- and daemon-created PRs get bound with no extra step). Survives
+    /// column moves — rework keeps it, done keeps it as provenance. `state` and `merged_commit` are the poll's durable
+    /// answers, so "PR merged — pull main" derives offline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr: Option<PrRef>,
     /// Workflow state and that state's data, as one tagged object.
     pub column: Column,
 }
 
-/// A ticket's workflow state. Internally tagged on `"id"` so each state carries exactly its own fields:
-/// `{"id":"todo"}`, `{"id":"doing","owner":…,"branch":…}`, `{"id":"done","branch":…,"completed_at":…}`.
+/// A ticket's workflow state. Internally tagged on `"id"` so each state carries exactly its own fields: `{"id":"todo"}`,
+/// `{"id":"doing","owner":…,"branch":…}`, `{"id":"review","branch":…}`, `{"id":"done","branch":…,"completed_at":…}`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "id", rename_all = "snake_case")]
 pub enum Column {
@@ -192,34 +220,81 @@ pub enum Column {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         branch: Option<String>,
     },
-    /// Finished.
+    /// Code-complete but not landed: the worktree is finished (or the external work delivered), and the branch or PR is
+    /// waiting to reach the local main branch. Nobody owns a review ticket — entering review drops the claim; rework is
+    /// a fresh claim.
+    Review {
+        /// The branch carrying the finished work, carried over from `doing` (or supplied on the move for a companion
+        /// subtask that shared its parent's branch).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        branch: Option<String>,
+    },
+    /// Landed in the local main branch — or explicitly discarded.
     Done {
-        /// The branch the work landed on, carried over from `doing`. Data, not a format: an external delegate's branch name
-        /// is recorded verbatim.
+        /// The branch the work landed on, carried over from `review`/`doing`. Data, not a format: an external delegate's
+        /// branch name is recorded verbatim.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         branch: Option<String>,
         completed_at: DateTime<Utc>,
+        /// True when the work was retired without landing. A discarded ticket is closed but does NOT satisfy
+        /// dependencies — tickets depending on it stay blocked until a human intervenes.
+        #[serde(default, skip_serializing_if = "is_false")]
+        discarded: bool,
     },
 }
 
 impl Column {
     /// The workflow state this column value sits in, without its data.
-    #[must_use] 
+    #[must_use]
     pub fn id(&self) -> ColumnId {
         match self {
             Column::Todo => ColumnId::Todo,
             Column::Doing { .. } => ColumnId::Doing,
+            Column::Review { .. } => ColumnId::Review,
             Column::Done { .. } => ColumnId::Done,
         }
     }
 
     /// The branch recorded on this column state, if any.
-    #[must_use] 
+    #[must_use]
     pub fn branch(&self) -> Option<&str> {
         match self {
             Column::Todo => None,
-            Column::Doing { branch, .. } | Column::Done { branch, .. } => branch.as_deref(),
+            Column::Doing { branch, .. } | Column::Review { branch, .. } | Column::Done { branch, .. } => branch.as_deref(),
         }
+    }
+}
+
+/// A ticket's bound GitHub pull request. `number`/`url` identify it; `state` and `merged_commit` are the last polled
+/// answers, recorded on the board so every consumer (and every restart) sees them without asking the network again.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PrRef {
+    pub number: u64,
+    pub url: String,
+    #[serde(default, skip_serializing_if = "PrState::is_open")]
+    pub state: PrState,
+    /// The commit the PR merged as (GitHub's `mergeCommit.oid`) — the thing that must become an ancestor of the local
+    /// main branch before the ticket counts as landed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merged_commit: Option<String>,
+}
+
+/// The lifecycle of a bound PR as GitHub reports it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrState {
+    #[default]
+    Open,
+    Merged,
+    /// Closed without merging. The ticket stays in review, flagged — retiring or reworking it is the human's call.
+    Closed,
+}
+
+impl PrState {
+    /// Whether this is the default state (used to keep `open` off the wire).
+    #[must_use]
+    pub fn is_open(&self) -> bool {
+        matches!(self, PrState::Open)
     }
 }
 
@@ -255,15 +330,38 @@ pub struct Epic {
     pub body: String,
 }
 
+/// Upgrade an older board in memory. Returns whether anything changed (the caller's next write persists it); a schema
+/// *newer* than this binary understands comes back as `Err` with the found version — misreading it would be worse than
+/// stopping, so the caller must refuse loudly.
+pub fn migrate(board: &mut Board) -> Result<bool, u32> {
+    if board.schema > CURRENT_SCHEMA {
+        return Err(board.schema);
+    }
+    if board.schema == CURRENT_SCHEMA {
+        return Ok(false);
+    }
+    // v1 → v2: the review column arrives between doing and done. Ticket columns are deliberately NOT rewritten — a v1
+    // done ticket stays done even if its branch never merged; re-blocking previously satisfied dependencies on load
+    // would be a surprise. Drag a card back to review to opt old work into v2 semantics.
+    if !board.columns.iter().any(|c| c.id == ColumnId::Review) {
+        let at = board.columns.iter().position(|c| c.id == ColumnId::Done).unwrap_or(board.columns.len());
+        board.columns.insert(at, ColumnMeta { id: ColumnId::Review, title: "Review".into() });
+    }
+    board.schema = CURRENT_SCHEMA;
+    Ok(true)
+}
+
 impl Board {
-    /// An empty board with the three classic columns, as `init` seeds it.
-    #[must_use] 
+    /// An empty board with the four columns, as `init` seeds it.
+    #[must_use]
     pub fn empty() -> Board {
         Board {
+            schema: CURRENT_SCHEMA,
             version: 0,
             columns: vec![
                 ColumnMeta { id: ColumnId::Todo, title: "To do".into() },
                 ColumnMeta { id: ColumnId::Doing, title: "Doing".into() },
+                ColumnMeta { id: ColumnId::Review, title: "Review".into() },
                 ColumnMeta { id: ColumnId::Done, title: "Done".into() },
             ],
             epics: Vec::new(),
@@ -320,10 +418,12 @@ mod tests {
     /// The literal example board from design.md. This test pins the wire format: if the model drifts from design.md, one of
     /// the two is wrong and the build should say so.
     const DESIGN_MD_BOARD: &str = r##"{
+  "schema": 2,
   "version": 12,
   "columns": [
     { "id": "todo", "title": "To do" },
     { "id": "doing", "title": "Doing" },
+    { "id": "review", "title": "Review" },
     { "id": "done", "title": "Done" }
   ],
   "epics": [
@@ -336,6 +436,14 @@ mod tests {
       "epic": "EP-1",
       "status": "ready",
       "column": { "id": "doing", "owner": "claude", "branch": "k-1/session-refresh" }
+    },
+    {
+      "id": "K-4",
+      "title": "Audit log for sign-ins",
+      "epic": "EP-1",
+      "status": "ready",
+      "pr": { "number": 12, "url": "https://github.com/acme/myrepo/pull/12", "state": "merged", "merged_commit": "8f7d3a2c1b" },
+      "column": { "id": "review", "branch": "k-4/audit-log" }
     },
     {
       "id": "K-3",
@@ -356,6 +464,26 @@ mod tests {
   ]
 }"##;
 
+    /// A board as v1 wrote it: no `schema`, three columns, done without `discarded`. Kept verbatim as the migration
+    /// fixture — real boards like this exist in real repos.
+    const V1_BOARD: &str = r#"{
+  "version": 7,
+  "columns": [
+    { "id": "todo", "title": "To do" },
+    { "id": "doing", "title": "Doing" },
+    { "id": "done", "title": "Done" }
+  ],
+  "epics": [],
+  "tickets": [
+    {
+      "id": "K-1",
+      "title": "Old finished work",
+      "status": "ready",
+      "column": { "id": "done", "branch": "k-1/old", "completed_at": "2026-07-14T09:12:00Z" }
+    }
+  ]
+}"#;
+
     #[test]
     fn design_md_example_round_trips() {
         let board: Board = serde_json::from_str(DESIGN_MD_BOARD).expect("design.md example must parse");
@@ -367,8 +495,9 @@ mod tests {
     #[test]
     fn readme_example_parses_into_the_right_shapes() {
         let board: Board = serde_json::from_str(DESIGN_MD_BOARD).unwrap();
+        assert_eq!(board.schema, CURRENT_SCHEMA);
         assert_eq!(board.version, 12);
-        assert_eq!(board.columns.len(), 3);
+        assert_eq!(board.columns.len(), 4);
         let k1 = board.ticket(&TicketId("K-1".into())).unwrap();
         match &k1.column {
             Column::Doing { owner, branch } => {
@@ -377,12 +506,71 @@ mod tests {
             }
             other => panic!("K-1 should be doing, got {other:?}"),
         }
+        let k4 = board.ticket(&TicketId("K-4".into())).unwrap();
+        assert!(matches!(&k4.column, Column::Review { branch } if branch.as_deref() == Some("k-4/audit-log")));
+        let pr = k4.pr.as_ref().unwrap();
+        assert_eq!((pr.number, pr.state), (12, PrState::Merged));
+        assert_eq!(pr.merged_commit.as_deref(), Some("8f7d3a2c1b"));
         let k3 = board.ticket(&TicketId("K-3".into())).unwrap();
         assert_eq!(k3.external.as_ref().unwrap().number, 42);
-        assert!(matches!(k3.column, Column::Done { .. }));
+        assert!(matches!(k3.column, Column::Done { discarded: false, .. }));
         let k2 = board.ticket(&TicketId("K-2".into())).unwrap();
         assert_eq!(k2.depends_on, vec![TicketId("K-1".into())]);
         assert!(matches!(k2.column, Column::Todo));
+    }
+
+    #[test]
+    fn a_v1_board_migrates_in_memory() {
+        let mut board: Board = serde_json::from_str(V1_BOARD).expect("a schema-less v1 board still parses");
+        assert_eq!(board.schema, 1, "absent schema means 1");
+        assert!(migrate(&mut board).unwrap(), "the upgrade reports a change to persist");
+        assert_eq!(board.schema, CURRENT_SCHEMA);
+        let ids: Vec<ColumnId> = board.columns.iter().map(|c| c.id).collect();
+        assert_eq!(ids, ColumnId::ALL, "review lands between doing and done");
+        assert!(matches!(board.tickets[0].column, Column::Done { discarded: false, .. }), "old done stays done, not discarded");
+        assert!(!migrate(&mut board).unwrap(), "migrating twice is a no-op");
+    }
+
+    #[test]
+    fn a_newer_schema_is_refused_with_the_found_version() {
+        let mut board: Board = serde_json::from_str(DESIGN_MD_BOARD).unwrap();
+        board.schema = 3;
+        assert_eq!(migrate(&mut board), Err(3), "a future board must be refused, never misread");
+    }
+
+    #[test]
+    fn review_parses_bare_and_round_trips() {
+        // Hand-written `{"id":"review"}` must be enough (branch optional), and both shapes must survive the
+        // internally-tagged Content buffering unchanged.
+        let bare: Ticket =
+            serde_json::from_str(r#"{ "id": "K-1", "title": "x", "status": "ready", "column": { "id": "review" } }"#).unwrap();
+        assert!(matches!(&bare.column, Column::Review { branch: None }));
+
+        let col = Column::Review { branch: Some("k-1/x".into()) };
+        let v = serde_json::to_value(&col).unwrap();
+        assert_eq!(v, serde_json::json!({ "id": "review", "branch": "k-1/x" }));
+        assert_eq!(serde_json::from_value::<Column>(v).unwrap(), col);
+    }
+
+    #[test]
+    fn done_discarded_round_trips_and_defaults_false() {
+        let kept = Column::Done { branch: None, completed_at: "2026-07-14T09:12:00Z".parse().unwrap(), discarded: false };
+        let v = serde_json::to_value(&kept).unwrap();
+        assert!(v.get("discarded").is_none(), "false stays off the wire — v1 done tickets are unchanged bytes");
+        assert_eq!(serde_json::from_value::<Column>(v).unwrap(), kept);
+
+        let dropped = Column::Done { branch: None, completed_at: "2026-07-14T09:12:00Z".parse().unwrap(), discarded: true };
+        let v = serde_json::to_value(&dropped).unwrap();
+        assert_eq!(v["discarded"], true);
+        assert_eq!(serde_json::from_value::<Column>(v).unwrap(), dropped);
+    }
+
+    #[test]
+    fn pr_state_open_stays_off_the_wire() {
+        let pr = PrRef { number: 7, url: "https://example.invalid/pull/7".into(), state: PrState::Open, merged_commit: None };
+        let v = serde_json::to_value(&pr).unwrap();
+        assert!(v.get("state").is_none() && v.get("merged_commit").is_none());
+        assert_eq!(serde_json::from_value::<PrRef>(v).unwrap(), pr);
     }
 
     #[test]
@@ -423,6 +611,7 @@ mod tests {
                 depends_on: vec![],
                 notes: vec![],
                 external: None,
+                pr: None,
                 column: Column::Todo,
             })
             .collect();
@@ -433,7 +622,7 @@ mod tests {
     fn completed_at_serializes_as_rfc3339_z() {
         // Pins the chrono serde format against design.md's "2026-07-14T09:12:00Z" (internally-tagged enums buffer content
         // through serde's Content type — this also guards that path).
-        let col = Column::Done { branch: None, completed_at: "2026-07-14T09:12:00Z".parse().unwrap() };
+        let col = Column::Done { branch: None, completed_at: "2026-07-14T09:12:00Z".parse().unwrap(), discarded: false };
         let v = serde_json::to_value(&col).unwrap();
         assert_eq!(v["completed_at"], "2026-07-14T09:12:00Z");
     }

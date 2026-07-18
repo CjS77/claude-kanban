@@ -339,7 +339,7 @@ async fn an_external_done_ticket_never_wears_the_merged_badge() {
     store
         .mutate(None, |board, _| {
             board.tickets[0].column =
-                claude_kanban::store::model::Column::Done { branch: Some("myrepo-issue0042".into()), completed_at: chrono::Utc::now() };
+                claude_kanban::store::model::Column::Done { branch: Some("myrepo-issue0042".into()), completed_at: chrono::Utc::now(), discarded: false };
             Ok::<_, claude_kanban::store::StoreError>(())
         })
         .unwrap();

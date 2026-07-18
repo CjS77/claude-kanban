@@ -246,7 +246,7 @@ fn create_ticket(
     status: Status,
 ) -> OpOutput {
     let id = board.next_ticket_id();
-    board.tickets.push(Ticket { id: id.clone(), title, epic, status, body, labels, depends_on, notes: vec![], external: None, column: Column::Todo });
+    board.tickets.push(Ticket { id: id.clone(), title, epic, status, body, labels, depends_on, notes: vec![], external: None, pr: None, column: Column::Todo });
     OpOutput::created(vec![id.to_string()], json!({ "id": id }))
 }
 
@@ -332,7 +332,9 @@ fn move_ticket(
 /// The column-data rules for a move. Entering a state fills exactly that state's fields:
 /// - `todo` carries nothing — owner and branch are dropped.
 /// - `doing` needs an owner: the one supplied, or the existing one when the ticket is already `doing`. The branch survives.
-/// - `done` stamps `completed_at` now and carries the branch over.
+/// - `review` carries the branch — code-complete, waiting to land.
+/// - `done` stamps `completed_at` now and carries the branch over. Moves land as kept (`discarded: false`); retiring
+///   work without landing it is the explicit discard operation, never a plain move.
 fn next_column_state(current: &Column, to: ColumnId, owner: Option<String>, id: &TicketId) -> Result<Column, OpError> {
     let branch = current.branch().map(str::to_owned);
     match to {
@@ -347,9 +349,10 @@ fn next_column_state(current: &Column, to: ColumnId, owner: Option<String>, id: 
                 .ok_or_else(|| OpError::Invalid(format!("moving {id} into doing needs an owner — claim it (kanban_claim), or supply one")))?;
             Ok(Column::Doing { owner, branch })
         }
+        ColumnId::Review => Ok(Column::Review { branch }),
         ColumnId::Done => match current {
             Column::Done { .. } => Ok(current.clone()),
-            _ => Ok(Column::Done { branch, completed_at: Utc::now() }),
+            _ => Ok(Column::Done { branch, completed_at: Utc::now(), discarded: false }),
         },
     }
 }
@@ -567,6 +570,7 @@ fn build_refined_ticket(spec: NewTicketSpec, id: TicketId, default_epic: Option<
         depends_on,
         notes: vec![],
         external: None,
+        pr: None,
         column: Column::Todo,
     })
 }

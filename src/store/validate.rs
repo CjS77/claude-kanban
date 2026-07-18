@@ -136,6 +136,7 @@ mod tests {
             depends_on: deps.iter().map(|d| TicketId((*d).into())).collect(),
             notes: vec![],
             external: None,
+            pr: None,
             column: Column::Todo,
         }
     }

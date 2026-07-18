@@ -76,6 +76,8 @@ pub enum StoreError {
     AlreadyExists(PathBuf),
     #[error("board changed underneath this write: version is {actual}, expected {expected}")]
     VersionConflict { expected: u64, actual: u64 },
+    #[error("{} was written by a newer claude-kanban (schema {found}; this binary understands {supported}) — update the plugin", path.display())]
+    SchemaTooNew { path: PathBuf, found: u32, supported: u32 },
     #[error("invalid board in {}:\n  - {problems}", path.display())]
     Invalid { path: PathBuf, problems: String },
     #[error("failed to parse {}: {source}", path.display())]
@@ -154,10 +156,16 @@ impl Store {
         Ok(())
     }
 
-    /// Read and validate the board. Lock-free — see the module docs.
+    /// Read, migrate (in memory — the next mutation persists the upgrade), and validate the board. Lock-free — see the
+    /// module docs. A board written by a *newer* binary refuses to load: misreading it would be worse than stopping.
     pub fn read_board(&self) -> Result<Board, StoreError> {
-        let board: Board =
+        let mut board: Board =
             io::read_json(&self.board_path())?.ok_or_else(|| StoreError::NotInitialized(self.board_path()))?;
+        model::migrate(&mut board).map_err(|found| StoreError::SchemaTooNew {
+            path: self.board_path(),
+            found,
+            supported: model::CURRENT_SCHEMA,
+        })?;
         validate::validate(&board).map_err(|problems| StoreError::Invalid {
             path: self.board_path(),
             problems: problems.join("\n  - "),
@@ -238,6 +246,7 @@ mod tests {
             depends_on: vec![],
             notes: vec![],
             external: None,
+            pr: None,
             column: Column::Todo,
         }
     }
@@ -247,7 +256,7 @@ mod tests {
         let (_dir, store) = scratch_store();
         let board = store.read_board().unwrap();
         assert_eq!(board.version, 0);
-        assert_eq!(board.columns.len(), 3);
+        assert_eq!(board.columns.len(), 4);
         assert!(matches!(store.init(), Err(StoreError::AlreadyExists(_))));
         assert!(store.dir().join(".gitignore").exists());
 
@@ -283,6 +292,46 @@ mod tests {
         let config = crate::config::Config::load(store.dir()).unwrap();
         assert_eq!(config.max_workers(), 4, "a hand-edited config survives init");
         assert_eq!(config.port, Some(5050));
+    }
+
+    #[test]
+    fn a_v1_board_file_loads_migrated_and_disk_changes_only_on_the_first_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::at(dir.path().join(".kanban"));
+        std::fs::create_dir_all(store.dir()).unwrap();
+        let v1 = r#"{
+  "version": 7,
+  "columns": [
+    { "id": "todo", "title": "To do" },
+    { "id": "doing", "title": "Doing" },
+    { "id": "done", "title": "Done" }
+  ],
+  "epics": [],
+  "tickets": []
+}"#;
+        std::fs::write(store.board_path(), v1).unwrap();
+
+        let board = store.read_board().unwrap();
+        assert_eq!(board.schema, crate::store::model::CURRENT_SCHEMA);
+        assert_eq!(board.columns.len(), 4, "review arrives in memory");
+        assert_eq!(std::fs::read_to_string(store.board_path()).unwrap(), v1, "a read never rewrites the file");
+
+        store.mutate(None, |_, _| Ok::<_, StoreError>(())).unwrap();
+        let raw = std::fs::read_to_string(store.board_path()).unwrap();
+        assert!(raw.contains("\"schema\": 2") && raw.contains("\"review\""), "the first write persists the upgrade: {raw}");
+    }
+
+    #[test]
+    fn a_board_from_a_newer_binary_refuses_to_load_with_update_advice() {
+        let (_dir, store) = scratch_store();
+        let mut value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(store.board_path()).unwrap()).unwrap();
+        value["schema"] = serde_json::json!(9);
+        std::fs::write(store.board_path(), value.to_string()).unwrap();
+
+        let err = store.read_board().unwrap_err();
+        assert!(matches!(err, StoreError::SchemaTooNew { found: 9, .. }), "{err}");
+        assert!(err.to_string().contains("update the plugin"), "{err}");
     }
 
     #[test]

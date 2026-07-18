@@ -16,33 +16,37 @@ use super::{
     model::Status,
 };
 
-/// An epic's derived column: `done` iff every one of its tickets is done (and it has at least one), `doing` once any ticket
-/// has reached `doing` or `done`, `todo` otherwise. An epic with no tickets is `todo` — nothing has started.
-#[must_use] 
+/// An epic's derived column: `done` iff every one of its tickets is done (and it has at least one); `review` when every
+/// ticket is at least code-complete (review or done) but not all have landed; `doing` once any ticket has reached
+/// `doing` or beyond; `todo` otherwise. An epic with no tickets is `todo` — nothing has started.
+#[must_use]
 pub fn epic_column(epic: &EpicId, board: &Board) -> ColumnId {
-    let mut any = false;
-    let mut all_done = true;
-    let mut any_started = false;
-    board
-        .tickets
-        .iter()
-        .filter(|t| t.epic.as_ref() == Some(epic))
-        .for_each(|t| {
-            any = true;
-            match t.column {
-                Column::Done { .. } => any_started = true,
-                Column::Doing { .. } => {
-                    any_started = true;
-                    all_done = false;
-                }
-                Column::Todo => all_done = false,
+    let (mut total, mut done, mut settled, mut started) = (0usize, 0usize, 0usize, 0usize);
+    board.tickets.iter().filter(|t| t.epic.as_ref() == Some(epic)).for_each(|t| {
+        total += 1;
+        match t.column {
+            Column::Done { .. } => {
+                done += 1;
+                settled += 1;
+                started += 1;
             }
-        });
-    match (any, all_done, any_started) {
-        (true, true, _) => ColumnId::Done,
-        (true, false, true) => ColumnId::Doing,
+            Column::Review { .. } => {
+                settled += 1;
+                started += 1;
+            }
+            Column::Doing { .. } => started += 1,
+            Column::Todo => {}
+        }
+    });
+    if total > 0 && done == total {
+        ColumnId::Done
+    } else if total > 0 && settled == total {
+        ColumnId::Review
+    } else if started > 0 {
+        ColumnId::Doing
+    } else {
         // No tickets at all, or none started: nothing has begun, the epic sits in todo.
-        (false, ..) | (true, false, false) => ColumnId::Todo,
+        ColumnId::Todo
     }
 }
 
@@ -173,12 +177,13 @@ mod tests {
             depends_on: vec![],
             notes: vec![],
             external: None,
+            pr: None,
             column,
         }
     }
 
     fn done() -> Column {
-        Column::Done { branch: None, completed_at: Utc::now() }
+        Column::Done { branch: None, completed_at: Utc::now(), discarded: false }
     }
 
     fn doing() -> Column {
