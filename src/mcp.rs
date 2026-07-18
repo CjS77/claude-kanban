@@ -22,7 +22,7 @@ use serde::Deserialize;
 use crate::{
     config::Config,
     ops::{self, Applied, NewEpicSpec, NewTicketSpec, Op, OpError, RefineTarget},
-    store::{Store, derive, model::{EpicId, Status, TicketId}},
+    store::{Store, derive, derive::BoardView, model::{Column, ColumnId, EpicId, Status, TicketId}},
 };
 
 /// What Claude is called on the board when a tool doesn't say otherwise.
@@ -41,7 +41,10 @@ which lands it back in todo at status=review for the human — no worktree. \
 Only claim tickets kanban_next surfaces — ready (implement) or stub (refine), in todo, unblocked; never claim \
 spontaneously outside an explicit work loop. Never touch draft tickets. Tickets you create default to status=review so \
 the human vets them. Mutating tools need expected_version from your latest kanban_board read (kanban_next also returns \
-one — use it, its landing sweep may have advanced the board); on a version conflict, re-read and retry.";
+one — use it, its landing sweep may have advanced the board); on a version conflict, re-read and retry. \
+kanban_board omits done tickets by default and returns a `done` summary of their ids instead — their specs and progress \
+logs are the bulk of the board and finished work is not input to your next decision; pass include_done=true, or \
+column=\"done\", when you actually need to read them.";
 
 /// The MCP server: a thin adapter from tools onto the shared ops layer and read model.
 #[derive(Debug, Clone)]
@@ -70,6 +73,10 @@ pub struct BoardParams {
     /// Restrict to one column: "todo", "doing", "review", or "done". Omit for the whole board.
     #[serde(default)]
     pub column: Option<String>,
+    /// Include the full done tickets. Off by default: done work is finished, and its specs and
+    /// progress logs are the bulk of the board. Only ask for them when you actually need the text.
+    #[serde(default)]
+    pub include_done: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -266,24 +273,26 @@ pub struct WorktreeFinishParams {
 
 #[tool_router]
 impl KanbanServer {
-    /// Read the whole board: columns, tickets (with derived blocked/claim facts), epics (with derived columns), the
-    /// current version — pass that version as `expected_version` to mutating tools — plus `max_workers`, how many tickets
-    /// a work loop may drive concurrently, and `idle_time`, how many seconds it sleeps between polls when nothing is
-    /// eligible.
+    /// Read the board: columns, tickets (with derived blocked/claim facts), epics (with derived columns), the current
+    /// version — pass that version as `expected_version` to mutating tools — plus `max_workers`, how many tickets a work
+    /// loop may drive concurrently, and `idle_time`, how many seconds it sleeps between polls when nothing is eligible.
+    ///
+    /// Done tickets are **omitted by default**: finished work is not input to the next decision, and its specs and
+    /// progress logs are the bulk of the board. In their place comes a `done` summary — `count` plus the `landed` and
+    /// `discarded` id lists, kept apart because a discarded ticket never unblocks a dependent. Two ways to the full
+    /// text: `include_done=true` for the whole board, or `column="done"` for that column alone. `version` always means
+    /// the board's version whatever the shape, so it is a valid `expected_version` either way.
     #[tool]
     async fn kanban_board(&self, Parameters(p): Parameters<BoardParams>) -> Result<CallToolResult, ErrorData> {
         let column = match p.column.as_deref() {
             None => None,
-            Some(c) => Some(c.parse::<crate::store::model::ColumnId>().map_err(|e| ErrorData::invalid_params(e, None))?),
+            Some(c) => Some(c.parse::<ColumnId>().map_err(|e| ErrorData::invalid_params(e, None))?),
         };
+        let include_done = p.include_done.unwrap_or(false);
         self.read(move |store| {
             let config = Config::load(store.dir())?;
-            let mut view = derive::board_view(&store.read_board()?, &store.read_claims()?);
-            if let Some(col) = column {
-                view.tickets.retain(|t| t.ticket.column.id() == col);
-                view.epics.retain(|e| e.column == col);
-            }
-            let mut value = serde_json::to_value(&view).unwrap_or_default();
+            let view = derive::board_view(&store.read_board()?, &store.read_claims()?);
+            let mut value = shape(view, column, include_done);
             if let Some(obj) = value.as_object_mut() {
                 obj.insert("max_workers".into(), config.max_workers().into());
                 obj.insert("idle_time".into(), config.idle_time().into());
@@ -480,6 +489,65 @@ impl KanbanServer {
     }
 }
 
+// ---- board shaping ---------------------------------------------------------------------------------------------------------
+
+/// What replaces the omitted done tickets, spelled out so a fresh session knows both ways back to the full text.
+const DONE_OMITTED_NOTE: &str = "done tickets omitted — call kanban_board with include_done=true, or column=\"done\", to read them";
+
+/// Shape a board read for the wire. Pure and synchronous; the shared read model itself is never trimmed, because the
+/// HTML views walk the same [`BoardView`] and the browser board shows done in full.
+///
+/// An explicit `column` wins outright and is honoured verbatim — the caller asked for one column and gets exactly it,
+/// with no `done` summary bolted on, which is what makes `column="done"` the unchanged way to read finished work.
+/// Otherwise done tickets are dropped unless `include_done`, and a summary of their ids takes their place.
+fn shape(view: BoardView, column: Option<ColumnId>, include_done: bool) -> serde_json::Value {
+    match column {
+        Some(col) => to_value(&restrict_to_column(view, col)),
+        None if include_done => to_value(&view),
+        None => omit_done(view),
+    }
+}
+
+fn to_value(view: &BoardView) -> serde_json::Value {
+    serde_json::to_value(view).unwrap_or_default()
+}
+
+/// Keep only what sits in one column. Epics are filtered by their *derived* column, exactly as before.
+fn restrict_to_column(mut view: BoardView, col: ColumnId) -> BoardView {
+    view.tickets.retain(|t| t.ticket.column.id() == col);
+    view.epics.retain(|e| e.column == col);
+    view
+}
+
+/// Drop the done tickets, replacing them with a `done` summary. Epics are left alone: a derived column of `done` is
+/// legitimate and an epic object is small. `version` is untouched — it is the board's version, not the subset's.
+fn omit_done(mut view: BoardView) -> serde_json::Value {
+    let landed = done_ids(&view, false);
+    let discarded = done_ids(&view, true);
+    let summary = serde_json::json!({
+        "count": landed.len() + discarded.len(),
+        "landed": landed,
+        "discarded": discarded,
+        "note": DONE_OMITTED_NOTE,
+    });
+    view.tickets.retain(|t| t.ticket.column.id() != ColumnId::Done);
+    let mut value = to_value(&view);
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("done".into(), summary);
+    }
+    value
+}
+
+/// The ids of done tickets on one side of the discarded line. Landed and discarded are reported separately on purpose:
+/// a discarded ticket is closed but never satisfies a dependency, and one flat list would invite that wrong inference.
+fn done_ids(view: &BoardView, want_discarded: bool) -> Vec<&str> {
+    view.tickets
+        .iter()
+        .filter(|t| matches!(t.ticket.column, Column::Done { discarded, .. } if discarded == want_discarded))
+        .map(|t| t.ticket.id.0.as_str())
+        .collect()
+}
+
 /// Domain failures are *tool-level* errors — Claude should read them and adapt; only infrastructure failures become
 /// protocol errors. A version conflict tells Claude exactly how to recover.
 fn tool_error(e: &OpError) -> CallToolResult {
@@ -527,5 +595,123 @@ impl ServerHandler for KanbanServer {
         info.server_info = Implementation::from_build_env();
         info.instructions = Some(INSTRUCTIONS.into());
         info
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+
+    use super::*;
+    use crate::store::model::{Board, Epic, Ticket};
+
+    fn ticket(id: &str, epic: &str, column: Column) -> Ticket {
+        Ticket {
+            id: TicketId(id.into()),
+            title: id.into(),
+            epic: Some(EpicId(epic.into())),
+            status: Status::Ready,
+            body: String::new(),
+            labels: vec![],
+            depends_on: vec![],
+            notes: vec![],
+            external: None,
+            pr: None,
+            column,
+        }
+    }
+
+    fn done(discarded: bool) -> Column {
+        Column::Done { branch: None, completed_at: Utc::now(), discarded }
+    }
+
+    fn epic(id: &str) -> Epic {
+        Epic { id: EpicId(id.into()), title: id.into(), color: "#fff".into(), status: Status::Ready, body: String::new() }
+    }
+
+    /// Tickets in all four columns, one of the done ones discarded. EP-1 spans the board (derived column `doing`);
+    /// EP-2's tickets are all done, so its derived column is `done` — the case the default shape must not eat.
+    fn view() -> BoardView {
+        let mut board = Board::empty();
+        board.version = 216;
+        board.epics = vec![epic("EP-1"), epic("EP-2")];
+        board.tickets = vec![
+            ticket("K-1", "EP-1", Column::Todo),
+            ticket("K-2", "EP-1", Column::Doing { owner: "claude".into(), branch: None }),
+            ticket("K-3", "EP-1", Column::Review { branch: None }),
+            ticket("K-4", "EP-1", done(false)),
+            ticket("K-5", "EP-2", done(false)),
+            ticket("K-6", "EP-2", done(true)),
+        ];
+        derive::board_view(&board, &[])
+    }
+
+    fn ids(value: &serde_json::Value, key: &str) -> Vec<String> {
+        value[key].as_array().unwrap().iter().map(|t| t["id"].as_str().unwrap().to_string()).collect()
+    }
+
+    #[test]
+    fn the_default_board_read_omits_done_tickets_and_says_so() {
+        let shaped = shape(view(), None, false);
+        assert_eq!(ids(&shaped, "tickets"), ["K-1", "K-2", "K-3"], "the default shape carries todo/doing/review only");
+        assert_eq!(shaped["done"]["count"], 3, "the summary counts every done ticket, discarded included");
+        assert_eq!(shaped["done"]["landed"], serde_json::json!(["K-4", "K-5"]));
+        assert_eq!(shaped["done"]["discarded"], serde_json::json!(["K-6"]));
+        assert!(
+            shaped["done"]["note"].as_str().unwrap().contains("include_done=true"),
+            "the summary must name the way back to the full text: {shaped}"
+        );
+    }
+
+    #[test]
+    fn include_done_returns_the_whole_board_unshaped() {
+        let view = view();
+        let shaped = shape(view.clone(), None, true);
+        assert_eq!(shaped, serde_json::to_value(&view).unwrap(), "include_done is the byte-identical compatibility escape hatch");
+        assert!(shaped.get("done").is_none(), "nothing was omitted, so there is nothing to summarize");
+    }
+
+    #[test]
+    fn an_explicit_column_is_honoured_verbatim_and_adds_no_summary() {
+        let expected = [
+            (ColumnId::Todo, vec!["K-1"]),
+            (ColumnId::Doing, vec!["K-2"]),
+            (ColumnId::Review, vec!["K-3"]),
+            (ColumnId::Done, vec!["K-4", "K-5", "K-6"]),
+        ];
+        expected.into_iter().for_each(|(col, want)| {
+            // include_done is deliberately absent: asking for a column answers that column, done or not.
+            let shaped = shape(view(), Some(col), false);
+            assert_eq!(ids(&shaped, "tickets"), want, "column={col} must return exactly its own tickets");
+            assert!(shaped.get("done").is_none(), "column={col} was asked for verbatim, so no summary is bolted on");
+        });
+    }
+
+    #[test]
+    fn a_discarded_done_ticket_is_listed_apart_from_landed_ones() {
+        let shaped = shape(view(), None, false);
+        let landed = shaped["done"]["landed"].as_array().unwrap();
+        let discarded = shaped["done"]["discarded"].as_array().unwrap();
+        assert!(discarded.contains(&serde_json::json!("K-6")), "a discarded ticket is still done and still reported");
+        assert!(
+            !landed.contains(&serde_json::json!("K-6")),
+            "but never as landed — a discarded dependency does not unblock its dependents"
+        );
+    }
+
+    #[test]
+    fn the_version_is_the_boards_version_whatever_the_shape() {
+        let shapes = [shape(view(), None, false), shape(view(), None, true), shape(view(), Some(ColumnId::Todo), false)];
+        shapes.iter().for_each(|s| {
+            assert_eq!(s["version"], 216, "version means the board's version, not the version of the subset returned: {s}");
+        });
+    }
+
+    #[test]
+    fn epics_survive_the_default_shape() {
+        let shaped = shape(view(), None, false);
+        let epics = ids(&shaped, "epics");
+        assert_eq!(epics, ["EP-1", "EP-2"], "epics are never filtered — a derived column of done is legitimate");
+        assert_eq!(shaped["epics"][1]["column"], "done", "and EP-2 is exactly that case");
     }
 }
