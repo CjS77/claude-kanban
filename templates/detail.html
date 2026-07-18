@@ -9,8 +9,9 @@
 </div>
 
 <div class="flex flex-wrap items-center gap-2 mt-2">
-    <span class="badge {{ ticket.status_badge }}">{{ ticket.status }}</span>
-    <span class="badge badge-outline">{{ ticket.column }}</span>
+    <span class="badge {{ ticket.status_badge }}" title="how well-defined the work is (draft/stub/review/ready)">{{ ticket.status }}</span>
+    <span class="badge badge-outline" title="workflow column">{{ ticket.column }}</span>
+    {% if ticket.discarded %}<span class="badge badge-neutral" title="retired without landing — tickets depending on this stay blocked">discarded</span>{% endif %}
     {% if ticket.blocked %}<span class="badge badge-error">blocked</span>{% endif %}
     {% if let Some(ext) = ticket.external %}<span class="badge badge-neutral" title="worked elsewhere — this board never touches it">↗ {{ ext }}</span>{% endif %}
     {% if let Some(epic) = ticket.epic %}
@@ -36,6 +37,9 @@
 {% endif %}
 {% if let Some(branch) = ticket.branch %}
 <div class="mt-2 text-sm font-mono opacity-70">⎇ {{ branch }}</div>
+{% endif %}
+{% if let Some(pr) = ticket.pr %}
+<div class="mt-2 text-sm"><a class="link" href="{{ pr.url }}" target="_blank" rel="noopener" title="{{ pr.title }}">{{ pr.label }}</a></div>
 {% endif %}
 {% if let Some(done_at) = ticket.completed_at %}
 <div class="mt-2 text-sm opacity-70">completed {{ done_at }}</div>
@@ -96,6 +100,13 @@
                 hx-disabled-elt="this" title="push {{ branch }} and open a GitHub PR — this leaves the machine">
             Create PR <span class="htmx-indicator loading loading-spinner loading-xs"></span></button>
         {% endif %}{% endif %}
+        {% if ticket.can_discard %}
+        {#- Retiring code-complete work that will never land. Deliberately NOT what the auto-lander does — discard is
+            always the human's call, and dependents stay blocked afterwards. -#}
+        <button class="btn btn-sm btn-warning btn-outline"
+                hx-post="/ui/ticket/{{ ticket.id }}/discard" hx-target="#detail" hx-swap="innerHTML"
+                hx-confirm="Discard {{ ticket.id }} — {{ ticket.title }}? It closes as done without landing, and tickets depending on it stay blocked.">Discard</button>
+        {% endif %}
         <button class="btn btn-sm" hx-get="/ui/ticket/{{ ticket.id }}/edit" hx-target="#detail" hx-swap="innerHTML">Edit</button>
         <button class="btn btn-sm btn-error btn-outline"
                 hx-post="/ui/ticket/{{ ticket.id }}/delete" hx-swap="none" data-close-modal

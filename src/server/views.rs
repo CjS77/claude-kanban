@@ -135,14 +135,43 @@ pub struct CardCtx {
     pub blocked: bool,
     /// A stub sitting in `doing` is having its spec written right now — the card renders pink while that lasts.
     pub refining: bool,
-    /// A done ticket whose branch has landed in the main checkout's HEAD (or is gone) — purple badge, hidden by default.
+    /// A done ticket whose branch has landed in the main branch (or is gone) — purple badge, hidden by default.
     pub merged: bool,
+    /// A done ticket retired without landing: closed, but its dependents stay blocked.
+    pub discarded: bool,
+    /// The bound PR, rendered as a linked badge on cards still in flight (done cards drop it — the story is over).
+    pub pr: Option<PrCtx>,
+    /// A review ticket whose recorded branch no longer exists locally and nothing proves it landed — the human's call.
+    pub branch_gone: bool,
     pub labels: Vec<String>,
     pub external: Option<String>,
     pub claim: Option<ClaimCtx>,
     pub branch: Option<String>,
     /// The `doing` owner, for cards that are owned but not live-claimed (e.g. dragged into doing by a human).
     pub owner: Option<String>,
+}
+
+/// A bound PR, pre-rendered for the templates: one linked badge, label and colour chosen by state.
+#[derive(Debug)]
+pub struct PrCtx {
+    pub url: String,
+    pub label: String,
+    pub class: &'static str,
+    pub title: &'static str,
+}
+
+fn pr_ctx(pr: &crate::store::model::PrRef) -> PrCtx {
+    use crate::store::model::PrState;
+    let (label, class, title) = match pr.state {
+        PrState::Open => (format!("PR #{}", pr.number), "badge-ghost", "open on GitHub"),
+        PrState::Merged => (
+            format!("PR #{} merged — pull main", pr.number),
+            "badge-warning",
+            "merged on GitHub; lands in done once the merge reaches your local main branch",
+        ),
+        PrState::Closed => (format!("PR #{} closed", pr.number), "badge-error", "closed without merging — rework the ticket, or discard it"),
+    };
+    PrCtx { url: pr.url.clone(), label, class, title }
 }
 
 #[derive(Debug)]
@@ -176,7 +205,7 @@ const NO_EPIC_COLOR: &str = "#9ca3af";
 // A view-model builder has one caller and no use for custom hashers.
 #[allow(clippy::implicit_hasher)]
 #[must_use]
-pub fn board(view: &BoardView, filters: &Filters, unmerged: Option<&HashSet<String>>) -> BoardTpl {
+pub fn board(view: &BoardView, filters: &Filters, unmerged: Option<&HashSet<String>>, heads: Option<&HashSet<String>>) -> BoardTpl {
     let columns = view
         .columns
         .iter()
@@ -189,7 +218,7 @@ pub fn board(view: &BoardView, filters: &Filters, unmerged: Option<&HashSet<Stri
             ColumnCtx {
                 id: meta.id,
                 title: meta.title.clone(),
-                cards: shown.into_iter().map(|t| card(t, view, unmerged)).collect(),
+                cards: shown.into_iter().map(|t| card(t, view, unmerged, heads)).collect(),
                 epics: view
                     .epics
                     .iter()
@@ -217,28 +246,35 @@ pub fn board(view: &BoardView, filters: &Filters, unmerged: Option<&HashSet<Stri
     }
 }
 
-/// Whether the ticket reads as merged: done, non-external, with a recorded branch that is *absent* from the unmerged
-/// set — either its tip is an ancestor of the anchor or the branch is gone (merged-and-deleted; see
-/// [`crate::git::unmerged_branches`]). External tickets never wear the badge: their `branch` is whatever the delegate
-/// created on the far side and was never a local branch, so its absence proves nothing. Done tickets with no branch are
-/// never merged — there is nothing to check; they stay visible. `unmerged: None` (no git answer) flags nothing.
+/// Whether the ticket reads as merged: done (and not discarded — retired work never landed anywhere), non-external,
+/// with a recorded branch that is *absent* from the unmerged set — either its tip is an ancestor of the anchor or the
+/// branch is gone (merged-and-deleted; see [`crate::git::unmerged_branches`]). External tickets never wear the badge:
+/// their `branch` is whatever the delegate created on the far side and was never a local branch, so its absence proves
+/// nothing. Done tickets with no branch are never merged — there is nothing to check; they stay visible.
+/// `unmerged: None` (no git answer) flags nothing.
 fn is_merged(t: &TicketView, unmerged: Option<&HashSet<String>>) -> bool {
-    t.ticket.column.id() == ColumnId::Done
+    matches!(t.ticket.column, crate::store::model::Column::Done { discarded: false, .. })
         && t.ticket.external.is_none()
         && t.ticket.column.branch().is_some_and(|b| unmerged.is_some_and(|u| !u.contains(b)))
 }
 
-fn card(t: &TicketView, view: &BoardView, unmerged: Option<&HashSet<String>>) -> CardCtx {
+fn card(t: &TicketView, view: &BoardView, unmerged: Option<&HashSet<String>>, heads: Option<&HashSet<String>>) -> CardCtx {
+    let done = t.ticket.column.id() == ColumnId::Done;
     CardCtx {
         id: t.ticket.id.to_string(),
         title: t.ticket.title.clone(),
         color: epic_color(view, t.ticket.epic.as_ref().map(|e| e.0.as_str())),
         status: t.ticket.status,
         status_badge: status_badge(t.ticket.status),
-        done: t.ticket.column.id() == ColumnId::Done,
+        done,
         blocked: t.blocked,
         refining: t.ticket.status == Status::Stub && t.ticket.column.id() == ColumnId::Doing,
         merged: is_merged(t, unmerged),
+        discarded: matches!(t.ticket.column, crate::store::model::Column::Done { discarded: true, .. }),
+        pr: (!done).then(|| t.ticket.pr.as_ref().map(pr_ctx)).flatten(),
+        branch_gone: t.ticket.column.id() == ColumnId::Review
+            && t.ticket.external.is_none()
+            && t.ticket.column.branch().is_some_and(|b| heads.is_some_and(|h| !h.contains(b))),
         labels: t.ticket.labels.clone(),
         external: t.ticket.external.as_ref().map(|e| format!("{} {}#{}", e.provider, e.kind, e.number)),
         claim: t.claim.as_ref().map(claim_ctx),
@@ -283,6 +319,8 @@ pub struct DetailTpl {
     pub ticket: TicketCtx,
 }
 
+// Not a state machine: each bool is an independent display flag with its own badge or button.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug)]
 pub struct TicketCtx {
     pub id: String,
@@ -300,6 +338,11 @@ pub struct TicketCtx {
     /// Whether the pane shows the Create PR button — computed by the handlers via `pr::eligible` (it needs subprocesses,
     /// and views stay pure).
     pub can_pr: bool,
+    /// The bound PR — shown in the pane whatever the column, as provenance once the ticket lands.
+    pub pr: Option<PrCtx>,
+    /// Review tickets can be retired without landing: done with `discarded: true`, dependents stay blocked.
+    pub can_discard: bool,
+    pub discarded: bool,
     pub deps: Vec<DepCtx>,
     pub notes: Vec<NoteCtx>,
     pub statuses: Vec<StatusOptCtx>,
@@ -359,6 +402,9 @@ pub fn detail(board: &Board, claims: &[Claim], id: &crate::store::model::TicketI
             branch: t.column.branch().map(str::to_owned),
             completed_at,
             can_pr,
+            pr: t.pr.as_ref().map(pr_ctx),
+            can_discard: t.column.id() == ColumnId::Review,
+            discarded: matches!(t.column, Column::Done { discarded: true, .. }),
             deps: t
                 .depends_on
                 .iter()

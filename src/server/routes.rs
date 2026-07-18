@@ -165,14 +165,17 @@ pub async fn page(State(app): State<AppState>) -> Result<Html<String>, AppError>
 pub async fn board(State(app): State<AppState>, Query(filters): Query<views::Filters>) -> Result<Html<String>, AppError> {
     blocking(&app, move |store| {
         let view = derive::board_view(&store.read_board()?, &store.read_claims()?);
-        // One subprocess per render, in the main checkout (the store's parent — the same derivation `ui_owner` uses).
+        // Two subprocesses per render, in the main checkout (the store's parent — the same derivation `ui_owner` uses).
         // Merged-ness anchors to the configured/detected main branch, so the badge means "landed in main" even when the
-        // checkout sits elsewhere; no answer falls back to HEAD, and `None` degrades to flagging nothing merged.
-        let unmerged = store.dir().parent().and_then(|repo| {
+        // checkout sits elsewhere; no answer falls back to HEAD, and `None` degrades to flagging nothing merged. The
+        // local branch list feeds the review column's "branch gone" flag the same way: no answer flags nothing.
+        let repo = store.dir().parent();
+        let unmerged = repo.and_then(|repo| {
             let anchor = crate::config::Config::load(store.dir()).ok().and_then(|c| c.main_branch(repo));
             crate::git::unmerged_branches(repo, anchor.as_deref().unwrap_or("HEAD"))
         });
-        Ok(Html(views::board(&view, &filters, unmerged.as_ref()).render()?))
+        let heads = repo.and_then(crate::git::local_heads);
+        Ok(Html(views::board(&view, &filters, unmerged.as_ref(), heads.as_ref()).render()?))
     })
     .await
 }
@@ -363,6 +366,14 @@ pub async fn create_pr(State(app): State<AppState>, Path(id): Path<String>) -> R
         rendered_detail(store, &id)
     })
     .await
+}
+
+/// The Discard button: retire a review ticket without landing it — done with `discarded: true`, dependents stay
+/// blocked. Always a human decision (the confirm dialog says exactly what it costs); the auto-lander never does this.
+pub async fn discard_ticket(State(app): State<AppState>, Path(id): Path<String>, headers: HeaderMap) -> Result<Html<String>, AppError> {
+    let id = TicketId(id);
+    let op = Op::DiscardTicket { id: id.clone(), reason: format!("discarded from the board by {}", app.ui_owner) };
+    mutate_then_detail(&app, &headers, op, id).await
 }
 
 pub async fn delete_ticket(State(app): State<AppState>, Path(id): Path<String>, headers: HeaderMap) -> Result<StatusCode, AppError> {

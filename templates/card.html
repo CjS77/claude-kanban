@@ -9,11 +9,17 @@
         <div class="flex items-start justify-between gap-2">
             <div class="flex items-center gap-1">
                 {% if card.merged %}<span class="badge badge-xs" style="background-color:#a855f7; border-color:#a855f7; color:white"
-                      title="branch merged into HEAD">merged</span>{% endif %}
+                      title="branch merged into main">merged</span>{% endif %}
+                {% if card.discarded %}<span class="badge badge-neutral badge-xs"
+                      title="retired without landing — tickets depending on this stay blocked">discarded</span>{% endif %}
                 <span class="text-xs opacity-60 font-mono">{{ card.id }}</span>
             </div>
             <div class="flex gap-1 flex-wrap justify-end">
                 {% if card.blocked %}<span class="badge badge-error badge-xs" title="waiting on dependencies">blocked</span>{% endif %}
+                {% if let Some(pr) = card.pr %}<a class="badge badge-xs {{ pr.class }}" href="{{ pr.url }}" target="_blank" rel="noopener"
+                      title="{{ pr.title }}" onclick="event.stopPropagation()">{{ pr.label }}</a>{% endif %}
+                {% if card.branch_gone %}<span class="badge badge-warning badge-xs"
+                      title="the recorded branch no longer exists locally and nothing proves it landed — drag to done if it did, or discard it from the detail pane">branch gone</span>{% endif %}
                 {% if let Some(ext) = card.external %}<span class="badge badge-neutral badge-xs" title="worked elsewhere">↗ {{ ext }}</span>{% endif %}
                 <span class="badge badge-xs {{ card.status_badge }}">{{ card.status }}</span>
             </div>

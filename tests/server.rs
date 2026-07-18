@@ -15,7 +15,7 @@ use claude_kanban::{
     server::{App, router},
     store::{
         Store,
-        model::{ColumnId, External, Status, TicketId},
+        model::{ColumnId, External, PrRef, PrState, Status, TicketId},
     },
 };
 use http_body_util::BodyExt;
@@ -325,6 +325,97 @@ async fn merged_done_tickets_hide_by_default_and_return_with_the_toggle() {
 
     // The merged toggle alone must not disable dragging — it is not a card filter in the draggable sense.
     assert!(html.contains(r#"data-draggable="true""#), "{html}");
+}
+
+#[tokio::test]
+async fn the_review_column_renders_with_pr_and_branch_state_badges() {
+    // A real repo so branch-existence answers; the review column sits between Doing and Done and its cards carry the
+    // PR lifecycle badges plus the branch-gone flag.
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    git(repo, &["init", "-q", "-b", "main"]).unwrap();
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "seed"]).unwrap();
+    git(repo, &["checkout", "-q", "-b", "k-1/alive"]).unwrap();
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "work"]).unwrap();
+    git(repo, &["checkout", "-q", "main"]).unwrap();
+    let store = Store::at(repo.join(".kanban"));
+    store.init().unwrap();
+    let router = router_for(&store);
+
+    seed_ticket(&store, "Open PR here");
+    to_review_with_branch(&store, "K-1", "k-1/alive");
+    ops::apply(
+        &store,
+        None,
+        Op::SetPr {
+            id: TicketId("K-1".into()),
+            pr: Some(PrRef { number: 7, url: "https://github.com/x/y/pull/7".into(), state: PrState::Open, merged_commit: None }),
+        },
+    )
+    .unwrap();
+    seed_ticket(&store, "Merged awaiting pull");
+    to_review_with_branch(&store, "K-2", "k-2/pushed"); // never a local ref → also wears "branch gone"
+    ops::apply(
+        &store,
+        None,
+        Op::SetPr {
+            id: TicketId("K-2".into()),
+            pr: Some(PrRef { number: 8, url: "https://github.com/x/y/pull/8".into(), state: PrState::Merged, merged_commit: Some("0".repeat(40)) }),
+        },
+    )
+    .unwrap();
+
+    let html = body_text(router.clone().oneshot(get("/ui/board")).await.unwrap()).await;
+    let (doing_at, review_at, done_at) =
+        (html.find(">Doing<").unwrap(), html.find(">Review<").unwrap(), html.find(">Done<").unwrap());
+    assert!(doing_at < review_at && review_at < done_at, "review sits between doing and done");
+    assert!(html.contains(">PR #7</a>"), "{html}");
+    assert!(html.contains("PR #8 merged — pull main"), "{html}");
+    assert!(html.contains(">branch gone</span>"), "{html}");
+    assert!(html.contains("k-1/alive"), "review cards show their branch: {html}");
+
+    // The detail pane links the PR and offers Discard on review tickets.
+    let html = body_text(router.clone().oneshot(get("/ui/ticket/K-1")).await.unwrap()).await;
+    assert!(html.contains(r#"href="https://github.com/x/y/pull/7""#) && html.contains("/ui/ticket/K-1/discard"), "{html}");
+}
+
+#[tokio::test]
+async fn discard_closes_the_ticket_and_keeps_dependents_blocked_on_the_board() {
+    let (_dir, router, store) = test_app();
+    seed_ticket(&store, "Doomed work");
+    ops::apply(
+        &store,
+        None,
+        Op::CreateTicket { title: "Blocked follow-up".into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![TicketId("K-1".into())], status: Status::Ready },
+    )
+    .unwrap();
+    to_review_with_branch(&store, "K-1", "k-1/doomed");
+
+    let res = router.clone().oneshot(post("/ui/ticket/K-1/discard", 5, "")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let pane = body_text(res).await;
+    assert!(pane.contains(">discarded</span>"), "{pane}");
+
+    let html = body_text(router.clone().oneshot(get("/ui/board")).await.unwrap()).await;
+    assert!(html.contains(">discarded</span>") && html.contains(">blocked</span>"), "{html}");
+    assert!(!html.contains(">merged</span>"), "a discarded ticket never reads as merged: {html}");
+
+    // Discarding anything not in review refuses with a toast.
+    let res = router.oneshot(post("/ui/ticket/K-2/discard", 6, "")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn dragging_a_card_to_review_closes_it_out() {
+    let (_dir, router, store) = test_app();
+    seed_ticket(&store, "Dragged along");
+    ops::apply(&store, None, Op::Claim { id: TicketId("K-1".into()), agent: "claude".into() }).unwrap();
+
+    let res = router.oneshot(post("/ui/ticket/K-1/move", 2, "to=review&position=0")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let board = store.read_board().unwrap();
+    assert!(matches!(board.tickets[0].column, claude_kanban::store::model::Column::Review { .. }));
+    assert!(store.read_claims().unwrap().is_empty(), "entering review drops the claim");
 }
 
 #[tokio::test]
