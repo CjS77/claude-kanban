@@ -451,6 +451,40 @@ async fn the_default_port_hunts_but_an_explicit_port_fails_loudly() {
 }
 
 #[tokio::test]
+async fn the_poller_lands_merged_review_tickets_and_stops_on_shutdown() {
+    // A real repo whose review ticket's branch has already merged into main: the poller's startup sweep lands it, the
+    // file watcher broadcasts the write (serve never signals its own writes in-process), and cancellation ends the task.
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    git(repo, &["init", "-q", "-b", "main"]).unwrap();
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "seed"]).unwrap();
+    git(repo, &["branch", "k-1/work"]).unwrap(); // at main's tip: already an ancestor, i.e. merged
+    let store = Store::at(repo.join(".kanban"));
+    store.init().unwrap();
+    seed_ticket(&store, "waiting to land");
+    to_review_with_branch(&store, "K-1", "k-1/work");
+
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    let refresh = claude_kanban::server::sse::spawn_watcher(store.clone(), shutdown.clone()).unwrap();
+    let mut rx = refresh.subscribe();
+    let poller = claude_kanban::server::spawn_poller(store.clone(), shutdown.clone(), Some(std::time::Duration::from_millis(10)));
+
+    let version = tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv())
+        .await
+        .expect("the landing must reach the SSE channel")
+        .unwrap();
+    assert!(version > 0);
+    let board = store.read_board().unwrap();
+    assert!(
+        matches!(board.tickets[0].column, claude_kanban::store::model::Column::Done { discarded: false, .. }),
+        "the poller's sweep lands the merged ticket"
+    );
+
+    shutdown.cancel();
+    tokio::time::timeout(std::time::Duration::from_secs(5), poller).await.expect("cancellation must end the poller").unwrap();
+}
+
+#[tokio::test]
 async fn the_file_watcher_broadcasts_on_store_writes() {
     let (_dir, _router, store) = test_app();
     let shutdown = tokio_util::sync::CancellationToken::new();

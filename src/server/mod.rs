@@ -67,6 +67,7 @@ async fn run(store: Store, port: Option<u16>, no_open: bool, assets_dir: Option<
 
     let shutdown = CancellationToken::new();
     let refresh = sse::spawn_watcher(store.clone(), shutdown.clone()).context("could not watch the store for changes")?;
+    let _poller = spawn_poller(store.clone(), shutdown.clone(), None);
     let app: AppState = Arc::new(App {
         title: project_title(&store),
         ui_owner: ui_owner(&store),
@@ -100,6 +101,54 @@ async fn run(store: Store, port: Option<u16>, no_open: bool, assets_dir: Option<
         .await;
     let _ = std::fs::remove_file(&pid_file);
     result.map_err(Into::into)
+}
+
+/// The landing loop: one immediate offline sweep at startup (a board served after an offline `git pull` corrects
+/// itself before anyone looks), then per tick a sweep and — the serve face's second sanctioned network egress,
+/// config-gated — the gh PR poll. The config re-reads every tick, so the settings pane's changes to `poll_interval`
+/// (including turning polling off, or back on) apply without a restart; while disabled the loop re-checks each minute.
+///
+/// Every write the passes make goes through `ops::apply`, so the file watcher broadcasts them like any other mutation —
+/// serve still never signals its own writes in-process. Errors are logged and never fatal: the next tick starts fresh.
+/// `interval_override` pins the cadence for tests; production passes `None` and follows the config.
+#[must_use]
+pub fn spawn_poller(store: Store, shutdown: CancellationToken, interval_override: Option<std::time::Duration>) -> tokio::task::JoinHandle<()> {
+    const DISABLED_RECHECK: std::time::Duration = std::time::Duration::from_secs(60);
+    tokio::spawn(async move {
+        run_pass(&store, false).await;
+        loop {
+            let configured = Config::load(store.dir()).ok().and_then(|c| c.poll_interval());
+            let (delay, enabled) = match interval_override.or(configured) {
+                Some(interval) => (interval, true),
+                None => (DISABLED_RECHECK, false),
+            };
+            tokio::select! {
+                () = shutdown.cancelled() => break,
+                () = tokio::time::sleep(delay) => {}
+            }
+            if enabled {
+                run_pass(&store, true).await;
+            }
+        }
+        tracing::debug!("landing poller stopped");
+    })
+}
+
+/// One poller tick: the offline sweep, then (when asked) the gh poll — both blocking, both off the async threads.
+async fn run_pass(store: &Store, with_gh: bool) {
+    let store = store.clone();
+    let outcome = tokio::task::spawn_blocking(move || {
+        let swept = crate::land::sweep(&store)?;
+        let polled = if with_gh { crate::land::poll(&store)? } else { 0 };
+        anyhow::Ok((swept, polled))
+    })
+    .await;
+    match outcome {
+        Ok(Ok((swept, polled))) if swept > 0 || polled > 0 => tracing::info!(swept, polled, "landing pass"),
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => tracing::warn!(error = %e, "landing pass failed — retrying next tick"),
+        Err(e) => tracing::warn!(error = %e, "landing pass panicked"),
+    }
 }
 
 /// Show the board to the user, unless `no_open` says they didn't ask for it. Returns whether the open was attempted —
