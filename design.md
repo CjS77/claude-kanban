@@ -148,10 +148,12 @@ Seven properties of this shape are load-bearing:
 - **`version` is an optimistic-concurrency counter.** Two processes write this file — the browser and Claude. Every mutation reads the
   version, and a write whose version no longer matches is rejected rather than silently clobbering the other side. Writes go to a temp file
   and are renamed into place, so a crash mid-write can't leave a half-written board.
-- **`schema` is the format version** (absent means 1), distinct from the mutation counter. A v1 board upgrades in memory on load — the
-  review column slots in before done, tickets untouched — and persists on the first write; a schema newer than the binary refuses to load
-  with "update the plugin" rather than misreading. (A v1 *binary* reading a v2 board still dies at the parse, which is why v2 shipped as
-  2.0.0.)
+- **`schema` is the format version** (absent means 1), distinct from the mutation counter. A v1 board upgrades on load — the review column
+  slots in before done, tickets untouched — and every face persists that upgrade at startup, keeping the original verbatim as
+  `.kanban/board-v1.json` (committed alongside the board: it is the way back to a pre-2.0 binary). The backup is written first and only
+  ever once — an existing one is never overwritten — so `board.json` is replaced only after the escape hatch is safely on disk. A corrupt,
+  invalid, or newer-than-supported board is left exactly as it was; a schema newer than the binary refuses to load with "update the plugin"
+  rather than misreading. (A v1 *binary* reading a v2 board still dies at the parse, which is why v2 shipped as 2.0.0.)
 
 Two optional fields look outward: `external` binds a ticket to a work item in another system — `{provider, kind, number}`, e.g. the GitHub
 issue a minesweeper daemon is chewing on — and `pr` binds it to the GitHub PR carrying its branch — `{number, url, state, merged_commit}`,
@@ -435,7 +437,8 @@ open PRs, external work in flight), even after the worktree is long gone. Shippe
   [worktrees](#worktrees-one-ticket-one-checkout)
 - [x] `main_branch` config (seeded by `init` from origin/HEAD → main → master), the anchor for landing, the merged badge, and a stricter
   `finish --merge`
-- [x] `schema` field + in-memory v1→v2 board migration; newer-schema boards refuse to load with update advice
+- [x] `schema` field + v1→v2 board migration, persisted at startup by every face with the original kept as `board-v1.json`;
+  newer-schema boards refuse to load with update advice
 - [x] Fully-defined `config.json` seeded by `init` (every dial explicit, `port: null` preserves port-hunting) and a settings pane in the
   UI (gear icon) editing it live — `poll_interval` changes apply without a restart
 - [x] Board UI: four columns, PR lifecycle badges, "branch gone — land or discard?" flag, discarded badge, Discard button

@@ -37,6 +37,16 @@ fn seed_if_absent(path: &Path, contents: &str) -> Result<(), StoreError> {
     fs::write(path, contents).map_err(|source| StoreError::Io { path: path.to_path_buf(), source })
 }
 
+/// A file's raw bytes, or `None` when it isn't there. The upgrade path reads the board this way: it needs the original
+/// bytes to preserve, and an absent board is nothing to upgrade rather than an error.
+fn read_bytes_if_present(path: &Path) -> Result<Option<Vec<u8>>, StoreError> {
+    match fs::read(path) {
+        Ok(raw) => Ok(Some(raw)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(StoreError::Io { path: path.to_owned(), source }),
+    }
+}
+
 /// Lenient JSON read for sibling store files (e.g. `config.json`): the default value when the file is absent, an error when
 /// it exists but doesn't parse.
 pub(crate) fn read_json_or_default<T: serde::de::DeserializeOwned + Default>(path: &Path) -> Result<T, StoreError> {
@@ -210,7 +220,7 @@ impl Store {
         }
         let _lock = lock::acquire(&self.dir)?;
         let path = self.board_path();
-        let Some(raw) = self.read_board_bytes(&path)? else {
+        let Some(raw) = read_bytes_if_present(&path)? else {
             return Ok(false);
         };
         let mut board: Board =
@@ -235,15 +245,6 @@ impl Store {
         let backup = self.backup_v1_path();
         tracing::info!(from, to = model::CURRENT_SCHEMA, backup = %backup.display(), "board migrated on disk");
         Ok(true)
-    }
-
-    /// The board's raw bytes, or `None` when there is no board — an uninitialised store is nothing to upgrade.
-    fn read_board_bytes(&self, path: &Path) -> Result<Option<Vec<u8>>, StoreError> {
-        match fs::read(path) {
-            Ok(raw) => Ok(Some(raw)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(source) => Err(StoreError::Io { path: path.to_owned(), source }),
-        }
     }
 
     /// Preserve the pre-upgrade board as `board-v1.json`, byte for byte — key order, whitespace and hand-edits included.
