@@ -82,7 +82,7 @@ impl Config {
     }
 
     /// The effective integration branch: config beats [`crate::git::detect_main_branch`]. `None` — nothing configured
-    /// and nothing detectable — degrades landing detection to a no-op and the merged badge to HEAD-anchored.
+    /// and nothing detectable — degrades landing detection to a no-op.
     #[must_use]
     pub fn main_branch(&self, repo: &Path) -> Option<String> {
         self.main_branch.clone().or_else(|| crate::git::detect_main_branch(repo))

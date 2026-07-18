@@ -357,9 +357,10 @@ The implementation checklist, kept as the record of scope.
 - [x] Create PR button on eligible done tickets (branch still exists, repo has a remote, not external) — pushes the branch and opens a
   GitHub PR via `gh` with a body templated from the card, recording the URL as a progress note; the binary's one network egress, behind the
   explicit click
-- [x] Merged badge on done tickets, hidden by default behind a "merged" filter toggle with a count hint in the Done header — one
+- [~] Merged badge on done tickets, hidden by default behind a "merged" filter toggle with a count hint in the Done header — one
   `git branch --no-merged HEAD` per render, so merged means ancestor-of-HEAD *or* branch deleted (the common rebase/squash-then-delete
-  flows); a squash-merged branch kept alive locally reads as not merged
+  flows); a squash-merged branch kept alive locally reads as not merged — **removed in v2**: `done` means landed, so the distinction the
+  badge drew no longer exists.
 
 ### Claude's side (`mcp`)
 
@@ -435,11 +436,13 @@ open PRs, external work in flight), even after the worktree is long gone. Shippe
 - [x] The subtask deep-dive resolved into two explicit shapes — companion (same branch, no dependency, closes with
   `kanban_move to=review branch=…`) vs deferred follow-up (`depends_on`, own worktree later) — see
   [worktrees](#worktrees-one-ticket-one-checkout)
-- [x] `main_branch` config (seeded by `init` from origin/HEAD → main → master), the anchor for landing, the merged badge, and a stricter
+- [x] `main_branch` config (seeded by `init` from origin/HEAD → main → master), the anchor for landing and a stricter
   `finish --merge`
 - [x] `schema` field + v1→v2 board migration, persisted at startup by every face with the original kept as `board-v1.json`;
   newer-schema boards refuse to load with update advice
 - [x] Fully-defined `config.json` seeded by `init` (every dial explicit, `port: null` preserves port-hunting) and a settings pane in the
   UI (gear icon) editing it live — `poll_interval` changes apply without a restart
 - [x] Board UI: four columns, PR lifecycle badges, "branch gone — land or discard?" flag, discarded badge, Discard button
+- [x] v1's merged badge, filter toggle and Done-header hint withdrawn — landing made them redundant, and their `git branch --no-merged`
+  reading of a deleted branch contradicted the sweep on exactly the discarded case; one fewer subprocess per render
 
