@@ -97,3 +97,22 @@ fn release_archive_is_zip_on_windows_and_tarball_elsewhere() {
     assert!(ok, "release_archive must succeed for a non-windows target");
     assert_eq!(tar, "claude-kanban-x86_64-unknown-linux-musl.tar.gz", "release.yml attaches a .tar.gz elsewhere");
 }
+
+#[test]
+fn release_checksum_is_named_after_the_archive_stem() {
+    // upload-rust-binary-action publishes claude-kanban-<target>.sha256 — the archive extension is *not* part of the
+    // name. Requesting <archive>.sha256 instead 404s, which failed the fetch and dropped every install onto the cargo
+    // fallback on every platform. v1.2.0 and v2.0.0 are already published under these names and cannot be renamed, so
+    // this is the side that is pinned.
+    let cases = [
+        ("x86_64-unknown-linux-musl", "claude-kanban-x86_64-unknown-linux-musl.sha256"),
+        ("aarch64-apple-darwin", "claude-kanban-aarch64-apple-darwin.sha256"),
+        ("x86_64-pc-windows-msvc", "claude-kanban-x86_64-pc-windows-msvc.sha256"),
+    ];
+    for (target, want) in cases {
+        let (out, ok) = run("Linux", "x86_64", &format!("release_checksum {target}"));
+        assert!(ok, "release_checksum must succeed for {target}");
+        assert_eq!(out, want, "{target} checksum name must match the published asset");
+        assert!(!out.contains(".tar.gz") && !out.contains(".zip"), "the archive extension must not appear in {out}");
+    }
+}

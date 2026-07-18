@@ -1,8 +1,11 @@
 # Pushing a tag `v*` cross-builds claude-kanban for every supported platform and attaches the archives to a GitHub
 # Release. Asset names are a contract the launchers (bin/kanban-mcp and the Windows shim) rely on:
 #
-#   claude-kanban-<target>.tar.gz            (zip on Windows: claude-kanban-<target>.zip)
-#   claude-kanban-<target>.tar.gz.sha256     (checksum of the archive; .zip.sha256 on Windows)
+#   claude-kanban-<target>.tar.gz     (zip on Windows: claude-kanban-<target>.zip)
+#   claude-kanban-<target>.sha256     (checksum of that archive — named after the archive stem, with no .tar.gz/.zip)
+#
+# The checksum name is upload-rust-binary-action's own convention and is what v1.2.0 onward actually published; the
+# launchers request it verbatim. Do not "correct" it to <archive>.sha256 without republishing every release.
 #
 # Binaries live only in Releases, never in git.
 
