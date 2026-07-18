@@ -54,7 +54,9 @@
           now carries the repo link rather than being pure filler. The mark is sized by SVG attributes, not utility
           classes: assets/app.css is a committed Tailwind build, so a class nothing else uses wouldn't be in it.
         -#}
-        <div class="flex-1 min-w-40 flex justify-end">
+        <div class="flex-1 min-w-40 flex justify-end items-center gap-1">
+            <button class="btn btn-ghost btn-sm btn-circle text-lg" aria-label="Settings" title="Settings (.kanban/config.json)"
+                    hx-get="/ui/settings" hx-target="#detail" hx-swap="innerHTML">⚙</button>
             <a href="{{ repo_url }}" target="_blank" rel="noopener noreferrer"
                class="btn btn-ghost btn-sm btn-circle" aria-label="claude-kanban on GitHub" title="claude-kanban on GitHub">
                 <svg viewBox="0 0 16 16" width="20" height="20" fill="currentColor" aria-hidden="true">

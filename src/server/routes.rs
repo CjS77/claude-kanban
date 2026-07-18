@@ -368,6 +368,55 @@ pub async fn create_pr(State(app): State<AppState>, Path(id): Path<String>) -> R
     .await
 }
 
+pub async fn settings(State(app): State<AppState>) -> Result<Html<String>, AppError> {
+    blocking(&app, |store| Ok(Html(views::settings(&crate::config::Config::load(store.dir())?, false).render()?))).await
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct SettingsForm {
+    worktree_root: String,
+    copy_to_worktrees: String,
+    max_workers: String,
+    idle_time: String,
+    port: String,
+    main_branch: String,
+    poll_interval: String,
+}
+
+impl SettingsForm {
+    /// Empty fields mean "unset"; numeric fields that fail to parse are a 422 toast, and the file stays untouched.
+    fn into_config(self) -> Result<crate::config::Config, AppError> {
+        fn num<T: std::str::FromStr>(raw: &str, field: &str) -> Result<Option<T>, AppError> {
+            let raw = raw.trim();
+            if raw.is_empty() {
+                return Ok(None);
+            }
+            raw.parse().map(Some).map_err(|_| AppError::bad_request(format!("{field} must be a whole number (or empty)")))
+        }
+        Ok(crate::config::Config {
+            worktree_root: Some(self.worktree_root.trim()).filter(|s| !s.is_empty()).map(Into::into),
+            copy_to_worktrees: self.copy_to_worktrees.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_owned).collect(),
+            max_workers: num(&self.max_workers, "max_workers")?,
+            idle_time: num(&self.idle_time, "idle_time")?,
+            port: num(&self.port, "port")?,
+            main_branch: Some(self.main_branch.trim()).filter(|s| !s.is_empty()).map(str::to_owned),
+            poll_interval: num(&self.poll_interval, "poll_interval")?,
+        })
+    }
+}
+
+/// Save the settings form over `.kanban/config.json` (whole-file: the form carries every key). The poller and the
+/// worktree/work-loop dials re-read per use, so everything but `port` applies live — the pane says so.
+pub async fn save_settings(State(app): State<AppState>, Form(form): Form<SettingsForm>) -> Result<Html<String>, AppError> {
+    blocking(&app, move |store| {
+        let config = form.into_config()?;
+        store.write_config(&config)?;
+        Ok(Html(views::settings(&config, true).render()?))
+    })
+    .await
+}
+
 /// The Discard button: retire a review ticket without landing it — done with `discarded: true`, dependents stay
 /// blocked. Always a human decision (the confirm dialog says exactly what it costs); the auto-lander never does this.
 pub async fn discard_ticket(State(app): State<AppState>, Path(id): Path<String>, headers: HeaderMap) -> Result<Html<String>, AppError> {

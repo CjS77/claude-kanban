@@ -181,6 +181,7 @@ pub fn router(app: AppState) -> Router {
         .route("/ui/epic/{id}/edit", get(routes::epic_edit))
         .route("/ui/epic/{id}/status", post(routes::epic_status))
         .route("/ui/epic/{id}/delete", post(routes::delete_epic))
+        .route("/ui/settings", get(routes::settings).post(routes::save_settings))
         .route("/raw/ticket/{id}", get(routes::raw_ticket))
         .route("/raw/epic/{id}", get(routes::raw_epic))
         .route("/events", get(sse::events))

@@ -520,6 +520,42 @@ pub fn epic_edit(board: &Board, id: &crate::store::model::EpicId) -> Option<Epic
     })
 }
 
+// ---- settings ---------------------------------------------------------------------------------------------------------
+
+/// The settings pane: `.kanban/config.json` as a form. Values render raw (empty = unset, defaults live in the
+/// placeholders), so what the user sees is exactly what the file will say.
+#[derive(Debug, Template)]
+#[template(path = "settings.html")]
+pub struct SettingsTpl {
+    pub worktree_root: String,
+    /// One entry per line in the textarea.
+    pub copy_to_worktrees: String,
+    pub max_workers: String,
+    pub idle_time: String,
+    pub port: String,
+    pub main_branch: String,
+    pub poll_interval: String,
+    /// True right after a save — shows the confirmation (and the port-needs-restart caveat).
+    pub saved: bool,
+}
+
+#[must_use]
+pub fn settings(config: &crate::config::Config, saved: bool) -> SettingsTpl {
+    fn show<T: std::fmt::Display>(v: Option<&T>) -> String {
+        v.map(ToString::to_string).unwrap_or_default()
+    }
+    SettingsTpl {
+        worktree_root: config.worktree_root.as_ref().map(|p| p.display().to_string()).unwrap_or_default(),
+        copy_to_worktrees: config.copy_to_worktrees.join("\n"),
+        max_workers: show(config.max_workers.as_ref()),
+        idle_time: show(config.idle_time.as_ref()),
+        port: show(config.port.as_ref()),
+        main_branch: config.main_branch.clone().unwrap_or_default(),
+        poll_interval: show(config.poll_interval.as_ref()),
+        saved,
+    }
+}
+
 // ---- toasts -----------------------------------------------------------------------------------------------------------
 
 #[derive(Debug, Template)]

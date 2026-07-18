@@ -542,6 +542,49 @@ async fn the_default_port_hunts_but_an_explicit_port_fails_loudly() {
 }
 
 #[tokio::test]
+async fn the_settings_pane_round_trips_the_config_and_refuses_garbage() {
+    let (_dir, router, store) = test_app();
+
+    // GET shows what init seeded — main_branch pinned, poll_interval 60.
+    let html = body_text(router.clone().oneshot(get("/ui/settings")).await.unwrap()).await;
+    assert!(html.contains(r#"name="main_branch" value="main""#), "{html}");
+    assert!(html.contains(r#"name="poll_interval" value="60""#), "{html}");
+    assert!(html.contains("/ui/settings"), "{html}");
+
+    // POST writes the whole file; the re-rendered pane confirms and carries the new values.
+    let form = "main_branch=trunk&poll_interval=0&max_workers=3&idle_time=&worktree_root=%2Fdata%2Fwt&copy_to_worktrees=.env%0Acerts%2Flocal.pem&port=";
+    let res = router.clone().oneshot(post("/ui/settings", 1, form)).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body_text(res).await;
+    assert!(html.contains("Saved") && html.contains(r#"value="trunk""#), "{html}");
+
+    let config = claude_kanban::config::Config::load(store.dir()).unwrap();
+    assert_eq!(config.main_branch.as_deref(), Some("trunk"));
+    assert_eq!(config.poll_interval, Some(0), "0 is stored verbatim — it is the off switch");
+    assert_eq!(config.max_workers(), 3);
+    assert_eq!(config.idle_time(), 300, "cleared field falls back to the default");
+    assert_eq!(config.copy_to_worktrees, vec![".env", "certs/local.pem"]);
+    assert!(config.port.is_none(), "empty port stays 'nobody chose'");
+
+    // A non-numeric number is a 422 toast and the file stays as-saved.
+    let res = router.clone().oneshot(post("/ui/settings", 2, "max_workers=lots")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(res.headers()["hx-retarget"], "#toasts");
+    assert_eq!(claude_kanban::config::Config::load(store.dir()).unwrap().max_workers(), 3, "bad input must not clobber the file");
+
+    // The guard covers settings like every mutation: no version header, no write.
+    let req = Request::builder().method("POST").uri("/ui/settings").header(header::HOST, HOST).body(Body::empty()).unwrap();
+    assert_eq!(router.oneshot(req).await.unwrap().status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn the_header_carries_the_settings_gear() {
+    let (_dir, router, _store) = test_app();
+    let html = body_text(router.oneshot(get("/")).await.unwrap()).await;
+    assert!(html.contains(r#"hx-get="/ui/settings""#), "{html}");
+}
+
+#[tokio::test]
 async fn the_poller_lands_merged_review_tickets_and_stops_on_shutdown() {
     // A real repo whose review ticket's branch has already merged into main: the poller's startup sweep lands it, the
     // file watcher broadcasts the write (serve never signals its own writes in-process), and cancellation ends the task.

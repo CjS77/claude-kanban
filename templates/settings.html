@@ -1,0 +1,49 @@
+{#- The settings pane, rendered into the #detail modal: .kanban/config.json as a form. Empty fields mean "unset" — the
+    effective defaults live in the placeholders, so the file only ever records deliberate choices plus what init seeded. -#}
+<div class="flex items-start justify-between gap-3">
+    <h2 class="text-xl font-semibold">Settings</h2>
+    <form method="dialog"><button class="btn btn-sm btn-circle btn-ghost" aria-label="close">✕</button></form>
+</div>
+<p class="text-sm opacity-70 mt-1">Stored in <code>.kanban/config.json</code>, committed with the board.</p>
+{% if saved %}
+<div role="alert" class="alert alert-success mt-3 py-2 text-sm">
+    Saved. <code>port</code> applies on the next serve start; everything else applies live.
+</div>
+{% endif %}
+
+<form class="mt-3 flex flex-col gap-3" hx-post="/ui/settings" hx-target="#detail" hx-swap="innerHTML">
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <label class="flex flex-col gap-1 text-sm">Main branch
+            <input name="main_branch" value="{{ main_branch }}" placeholder="auto (origin/HEAD, main, master)" class="input input-sm w-full font-mono">
+            <span class="text-xs opacity-60">done = landed in this branch, locally</span>
+        </label>
+        <label class="flex flex-col gap-1 text-sm">Poll interval (seconds)
+            <input name="poll_interval" value="{{ poll_interval }}" placeholder="60" inputmode="numeric" class="input input-sm w-full">
+            <span class="text-xs opacity-60">landing sweep + gh PR poll cadence; 0 turns polling off</span>
+        </label>
+        <label class="flex flex-col gap-1 text-sm">Max workers
+            <input name="max_workers" value="{{ max_workers }}" placeholder="1" inputmode="numeric" class="input input-sm w-full">
+            <span class="text-xs opacity-60">tickets a /kanban:work loop drives concurrently</span>
+        </label>
+        <label class="flex flex-col gap-1 text-sm">Idle time (seconds)
+            <input name="idle_time" value="{{ idle_time }}" placeholder="300" inputmode="numeric" class="input input-sm w-full">
+            <span class="text-xs opacity-60">how long the work loop sleeps when nothing is eligible</span>
+        </label>
+        <label class="flex flex-col gap-1 text-sm">Worktree root
+            <input name="worktree_root" value="{{ worktree_root }}" placeholder="/tmp/claude-kanban" class="input input-sm w-full font-mono">
+            <span class="text-xs opacity-60">volatile on purpose — commits, branches, and cards survive a wipe</span>
+        </label>
+        <label class="flex flex-col gap-1 text-sm">Port
+            <input name="port" value="{{ port }}" placeholder="auto (4747, then hunt)" inputmode="numeric" class="input input-sm w-full">
+            <span class="text-xs opacity-60">an explicit port fails loudly when taken; needs a serve restart</span>
+        </label>
+    </div>
+    <label class="flex flex-col gap-1 text-sm">Copy into worktrees (one path per line)
+        <textarea name="copy_to_worktrees" rows="3" placeholder=".env" class="textarea textarea-sm w-full font-mono">{{ copy_to_worktrees }}</textarea>
+        <span class="text-xs opacity-60">gitignored files copied into each new worktree — anything git tracks is refused</span>
+    </label>
+    <div class="modal-action mt-1">
+        <button type="button" class="btn btn-ghost btn-sm" onclick="this.closest('dialog').close()">Close</button>
+        <button type="submit" class="btn btn-primary btn-sm">Save</button>
+    </div>
+</form>

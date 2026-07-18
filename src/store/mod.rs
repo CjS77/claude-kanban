@@ -148,6 +148,14 @@ impl Store {
         self.dir.join(LAND_STATE_FILE)
     }
 
+    /// Persist the config under the store lock — the settings pane's save. Not an `Op`: the config is not the board and
+    /// has no version counter; the lock alone keeps concurrent readers from seeing a torn file, and last-write-wins is
+    /// acceptable for a settings form.
+    pub fn write_config(&self, config: &crate::config::Config) -> Result<(), StoreError> {
+        let _lock = lock::acquire(&self.dir)?;
+        io::write_json_atomic(&self.config_path(), config)
+    }
+
     /// The landing sweep's last-observed branch tips (`branch → sha`). Missing file = nothing observed. Lock-free, like
     /// every read.
     pub fn read_land_state(&self) -> Result<std::collections::HashMap<String, String>, StoreError> {
