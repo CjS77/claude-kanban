@@ -45,6 +45,9 @@ pub(crate) fn read_json_or_default<T: serde::de::DeserializeOwned + Default>(pat
 
 /// File name of the board inside the store directory.
 const BOARD_FILE: &str = "board.json";
+/// File name of the pre-upgrade board kept beside it when a v1 store is migrated on disk. Committed like the board: it is
+/// the escape hatch back to a pre-2.0 binary, so it stays where a colleague pulling the repo can find it.
+const BACKUP_V1_FILE: &str = "board-v1.json";
 /// File name of the live-claims sidecar inside the store directory.
 const CLAIMS_FILE: &str = "claims.json";
 /// File name of the store config inside the store directory.
@@ -130,6 +133,12 @@ impl Store {
         self.dir.join(BOARD_FILE)
     }
 
+    /// Path of the pre-upgrade board copy, written once when a v1 store is migrated on disk.
+    #[must_use]
+    pub fn backup_v1_path(&self) -> PathBuf {
+        self.dir.join(BACKUP_V1_FILE)
+    }
+
     /// Path of the claims sidecar.
     #[must_use] 
     pub fn claims_path(&self) -> PathBuf {
@@ -185,8 +194,73 @@ impl Store {
         Ok(())
     }
 
-    /// Read, migrate (in memory — the next mutation persists the upgrade), and validate the board. Lock-free — see the
-    /// module docs. A board written by a *newer* binary refuses to load: misreading it would be worse than stopping.
+    /// Eagerly persist a pending schema upgrade: back up the original file verbatim as `board-v1.json`, then rewrite
+    /// `board.json` at the current schema. No-op when the board is absent or already current. Returns whether an upgrade
+    /// was persisted.
+    ///
+    /// Every face of the binary calls this at startup, so an old board is upgraded once — visibly, with an escape hatch —
+    /// instead of silently on whichever mutation happens to come first. Nothing is destroyed on the way: a corrupt,
+    /// invalid or newer-than-supported board comes back as an error with both files untouched, and `board.json` is
+    /// replaced only after the backup's rename has returned.
+    pub fn upgrade(&self) -> Result<bool, StoreError> {
+        // Checked before locking: acquiring would create `.kanban/.lock`, and an uninitialised store must stay untouched
+        // so the command behind us can fail with its own "run init first". Re-checked under the lock, where it counts.
+        if !self.board_path().exists() {
+            return Ok(false);
+        }
+        let _lock = lock::acquire(&self.dir)?;
+        let path = self.board_path();
+        let Some(raw) = self.read_board_bytes(&path)? else {
+            return Ok(false);
+        };
+        let mut board: Board =
+            serde_json::from_slice(&raw).map_err(|source| StoreError::Parse { path: path.clone(), source })?;
+        let from = board.schema;
+        let migrated = model::migrate(&mut board).map_err(|found| StoreError::SchemaTooNew {
+            path: path.clone(),
+            found,
+            supported: model::CURRENT_SCHEMA,
+        })?;
+        if !migrated {
+            return Ok(false);
+        }
+        validate::validate(&board).map_err(|problems| StoreError::Invalid {
+            path: path.clone(),
+            problems: problems.join("\n  - "),
+        })?;
+
+        self.back_up_original(&raw)?;
+        board.version += 1;
+        io::write_json_atomic(&path, &board)?;
+        let backup = self.backup_v1_path();
+        tracing::info!(from, to = model::CURRENT_SCHEMA, backup = %backup.display(), "board migrated on disk");
+        Ok(true)
+    }
+
+    /// The board's raw bytes, or `None` when there is no board — an uninitialised store is nothing to upgrade.
+    fn read_board_bytes(&self, path: &Path) -> Result<Option<Vec<u8>>, StoreError> {
+        match fs::read(path) {
+            Ok(raw) => Ok(Some(raw)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(source) => Err(StoreError::Io { path: path.to_owned(), source }),
+        }
+    }
+
+    /// Preserve the pre-upgrade board as `board-v1.json`, byte for byte — key order, whitespace and hand-edits included.
+    /// A re-serialization would already be the migrated shape and so useless as a way back to a pre-2.0 binary. First
+    /// backup wins: an existing file is somebody's original, and overwriting it would be the one destructive act here.
+    fn back_up_original(&self, raw: &[u8]) -> Result<(), StoreError> {
+        let backup = self.backup_v1_path();
+        if backup.exists() {
+            tracing::warn!(path = %backup.display(), "a board backup already exists — keeping it, migrating anyway");
+            return Ok(());
+        }
+        io::write_bytes_atomic(&backup, raw)
+    }
+
+    /// Read, migrate (in memory), and validate the board. Lock-free — see the module docs. The on-disk upgrade is
+    /// [`Store::upgrade`]'s job at startup; migrating here too keeps every read correct for library consumers that never
+    /// call it. A board written by a *newer* binary refuses to load: misreading it would be worse than stopping.
     pub fn read_board(&self) -> Result<Board, StoreError> {
         let mut board: Board =
             io::read_json(&self.board_path())?.ok_or_else(|| StoreError::NotInitialized(self.board_path()))?;
@@ -257,10 +331,31 @@ mod tests {
     use super::*;
     use crate::store::model::{Column, Status, Ticket, TicketId};
 
+    /// A board as v1 wrote it: no `schema`, three columns. Shared by the migration tests.
+    const V1_BOARD: &str = r#"{
+  "version": 7,
+  "columns": [
+    { "id": "todo", "title": "To do" },
+    { "id": "doing", "title": "Doing" },
+    { "id": "done", "title": "Done" }
+  ],
+  "epics": [],
+  "tickets": []
+}"#;
+
     fn scratch_store() -> (tempfile::TempDir, Store) {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::at(dir.path().join(".kanban"));
         store.init().unwrap();
+        (dir, store)
+    }
+
+    /// A store directory holding exactly `board`, with nothing else seeded.
+    fn store_holding(board: &str) -> (tempfile::TempDir, Store) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::at(dir.path().join(".kanban"));
+        std::fs::create_dir_all(store.dir()).unwrap();
+        std::fs::write(store.board_path(), board).unwrap();
         (dir, store)
     }
 
@@ -325,29 +420,100 @@ mod tests {
 
     #[test]
     fn a_v1_board_file_loads_migrated_and_disk_changes_only_on_the_first_write() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::at(dir.path().join(".kanban"));
-        std::fs::create_dir_all(store.dir()).unwrap();
-        let v1 = r#"{
-  "version": 7,
-  "columns": [
-    { "id": "todo", "title": "To do" },
-    { "id": "doing", "title": "Doing" },
-    { "id": "done", "title": "Done" }
-  ],
-  "epics": [],
-  "tickets": []
-}"#;
-        std::fs::write(store.board_path(), v1).unwrap();
+        let (_dir, store) = store_holding(V1_BOARD);
 
         let board = store.read_board().unwrap();
         assert_eq!(board.schema, crate::store::model::CURRENT_SCHEMA);
         assert_eq!(board.columns.len(), 4, "review arrives in memory");
-        assert_eq!(std::fs::read_to_string(store.board_path()).unwrap(), v1, "a read never rewrites the file");
+        assert_eq!(std::fs::read_to_string(store.board_path()).unwrap(), V1_BOARD, "a read never rewrites the file");
 
         store.mutate(None, |_, _| Ok::<_, StoreError>(())).unwrap();
         let raw = std::fs::read_to_string(store.board_path()).unwrap();
         assert!(raw.contains("\"schema\": 2") && raw.contains("\"review\""), "the first write persists the upgrade: {raw}");
+    }
+
+    #[test]
+    fn upgrade_persists_the_v1_board_and_keeps_the_original_verbatim() {
+        let (_dir, store) = store_holding(V1_BOARD);
+
+        assert!(store.upgrade().unwrap(), "a v1 board has an upgrade to persist");
+
+        let backup = std::fs::read_to_string(store.backup_v1_path()).unwrap();
+        assert_eq!(backup, V1_BOARD, "the backup is the original bytes, not a re-serialization");
+
+        let raw = std::fs::read_to_string(store.board_path()).unwrap();
+        assert!(raw.contains("\"schema\": 2"), "the schema is stamped on disk: {raw}");
+        assert!(raw.contains("\"review\""), "the review column is on disk: {raw}");
+
+        let board = store.read_board().unwrap();
+        assert_eq!(board.version, 8, "the upgrade counts as one mutation");
+        assert_eq!(board.columns.len(), 4);
+    }
+
+    #[test]
+    fn upgrade_is_a_no_op_the_second_time() {
+        let (_dir, store) = store_holding(V1_BOARD);
+        store.upgrade().unwrap();
+        let board_after = std::fs::read(store.board_path()).unwrap();
+        let backup_after = std::fs::read(store.backup_v1_path()).unwrap();
+
+        assert!(!store.upgrade().unwrap(), "an already-current board has nothing to persist");
+        assert_eq!(std::fs::read(store.board_path()).unwrap(), board_after, "no second write");
+        assert_eq!(std::fs::read(store.backup_v1_path()).unwrap(), backup_after, "no second backup");
+    }
+
+    #[test]
+    fn upgrade_leaves_a_born_v2_board_alone() {
+        let (_dir, store) = scratch_store();
+        assert!(!store.upgrade().unwrap());
+        assert!(!store.backup_v1_path().exists(), "nothing was migrated, so there is nothing to back up");
+    }
+
+    #[test]
+    fn upgrade_never_overwrites_an_existing_backup() {
+        let (_dir, store) = store_holding(V1_BOARD);
+        std::fs::write(store.backup_v1_path(), "the genuine original").unwrap();
+
+        assert!(store.upgrade().unwrap(), "the migration still happens");
+        assert_eq!(
+            std::fs::read_to_string(store.backup_v1_path()).unwrap(),
+            "the genuine original",
+            "first backup wins — the existing file is somebody's escape hatch"
+        );
+        assert!(std::fs::read_to_string(store.board_path()).unwrap().contains("\"schema\": 2"));
+    }
+
+    #[test]
+    fn upgrade_refuses_a_corrupt_board_without_touching_anything() {
+        let (_dir, store) = store_holding("not json");
+
+        let err = store.upgrade().unwrap_err();
+        assert!(matches!(err, StoreError::Parse { .. }), "{err}");
+        assert!(err.to_string().contains("board.json"), "the error names the file: {err}");
+        assert_eq!(std::fs::read_to_string(store.board_path()).unwrap(), "not json", "the board is untouched");
+        assert!(!store.backup_v1_path().exists(), "a board that cannot be read is never backed up");
+    }
+
+    #[test]
+    fn upgrade_refuses_a_newer_schema_without_touching_anything() {
+        let mut value: serde_json::Value = serde_json::from_str(V1_BOARD).unwrap();
+        value["schema"] = serde_json::json!(9);
+        let from_the_future = value.to_string();
+        let (_dir, store) = store_holding(&from_the_future);
+
+        let err = store.upgrade().unwrap_err();
+        assert!(matches!(err, StoreError::SchemaTooNew { found: 9, .. }), "{err}");
+        assert_eq!(std::fs::read_to_string(store.board_path()).unwrap(), from_the_future, "the board is untouched");
+        assert!(!store.backup_v1_path().exists());
+    }
+
+    #[test]
+    fn upgrade_on_an_uninitialised_store_is_a_no_op() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::at(dir.path().join(".kanban"));
+        assert!(!store.upgrade().unwrap(), "nothing to upgrade without a board");
+        assert!(!store.dir().exists(), "an absent store stays absent — no stray lock file, no directory");
+        assert!(matches!(store.read_board(), Err(StoreError::NotInitialized(_))), "the real error still surfaces");
     }
 
     #[test]

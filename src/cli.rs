@@ -116,6 +116,12 @@ pub fn run() -> anyhow::Result<()> {
     init_tracing();
     let store = Store::resolve(cli.store);
 
+    // One choke point for the on-disk schema upgrade, covering serve, mcp and the worktree CLI alike. `init` is exempt so
+    // its contract stays exactly "seed a new store, never touch an existing one".
+    if !matches!(cli.command, Command::Init) {
+        store.upgrade()?;
+    }
+
     match cli.command {
         Command::Init => init(&store),
         Command::Serve { port, no_open, assets_dir } => crate::server::serve(store, port, no_open, assets_dir),

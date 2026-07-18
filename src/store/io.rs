@@ -29,13 +29,20 @@ pub(crate) fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, S
 /// Serialize `value` as pretty JSON (with a trailing newline — the files are meant to be read and hand-edited) and atomically
 /// replace `path` with it via a same-directory temp file and rename.
 pub(crate) fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), StoreError> {
-    let io_err = |source| StoreError::Io { path: path.to_owned(), source };
     let mut text = serde_json::to_string_pretty(value).map_err(|source| StoreError::Parse { path: path.to_owned(), source })?;
     text.push('\n');
+    write_bytes_atomic(path, text.as_bytes())
+}
+
+/// Atomically replace `path` with `bytes`, verbatim — same temp-sibling, fsync and rename discipline as
+/// [`write_json_atomic`], but with no serialization in the way. The schema backup uses it to preserve the original file
+/// byte-for-byte, key order and hand-edits included.
+pub(crate) fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<(), StoreError> {
+    let io_err = |source| StoreError::Io { path: path.to_owned(), source };
 
     let tmp = tmp_path(path);
     let mut file = File::create(&tmp).map_err(io_err)?;
-    file.write_all(text.as_bytes()).and_then(|()| file.sync_all()).map_err(io_err)?;
+    file.write_all(bytes).and_then(|()| file.sync_all()).map_err(io_err)?;
     drop(file);
     fs::rename(&tmp, path).map_err(io_err)?;
 
@@ -84,6 +91,28 @@ mod tests {
         assert_eq!(read_json::<String>(&path).unwrap(), Some("old".into()));
         write_json_atomic(&path, &"new").unwrap();
         assert_eq!(read_json::<String>(&path).unwrap(), Some("new".into()));
+    }
+
+    #[test]
+    fn write_bytes_round_trips_verbatim_and_leaves_no_tmp() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("board-v1.json");
+        // Deliberately ugly: odd key order, tabs, no trailing newline — a backup must keep all of it.
+        let original = b"{\t\"version\":7,\n  \"columns\":[]}";
+        write_bytes_atomic(&path, original).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), original, "bytes must survive verbatim");
+        assert!(!path.with_file_name("board-v1.json.tmp").exists(), "tmp file must be renamed away");
+    }
+
+    #[test]
+    fn a_leftover_tmp_never_shadows_a_bytes_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("board-v1.json");
+        write_bytes_atomic(&path, b"old").unwrap();
+        fs::write(path.with_file_name("board-v1.json.tmp"), "garbage{{{").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"old");
+        write_bytes_atomic(&path, b"new").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"new");
     }
 
     #[test]
