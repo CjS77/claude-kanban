@@ -226,7 +226,7 @@ async fn the_search_box_wears_a_magnifier_and_a_javascript_free_help_popup() {
     let html = body_text(router.oneshot(get("/")).await.unwrap()).await;
 
     // The magnifier is a decorative inline SVG inside the label that wraps the input — no webfont, no extra asset.
-    assert!(html.contains(r#"<label class="input input-sm">"#), "the input is wrapped in a label: {html}");
+    assert!(html.contains(r#"<label class="input input-sm""#), "the input is wrapped in a label: {html}");
     assert!(html.contains(r#"<circle cx="7" cy="7" r="5"/>"#), "the magnifier glass is drawn inline: {html}");
 
     // <details class="dropdown"> opens on click with no script — daisyUI exempts details from its hide rule.
