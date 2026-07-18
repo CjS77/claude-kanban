@@ -142,6 +142,87 @@ fn the_mcp_face_reads_claims_and_recovers_from_conflicts() {
     assert_eq!(refined["structuredContent"]["created"], json!(["K-3", "K-4"]), "{refined}");
 }
 
+/// A board with one landed ticket carrying a fat spec and a progress log — the shape that dominates a real board — plus
+/// one live ticket to prove the default read still answers with the work that matters. Returns the store directory.
+fn seed_a_fat_done_ticket(dir: &std::path::Path) -> std::path::PathBuf {
+    use claude_kanban::{
+        ops::{self, Op},
+        store::model::{ColumnId, Status, TicketId},
+    };
+
+    let store_dir = dir.join(".kanban");
+    let store = claude_kanban::store::Store::at(&store_dir);
+    store.init().unwrap();
+
+    let create = |title: &str, body: String| Op::CreateTicket {
+        title: title.into(),
+        body,
+        epic: None,
+        labels: vec![],
+        depends_on: vec![],
+        status: Status::Ready,
+    };
+    ops::apply(&store, None, create("landed work", "## Refined spec\n".to_owned() + &"every decision, recorded. ".repeat(600))).unwrap();
+    let k1 = TicketId("K-1".into());
+    ["claimed it, starting on the parser", "parser done, wiring the views up next"].iter().for_each(|text| {
+        ops::apply(&store, None, Op::AddNote { id: k1.clone(), text: (*text).into(), author: Some("claude".into()) }).unwrap();
+    });
+    ops::apply(&store, None, Op::MoveTicket { id: k1, to: ColumnId::Done, position: None, owner: None, branch: None }).unwrap();
+    ops::apply(&store, None, create("still to do", "short".into())).unwrap();
+    store_dir
+}
+
+#[test]
+fn kanban_board_omits_done_by_default_and_returns_it_on_request() {
+    let dir = tempfile::tempdir().unwrap();
+    let store_dir = seed_a_fat_done_ticket(dir.path());
+    let mut mcp = McpSession::start(&store_dir);
+
+    let ids = |board: &Value| -> Vec<String> {
+        board["structuredContent"]["tickets"].as_array().unwrap().iter().map(|t| t["id"].as_str().unwrap().to_string()).collect()
+    };
+
+    // The default: the done ticket is gone, and a summary says so and names the way back.
+    let default = mcp.call_tool(2, "kanban_board", &json!({}));
+    assert_eq!(ids(&default), ["K-2"], "the default read carries only unfinished work: {default}");
+    let done = &default["structuredContent"]["done"];
+    assert_eq!(done["count"], 1, "the summary accounts for the omitted ticket: {default}");
+    assert_eq!(done["landed"], json!(["K-1"]), "a plain move to done lands it, so it can unblock dependents");
+    assert_eq!(done["discarded"], json!([]));
+    assert!(done["note"].as_str().unwrap().contains("include_done=true"), "the summary must name the way back: {done}");
+
+    // include_done=true: the whole board, spec text intact.
+    let full = mcp.call_tool(3, "kanban_board", &json!({ "include_done": true }));
+    let mut restored = ids(&full);
+    restored.sort(); // array order is board priority, not this tool's concern
+    assert_eq!(restored, ["K-1", "K-2"], "include_done restores the done ticket: {full}");
+    let landed = full["structuredContent"]["tickets"].as_array().unwrap().iter().find(|t| t["id"] == "K-1").unwrap();
+    assert!(landed["body"].as_str().unwrap().contains("Refined spec"), "and its body comes back whole");
+    assert_eq!(landed["notes"].as_array().unwrap().len(), 2, "notes too");
+    assert!(full["structuredContent"].get("done").is_none(), "nothing was omitted, so there is no summary");
+
+    // column="done" is the other way in, unchanged by this ticket.
+    let column = mcp.call_tool(4, "kanban_board", &json!({ "column": "done" }));
+    assert_eq!(ids(&column), ["K-1"], "asking for the done column answers it verbatim: {column}");
+    assert!(column["structuredContent"]["tickets"][0]["body"].as_str().unwrap().contains("Refined spec"));
+    assert!(column["structuredContent"].get("done").is_none(), "one column was asked for, so no summary is bolted on");
+
+    // The version means the board's version either way — both are valid expected_version tokens.
+    assert_eq!(default["structuredContent"]["version"], full["structuredContent"]["version"], "version is the board's, not the subset's");
+}
+
+#[test]
+fn the_default_board_read_is_dramatically_smaller() {
+    let dir = tempfile::tempdir().unwrap();
+    let store_dir = seed_a_fat_done_ticket(dir.path());
+    let mut mcp = McpSession::start(&store_dir);
+
+    let default = mcp.call_tool(2, "kanban_board", &json!({}));
+    let full = mcp.call_tool(3, "kanban_board", &json!({ "include_done": true }));
+    let (small, big) = (default.to_string().len(), full.to_string().len());
+    assert!(small * 10 < big, "the default read must be an order of magnitude smaller than the full board: {small} vs {big}");
+}
+
 #[test]
 fn kanban_next_lands_merged_review_work_and_the_move_records_companion_branches() {
     use claude_kanban::{
