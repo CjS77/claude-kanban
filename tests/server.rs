@@ -205,6 +205,47 @@ async fn the_filter_bar_offers_one_search_box_and_the_epic_dropdown() {
 }
 
 #[tokio::test]
+async fn the_search_box_sits_after_the_create_buttons_inside_the_filter_bar() {
+    let (_dir, router, _store) = test_app();
+    let html = body_text(router.oneshot(get("/")).await.unwrap()).await;
+
+    let filters = html.split_once(r#"id="filters""#).expect("the filter bar must carry #filters").1;
+    let (bar, _) = filters.split_once("<main").expect("the filter bar closes before the board");
+    let at = |needle: &str| bar.find(needle).unwrap_or_else(|| panic!("{needle} must be inside the filter bar: {bar}"));
+
+    // hx-include="#filters" harvests input/select from #filters, so both controls have to stay within it — while the
+    // create buttons, which contribute no values, sit between them.
+    assert!(at(r#"id="filter-epic""#) < at("+ Epic"), "the epic dropdown leads: {bar}");
+    assert!(at("+ Epic") < at(r#"name="q""#), "the search box follows the create buttons: {bar}");
+    assert!(at(r#"name="q""#) < at(r#"id="search-help""#), "the help affordance trails the search box: {bar}");
+}
+
+#[tokio::test]
+async fn the_search_box_wears_a_magnifier_and_a_javascript_free_help_popup() {
+    let (_dir, router, _store) = test_app();
+    let html = body_text(router.oneshot(get("/")).await.unwrap()).await;
+
+    // The magnifier is a decorative inline SVG inside the label that wraps the input — no webfont, no extra asset.
+    assert!(html.contains(r#"<label class="input input-sm">"#), "the input is wrapped in a label: {html}");
+    assert!(html.contains(r#"<circle cx="7" cy="7" r="5"/>"#), "the magnifier glass is drawn inline: {html}");
+
+    // <details class="dropdown"> opens on click with no script — daisyUI exempts details from its hide rule.
+    let help = html.split_once(r#"id="search-help""#).expect("the help popup must be there: {html}").1;
+    let (popup, _) = help.split_once("</details>").expect("the help popup closes");
+    assert!(popup.contains(r#"class="dropdown-content"#), "the panel is the dropdown's content: {popup}");
+    assert!(!popup.contains("onclick") && !popup.contains("hx-"), "the popup must need no script to open: {popup}");
+
+    // The keys it documents are exactly the ones search.rs answers to — `merged:` was removed in v2 and must not return.
+    let keys = ["text:", "label:", "epic:", "id:", "note:", "status:", "col: column:", "landed:", "discarded:", "blocked:"];
+    let missing: Vec<_> = keys.into_iter().filter(|key| !popup.contains(key)).collect();
+    assert!(missing.is_empty(), "the popup must document every search key — missing {missing:?}: {popup}");
+    assert!(!popup.contains("merged:"), "there is no merged: key: {popup}");
+
+    // The old title= tooltip is folded into the popup, so there is exactly one explanation of the grammar.
+    assert!(!html.contains("Comma-separated. Bare text searches"), "the tooltip must not duplicate the popup: {html}");
+}
+
+#[tokio::test]
 async fn a_bookmarked_label_parameter_is_inert() {
     let (_dir, router, store) = test_app();
     seed_ticket(&store, "Still visible");

@@ -3,8 +3,9 @@
   page load and reloads on every `kanban:refresh` event (fired by glue.js when the SSE stream reports a change) — one
   rendering path for initial load, user actions, and live updates alike.
 
-  The filter bar sits OUTSIDE #board so swaps never clobber a half-typed search query; the epic dropdown alone is refreshed
-  out-of-band by the board fragment (it re-renders with the current selection, so nothing is lost).
+  The filter bar (#filters — the epic dropdown, the create buttons, and the search box) sits OUTSIDE #board so swaps never
+  clobber a half-typed search query; the epic dropdown alone is refreshed out-of-band by the board fragment (it re-renders
+  with the current selection, so nothing is lost).
 -#}
 <!doctype html>
 <html lang="en">
@@ -25,17 +26,70 @@
             <span class="text-4xl font-semibold">{{ title }}</span>
             <span class="badge badge-ghost badge-sm">v{{ version }}</span>
         </div>
-        <div class="flex gap-3 items-center justify-center flex-wrap">
-            <div id="filters" class="flex gap-2 items-center flex-wrap">
-                {% include "filter_epic.html" %}
-                <input name="q" class="input input-sm w-72" aria-label="Search tickets"
-                       placeholder="search… or label:ux, status:ready, landed:true"
-                       title="Comma-separated. Bare text searches the whole ticket. Keys: label: epic: id: note: status: col: landed: discarded: blocked:. Quote to keep commas: label:&quot;foo, bar&quot;"
-                       hx-get="/ui/board" hx-target="#board" hx-include="#filters" hx-trigger="input changed delay:300ms">
-            </div>
+        {#-
+          #filters wraps the whole control cluster — epic dropdown, the create buttons, then the search box — because
+          hx-include="#filters" is what feeds both controls' values to /ui/board, and htmx only ever harvests
+          input/textarea/select from an include target, so the buttons sitting between them contribute nothing.
+        -#}
+        <div id="filters" class="flex gap-3 items-center justify-center flex-wrap">
+            {% include "filter_epic.html" %}
             <div class="flex gap-2">
                 <button class="btn btn-primary" onclick="document.getElementById('new-ticket-modal').showModal()">+ Ticket</button>
                 <button class="btn btn-epic" onclick="document.getElementById('new-epic-modal').showModal()">+ Epic</button>
+            </div>
+            {#-
+              The search is a different kind of control from the create buttons, so it gets air. The margin is inline
+              because assets/app.css is a committed Tailwind build whose widest gap utility is gap-4 — see the note on
+              the repo mark below for the same reasoning applied to sizing.
+            -#}
+            <div class="flex gap-1 items-center" style="margin-inline-start: 1.5rem">
+                {#- The label IS the bordered box (daisyUI styles the bare inner input); the magnifier is decorative,
+                    and wrapping rather than overlaying keeps the input's own htmx wiring untouched. -#}
+                <label class="input input-sm">
+                    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"
+                         class="opacity-50 pointer-events-none" aria-hidden="true">
+                        <circle cx="7" cy="7" r="5"/>
+                        <path d="M11 11l4 4" stroke-linecap="round"/>
+                    </svg>
+                    <input name="q" aria-label="Search tickets"
+                           placeholder="search… or label:ux, status:ready, landed:true"
+                           hx-get="/ui/board" hx-target="#board" hx-include="#filters" hx-trigger="input changed delay:300ms">
+                </label>
+                {#-
+                  The grammar reference, opened with no JavaScript at all: daisyUI's dropdown hide rule is
+                  `.dropdown:not(details, …) .dropdown-content`, i.e. a <details class="dropdown"> is exempted on purpose
+                  and its own open/closed state drives the panel. inset-inline-end pins the panel's right edge to the
+                  button so it opens inward instead of off-screen (dropdown-end isn't in the committed CSS build).
+                -#}
+                <details id="search-help" class="dropdown">
+                    <summary class="btn btn-sm btn-circle btn-ghost" aria-label="Search syntax">?</summary>
+                    <div class="dropdown-content card bg-base-100 shadow-lg" style="inset-inline-end: 0; width: 26rem">
+                        <div class="card-body text-xs leading-snug">
+                            <p class="text-sm font-semibold">Search syntax</p>
+                            <p>Terms are separated by commas and <em>all</em> must match. A bare term is a phrase looked for
+                               anywhere in a ticket — id, title, body, labels, branch, external binding, PR.</p>
+                            <div class="grid gap-1" style="grid-template-columns: auto 1fr; column-gap: .75rem">
+                                <code class="font-mono">text:</code><span class="opacity-70">that same phrase, spelled out</span>
+                                <code class="font-mono">label:</code><span class="opacity-70">one of the ticket's labels</span>
+                                <code class="font-mono">epic:</code><span class="opacity-70">its epic, by id or title</span>
+                                <code class="font-mono">id:</code><span class="opacity-70">the ticket id</span>
+                                <code class="font-mono">note:</code><span class="opacity-70">progress notes — kept out of bare text</span>
+                                <code class="font-mono">status:</code><span class="opacity-70">draft / stub / review / ready</span>
+                                <code class="font-mono">col: column:</code><span class="opacity-70">todo / doing / review / done</span>
+                                <code class="font-mono">landed:</code><span class="opacity-70">done and not discarded</span>
+                                <code class="font-mono">discarded:</code><span class="opacity-70">abandoned rather than shipped</span>
+                                <code class="font-mono">blocked:</code><span class="opacity-70">waiting on a dependency</span>
+                            </div>
+                            <p class="opacity-70">Values match as substrings; <code class="font-mono">status:</code> takes any
+                               prefix, so <code class="font-mono">status:re</code> is review. Booleans read
+                               <code class="font-mono">true/yes/y/1/on</code> and their negatives.</p>
+                            <p class="opacity-70">Quote a value to keep a comma inside it
+                               (<code class="font-mono">label:"foo, bar"</code>); quoting a whole term forces it to plain text.
+                               An unknown key or a value that doesn't fit is searched as plain text — never an error.</p>
+                            <p class="font-mono">landed:true, label:ux, realtime results</p>
+                        </div>
+                    </div>
+                </details>
             </div>
         </div>
         {#-
