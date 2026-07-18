@@ -110,9 +110,107 @@ async fn filters_hide_cards_and_disable_dragging() {
         Op::CreateTicket { title: "Unlabelled".into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![], status: Status::Draft },
     )
     .unwrap();
-    let html = body_text(router.oneshot(get("/ui/board?label=ui")).await.unwrap()).await;
+    let html = body_text(router.oneshot(get("/ui/board?q=label:ui")).await.unwrap()).await;
     assert!(html.contains("Labelled ui") && !html.contains("Unlabelled"), "{html}");
     assert!(html.contains(r#"data-draggable="false""#), "a filtered board must not reorder");
+}
+
+/// Seed a ticket with a body and labels of its own — `seed_ticket` fixes both, and search is about exactly those.
+fn seed_full(store: &Store, title: &str, body: &str, labels: &[&str]) -> String {
+    ops::apply(
+        store,
+        None,
+        Op::CreateTicket {
+            title: title.into(),
+            body: body.into(),
+            epic: None,
+            labels: labels.iter().map(|l| (*l).to_owned()).collect(),
+            depends_on: vec![],
+            status: Status::Ready,
+        },
+    )
+    .unwrap()
+    .created_ids[0]
+        .clone()
+}
+
+#[tokio::test]
+async fn the_search_bar_matches_free_text_across_every_column() {
+    let (_dir, router, store) = test_app();
+    for title in ["Alpha", "Beta", "Gamma", "Delta"] {
+        seed_full(&store, title, "shares the phrase quantum ledger", &[]);
+    }
+    seed_full(&store, "Epsilon", "about something else entirely", &[]);
+
+    // One card per column, so a bare phrase has to reach past todo.
+    ops::apply(&store, None, Op::Claim { id: TicketId("K-2".into()), agent: "claude".into() }).unwrap();
+    to_review_with_branch(&store, "K-3", "k-3/work");
+    to_done_with_branch(&store, "K-4", "k-4/work");
+
+    let html = body_text(router.oneshot(get("/ui/board?q=quantum+ledger")).await.unwrap()).await;
+    let missing: Vec<&str> = ["Alpha", "Beta", "Gamma", "Delta"].into_iter().filter(|t| !html.contains(t)).collect();
+    assert!(missing.is_empty(), "a bare phrase reaches every column, but {missing:?} did not render: {html}");
+    assert!(!html.contains("Epsilon"), "a card without the phrase must go: {html}");
+}
+
+#[tokio::test]
+async fn the_example_query_narrows_to_the_landed_ux_card() {
+    let (_dir, router, store) = test_app();
+    seed_full(&store, "Landed with the phrase", "realtime results as you type", &["UX"]);
+    seed_full(&store, "Discarded with the phrase", "realtime results as you type", &["UX"]);
+    seed_full(&store, "Still in review", "realtime results as you type", &["UX"]);
+    seed_full(&store, "Landed without the phrase", "batch results, overnight", &["UX"]);
+
+    to_done_with_branch(&store, "K-1", "k-1/work");
+    to_review_with_branch(&store, "K-2", "k-2/work");
+    ops::apply(&store, None, Op::DiscardTicket { id: TicketId("K-2".into()), reason: "superseded".into() }).unwrap();
+    to_review_with_branch(&store, "K-3", "k-3/work");
+    to_done_with_branch(&store, "K-4", "k-4/work");
+
+    let html = body_text(router.oneshot(get("/ui/board?q=landed:+true,+label:+ux,+realtime+results")).await.unwrap()).await;
+    assert!(html.contains("Landed with the phrase"), "the acceptance card must render: {html}");
+    let leaked: Vec<&str> = ["Discarded with the phrase", "Still in review", "Landed without the phrase"]
+        .into_iter()
+        .filter(|t| html.contains(t))
+        .collect();
+    assert!(leaked.is_empty(), "only the landed ux card may survive, but {leaked:?} did too: {html}");
+}
+
+#[tokio::test]
+async fn a_blank_query_keeps_the_board_draggable() {
+    let (_dir, router, store) = test_app();
+    seed_ticket(&store, "Anything at all");
+
+    for query in ["", "%20%20", ",,", "%20,%20", "%22%22"] {
+        let html = body_text(router.clone().oneshot(get(&format!("/ui/board?q={query}"))).await.unwrap()).await;
+        assert!(html.contains(r#"data-draggable="true""#), "?q={query} hides nothing, so the board must still drag: {html}");
+        assert!(html.contains("Anything at all"), "?q={query} must admit every card: {html}");
+    }
+
+    let html = body_text(router.oneshot(get("/ui/board?q=label:ui")).await.unwrap()).await;
+    assert!(html.contains(r#"data-draggable="false""#), "a real query must stop the drag: {html}");
+}
+
+#[tokio::test]
+async fn the_filter_bar_offers_one_search_box_and_the_epic_dropdown() {
+    let (_dir, router, _store) = test_app();
+    let html = body_text(router.oneshot(get("/")).await.unwrap()).await;
+
+    assert!(html.contains(r#"name="q""#), "the search box must be there: {html}");
+    assert!(html.contains("search… or label:ux, status:ready, landed:true"), "with its grammar hint: {html}");
+    assert!(html.contains(r#"id="filter-epic""#), "the epic dropdown survives — it is discovery, not filtering: {html}");
+    // The create modals also carry a `name="status"`, so assert on the filter bar's own spelling.
+    assert!(!html.contains(r#"<select name="status" class="select select-sm"#), "the status dropdown is gone: {html}");
+    assert!(!html.contains(r#"name="label""#), "the label input is gone: {html}");
+}
+
+#[tokio::test]
+async fn a_bookmarked_label_parameter_is_inert() {
+    let (_dir, router, store) = test_app();
+    seed_ticket(&store, "Still visible");
+    let stale = body_text(router.clone().oneshot(get("/ui/board?label=ui")).await.unwrap()).await;
+    let blank = body_text(router.oneshot(get("/ui/board?q=")).await.unwrap()).await;
+    assert_eq!(stale, blank, "a filter that no longer exists must go inert, not error");
 }
 
 #[tokio::test]

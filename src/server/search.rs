@@ -1,7 +1,7 @@
 //! The filter bar's query grammar: a comma-separated conjunction of terms over the board's tickets and epics.
 //!
 //! A fragment is either a bare phrase searched across a ticket's user-facing text, or a `key: value` term narrowing one
-//! field. Everything is case-insensitive, all terms are ANDed, and there is no OR, no negation and no grouping.
+//! field. Everything is case-insensitive, terms combine by conjunction only — no `OR`, no negation, no grouping.
 //!
 //! **Parsing is infallible and has no error type.** The box fires on every keystroke after a 300 ms debounce, so a
 //! half-typed `label:` or `landed: t` must render a board rather than an error: anything the grammar does not recognise
@@ -248,9 +248,9 @@ mod tests {
     /// The dragging invariant's first half: nothing that hides no cards may report itself as a filter.
     #[test]
     fn blank_and_punctuation_only_queries_are_empty() {
-        ["", "   ", ",,", " , ", "\t\n", ",  ,,   ,", "\"\""]
-            .into_iter()
-            .for_each(|raw| assert!(Query::parse(raw).is_empty(), "{raw:?} must parse to no terms"));
+        let filtering: Vec<&str> =
+            ["", "   ", ",,", " , ", "\t\n", ",  ,,   ,", "\"\""].into_iter().filter(|raw| !Query::parse(raw).is_empty()).collect();
+        assert!(filtering.is_empty(), "these hide nothing, so they must parse to no terms: {filtering:?}");
     }
 
     /// The other half: a query with no terms admits every ticket, whatever shape it is in.
@@ -299,9 +299,11 @@ mod tests {
         t.column = Column::Review { branch: Some("k-27/search-bar".into()) };
         let v = view(t);
 
-        ["k-27", "search bar", "realtime results", "ux", "search-bar", "github issue#42"]
+        let missed: Vec<&str> = ["k-27", "search bar", "realtime results", "ux", "search-bar", "github issue#42"]
             .into_iter()
-            .for_each(|q| assert!(Query::parse(q).matches(&v, &[]), "{q} must match"));
+            .filter(|q| !Query::parse(q).matches(&v, &[]))
+            .collect();
+        assert!(missed.is_empty(), "every field a bare phrase covers must match: {missed:?}");
         assert!(!Query::parse("nowhere in this ticket").matches(&v, &[]));
     }
 
@@ -354,9 +356,11 @@ mod tests {
         assert!(Query::parse("epic: ep-1").matches_epic(&e));
         assert!(Query::parse("status: ready").matches_epic(&e));
 
-        ["label: ux", "col: todo", "landed: false", "discarded:no", "blocked:false", "id: EP-1", "note: anything"]
+        let leaked: Vec<&str> = ["label: ux", "col: todo", "landed: false", "discarded:no", "blocked:false", "id: EP-1", "note: anything"]
             .into_iter()
-            .for_each(|q| assert!(!Query::parse(q).matches_epic(&e), "{q} is ticket-only and must hide the epic"));
+            .filter(|q| Query::parse(q).matches_epic(&e))
+            .collect();
+        assert!(leaked.is_empty(), "a ticket-only term cannot be satisfied by an epic, so it must hide the card: {leaked:?}");
     }
 
     #[test]
