@@ -1,9 +1,4 @@
 /target
 **/*.rs.bk
 
-# Board store internals. `.kanban/board.json` itself IS committed — it is the
-# shared task tracker. These are per-machine runtime artifacts.
-.kanban/.lock
-.kanban/*.tmp
-.kanban/serve.pid
-.kanban/claims.json
+.kanban/
