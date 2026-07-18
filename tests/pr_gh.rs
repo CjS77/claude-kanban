@@ -76,7 +76,7 @@ fn create_pr_pushes_once_dedupes_and_names_a_missing_gh() {
     let id = TicketId("K-1".into());
     ops::apply(&store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
     ops::apply(&store, None, Op::StampWorktree { id: id.clone(), branch: "k-1/work".into(), path: "/tmp/unused".into() }).unwrap();
-    ops::apply(&store, None, Op::MoveTicket { id, to: ColumnId::Done, position: None, owner: None }).unwrap();
+    ops::apply(&store, None, Op::MoveTicket { id, to: ColumnId::Review, position: None, owner: None, branch: None }).unwrap();
 
     // The gh shim: logs argv, answers `pr list` from a swappable file and `pr create` with the canned URL.
     let shims = scratch.path().join("shims");
@@ -105,8 +105,13 @@ fn create_pr_pushes_once_dedupes_and_names_a_missing_gh() {
     assert_eq!(outcome, format!("ok created=true url={PR_URL}"));
     git(&bare, &["rev-parse", "--quiet", "--verify", "refs/heads/k-1/work"]).expect("the branch must have reached the remote");
 
+    // The click also bound the PR to the ticket — number parsed off the URL — so the poller can track it to its merge.
+    let board = store.read_board().unwrap();
+    let pr = board.tickets[0].pr.as_ref().expect("create_pr must record the PR on the ticket");
+    assert_eq!((pr.number, pr.url.as_str()), (7, PR_URL));
+
     // An open PR for the branch: the second click reports it, and neither pushes nor creates again.
-    std::fs::write(&list_file, format!(r#"[{{"url":"{PR_URL}"}}]"#)).unwrap();
+    std::fs::write(&list_file, format!(r#"[{{"number":7,"url":"{PR_URL}"}}]"#)).unwrap();
     let outcome = create_pr_with_path(&shim_path, &store_dir, &out);
     assert_eq!(outcome, format!("ok created=false url={PR_URL}"));
     let gh_log = std::fs::read_to_string(&log).unwrap();

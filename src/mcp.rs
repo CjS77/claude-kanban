@@ -324,7 +324,7 @@ impl KanbanServer {
     #[tool]
     async fn kanban_move(&self, Parameters(p): Parameters<MoveParams>) -> Result<CallToolResult, ErrorData> {
         let to = p.to.parse().map_err(|e: String| ErrorData::invalid_params(e, None))?;
-        let op = Op::MoveTicket { id: TicketId(p.ticket), to, position: p.position, owner: None };
+        let op = Op::MoveTicket { id: TicketId(p.ticket), to, position: p.position, owner: None, branch: None };
         self.apply(Some(p.expected_version), op).await
     }
 

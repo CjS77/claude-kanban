@@ -312,6 +312,7 @@ pub async fn move_ticket(
         to: parse_column(&form.to)?,
         position: form.position,
         owner: Some(app.ui_owner.clone()),
+        branch: None,
     };
     mutate(&app, &headers, op).await
 }

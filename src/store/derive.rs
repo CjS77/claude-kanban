@@ -50,14 +50,15 @@ pub fn epic_column(epic: &EpicId, board: &Board) -> ColumnId {
     }
 }
 
-/// A ticket is blocked while any of its dependencies is not yet `done`. Dangling dependency ids count as blocking, though
-/// validation refuses to load or write a board that has any.
-#[must_use] 
+/// A ticket is blocked while any of its dependencies is not yet `done` — and done means *landed*: a discarded
+/// dependency never unblocks its dependents, because the code they were promised does not exist. Dangling dependency
+/// ids count as blocking, though validation refuses to load or write a board that has any.
+#[must_use]
 pub fn blocked(ticket: &Ticket, board: &Board) -> bool {
     ticket
         .depends_on
         .iter()
-        .any(|dep| !matches!(board.ticket(dep).map(|t| &t.column), Some(Column::Done { .. })))
+        .any(|dep| !matches!(board.ticket(dep).map(|t| &t.column), Some(Column::Done { discarded: false, .. })))
 }
 
 /// The handoff contract: the highest ticket in `todo` that is unblocked, unclaimed, not `external` (external tickets are

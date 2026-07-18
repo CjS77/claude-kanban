@@ -28,13 +28,13 @@ pub struct PrReport {
     pub created: bool,
 }
 
-/// The button-visibility predicate: a non-external `done` ticket whose branch still exists locally, in a repo with at
-/// least one remote (any git error — e.g. no repo at all — counts as false). Checked live per detail-pane render, never
-/// cached: two subprocesses per pane open is cheap, and a user who adds a remote mid-session in order to push must not
-/// need a server restart.
+/// The button-visibility predicate: a non-external `review` ticket whose branch still exists locally, in a repo with at
+/// least one remote (any git error — e.g. no repo at all — counts as false). Review is the PR moment — a done ticket
+/// has already landed. Checked live per detail-pane render, never cached: two subprocesses per pane open is cheap, and
+/// a user who adds a remote mid-session in order to push must not need a server restart.
 #[must_use]
 pub fn eligible(store: &Store, ticket: &Ticket) -> bool {
-    let Column::Done { branch: Some(branch), .. } = &ticket.column else { return false };
+    let Column::Review { branch: Some(branch) } = &ticket.column else { return false };
     if ticket.external.is_some() {
         return false; // external tickets are worked elsewhere; their PRs are the daemon's business
     }
@@ -42,15 +42,16 @@ pub fn eligible(store: &Store, ticket: &Ticket) -> bool {
     has_remote(&repo) && git::branch_exists(&repo, branch)
 }
 
-/// Push the done ticket's branch and open a GitHub PR, deduping against an already-open PR for the branch first (the
+/// Push the review ticket's branch and open a GitHub PR, deduping against an already-open PR for the branch first (the
 /// shared-branch case: subtasks resolve several tickets on one branch, and the second ticket's click finds the first's
-/// PR). Re-validates everything [`eligible`] checks — the render is stale by click time.
+/// PR). Re-validates everything [`eligible`] checks — the render is stale by click time. Either way the PR is recorded
+/// on the ticket ([`Op::SetPr`]) so the poller can track it to its merge.
 pub fn create_pr(store: &Store, id: &TicketId) -> anyhow::Result<PrReport> {
     let repo = worktree::repo_root(store)?;
     let board = store.read_board()?;
     let ticket = board.ticket(id).with_context(|| format!("{id} not found on the board"))?;
-    let Column::Done { branch: Some(branch), .. } = &ticket.column else {
-        bail!("{id} is not a done ticket with a branch — nothing to open a PR from");
+    let Column::Review { branch: Some(branch) } = &ticket.column else {
+        bail!("{id} is not a review ticket with a branch — nothing to open a PR from");
     };
     if ticket.external.is_some() {
         bail!("{id} is external — its PRs are worked elsewhere");
@@ -61,8 +62,9 @@ pub fn create_pr(store: &Store, id: &TicketId) -> anyhow::Result<PrReport> {
     let remote = pick_remote(&repo)?;
 
     // Dedupe before pushing: never surprise-update an open PR.
-    if let Some(url) = open_pr_for(&repo, branch)? {
+    if let Some((number, url)) = open_pr_for(&repo, branch)? {
         tracing::info!(ticket = %id, %branch, %url, "PR already open — not pushing");
+        record_pr(store, id, number, &url);
         return Ok(PrReport { url, created: false });
     }
 
@@ -72,7 +74,24 @@ pub fn create_pr(store: &Store, id: &TicketId) -> anyhow::Result<PrReport> {
     let url = gh(&repo, &["pr", "create", "--head", branch, "--title", &title, "--body", &pr_body(ticket)])
         .with_context(|| format!("creating the PR for {branch}"))?;
     tracing::info!(ticket = %id, %branch, %url, "PR created");
+    if let Some(number) = trailing_pr_number(&url) {
+        record_pr(store, id, number, &url);
+    }
     Ok(PrReport { url, created: true })
+}
+
+/// Best-effort recording of the PR onto the ticket. The PR exists on GitHub either way — a failure to write the board
+/// (or an unparseable URL) must never fail the click; the poller's by-branch discovery is the safety net.
+fn record_pr(store: &Store, id: &TicketId, number: u64, url: &str) {
+    let pr = crate::store::model::PrRef { number, url: url.to_owned(), state: crate::store::model::PrState::Open, merged_commit: None };
+    if let Err(e) = crate::ops::apply(store, None, crate::ops::Op::SetPr { id: id.clone(), pr: Some(pr) }) {
+        tracing::warn!(ticket = %id, error = %e, "PR created but not recorded on the board — the poller will rediscover it by branch");
+    }
+}
+
+/// The `<n>` of a `…/pull/<n>` URL, as `gh pr create` prints it.
+fn trailing_pr_number(url: &str) -> Option<u64> {
+    url.rsplit_once("/pull/").and_then(|(_, n)| n.trim_end_matches('/').parse().ok())
 }
 
 /// The remote to push to: `origin` when present, else the first listed, else bail.
@@ -90,16 +109,18 @@ fn has_remote(repo: &Path) -> bool {
     git(repo, &["remote"]).is_ok_and(|out| !out.is_empty())
 }
 
-/// The URL of an already-open PR whose head is `branch`, if any.
-fn open_pr_for(repo: &Path, branch: &str) -> anyhow::Result<Option<String>> {
-    let out = gh(repo, &["pr", "list", "--head", branch, "--state", "open", "--json", "url"])?;
+/// The number and URL of an already-open PR whose head is `branch`, if any.
+fn open_pr_for(repo: &Path, branch: &str) -> anyhow::Result<Option<(u64, String)>> {
+    let out = gh(repo, &["pr", "list", "--head", branch, "--state", "open", "--json", "number,url"])?;
     let prs: Vec<serde_json::Value> = serde_json::from_str(&out).with_context(|| format!("unexpected `gh pr list` output: {out}"))?;
-    Ok(prs.first().and_then(|pr| pr["url"].as_str()).map(str::to_owned))
+    Ok(prs
+        .first()
+        .and_then(|pr| Some((pr["number"].as_u64()?, pr["url"].as_str()?.to_owned()))))
 }
 
 /// Run `gh` in the repo with every prompt suppressed (title and body are always supplied, so it never opens an editor).
 /// A missing binary becomes install advice rather than a bare spawn error.
-fn gh(repo: &Path, args: &[&str]) -> anyhow::Result<String> {
+pub(crate) fn gh(repo: &Path, args: &[&str]) -> anyhow::Result<String> {
     match git::run("gh", repo, args, &[("GH_PROMPT_DISABLED", "1"), ("GH_NO_UPDATE_NOTIFIER", "1")]) {
         Err(GitError::Spawn(e)) if e.kind() == std::io::ErrorKind::NotFound => {
             bail!("GitHub CLI (gh) not found — install it, or push the branch manually")

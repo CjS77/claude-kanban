@@ -365,7 +365,8 @@ pub fn detail(board: &Board, claims: &[Claim], id: &crate::store::model::TicketI
                 .map(|dep| DepCtx {
                     id: dep.to_string(),
                     title: board.ticket(dep).map_or_else(|| "(missing)".into(), |d| d.title.clone()),
-                    done: matches!(board.ticket(dep).map(|d| &d.column), Some(Column::Done { .. })),
+                    // The checkmark mirrors derive::blocked — a discarded dependency never satisfies.
+                    done: matches!(board.ticket(dep).map(|d| &d.column), Some(Column::Done { discarded: false, .. })),
                 })
                 .collect(),
             notes: t

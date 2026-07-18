@@ -36,8 +36,10 @@ pub enum Op {
     /// Delete an epic, detaching its tickets (they survive, epicless).
     DeleteEpic { id: EpicId },
     /// Move a ticket to a column at a position (`None` = bottom). `owner` is required to *enter* `doing` unless the ticket
-    /// is already there; entering `done` stamps `completed_at` and drops any live claim.
-    MoveTicket { id: TicketId, to: ColumnId, position: Option<usize>, owner: Option<String> },
+    /// is already there; entering `review` or `done` drops any live claim; entering `done` stamps `completed_at`.
+    /// `branch` overrides the branch recorded on the destination state — the close-out for a companion subtask worked on
+    /// its parent ticket's branch, which otherwise reaches review branchless and unlandable.
+    MoveTicket { id: TicketId, to: ColumnId, position: Option<usize>, owner: Option<String>, branch: Option<String> },
     SetTicketStatus { id: TicketId, status: Status },
     SetEpicStatus { id: EpicId, status: Status },
     /// Take a ticket: requires `ready`, unblocked, unclaimed, and not yet done. Moves it to `doing` owned by `agent` and
@@ -54,11 +56,22 @@ pub enum Op {
     /// target's spec, optionally split off new tickets and epics, and land everything touched or created in `review`.
     /// All-or-nothing.
     Refine { target: RefineTarget, title: Option<String>, body: String, split_tickets: Vec<NewTicketSpec>, split_epics: Vec<NewEpicSpec> },
+    /// Land a review ticket in `done` because its code has provably reached the local main branch. Constructed only by
+    /// the landing sweep; re-checks its evidence under the lock (still in review, branch unchanged) and refuses —
+    /// harmlessly — when the board moved underneath the slow git checks. Appends `reason` as a progress note so the
+    /// human always sees why a card jumped.
+    LandTicket { id: TicketId, expected_branch: Option<String>, reason: String },
+    /// Retire a review ticket without landing it: `done` with `discarded: true`, which never satisfies dependencies.
+    /// Always an explicit human action (the Discard button) — the sweep never constructs this.
+    DiscardTicket { id: TicketId, reason: String },
+    /// Record (or clear) the ticket's bound GitHub PR — the Create PR button on creation, the serve poller on discovery
+    /// and on state transitions. Pure data recording; refuses nothing.
+    SetPr { id: TicketId, pr: Option<crate::store::model::PrRef> },
     /// Stamp a started worktree's branch onto the ticket's `doing` state and its path onto the live claim.
     /// Constructed only by `worktree::start` — still funnelled through here so it obeys every rule.
     StampWorktree { id: TicketId, branch: String, path: std::path::PathBuf },
     /// Drop the worktree path from the live claim (the claim itself survives — the ticket is in flight until moved to
-    /// `done`). Constructed only by `worktree::finish`.
+    /// `review`). Constructed only by `worktree::finish`.
     ClearWorktreePath { id: TicketId },
 }
 
@@ -183,6 +196,9 @@ impl Op {
             Op::AddNote { .. } => "add_note",
             Op::BindExternal { .. } => "bind_external",
             Op::Refine { .. } => "refine",
+            Op::LandTicket { .. } => "land_ticket",
+            Op::DiscardTicket { .. } => "discard_ticket",
+            Op::SetPr { .. } => "set_pr",
             Op::StampWorktree { .. } => "stamp_worktree",
             Op::ClearWorktreePath { .. } => "clear_worktree_path",
         }
@@ -215,7 +231,7 @@ fn transition(op: Op, board: &mut Board, claims: &mut Vec<Claim>) -> Result<OpOu
         Op::UpdateEpic { id, patch } => update_epic(board, &id, patch),
         Op::DeleteTicket { id } => delete_ticket(board, claims, &id),
         Op::DeleteEpic { id } => delete_epic(board, &id),
-        Op::MoveTicket { id, to, position, owner } => move_ticket(board, claims, &id, to, position, owner),
+        Op::MoveTicket { id, to, position, owner, branch } => move_ticket(board, claims, &id, to, position, owner, branch),
         Op::SetTicketStatus { id, status } => set_ticket_status(board, &id, status),
         Op::SetEpicStatus { id, status } => set_epic_status(board, &id, status),
         Op::Claim { id, agent } => claim(board, claims, &id, &agent),
@@ -223,6 +239,9 @@ fn transition(op: Op, board: &mut Board, claims: &mut Vec<Claim>) -> Result<OpOu
         Op::AddNote { id, text, author } => add_note(board, &id, text, author),
         Op::BindExternal { id, external } => bind_external(board, &id, external),
         Op::Refine { target, title, body, split_tickets, split_epics } => refine(board, claims, &target, title, body, split_tickets, split_epics),
+        Op::LandTicket { id, expected_branch, reason } => land_ticket(board, claims, &id, expected_branch.as_deref(), &reason),
+        Op::DiscardTicket { id, reason } => discard_ticket(board, claims, &id, &reason),
+        Op::SetPr { id, pr } => set_pr(board, &id, pr),
         Op::StampWorktree { id, branch, path } => stamp_worktree(board, claims, &id, &branch, &path),
         Op::ClearWorktreePath { id } => Ok(clear_worktree_path(claims, &id)),
     }
@@ -319,10 +338,11 @@ fn move_ticket(
     to: ColumnId,
     position: Option<usize>,
     owner: Option<String>,
+    branch: Option<String>,
 ) -> Result<OpOutput, OpError> {
     let ticket = ticket_mut(board, id)?;
-    ticket.column = next_column_state(&ticket.column, to, owner, id)?;
-    if to == ColumnId::Done {
+    ticket.column = next_column_state(&ticket.column, to, owner, branch, id)?;
+    if matches!(to, ColumnId::Review | ColumnId::Done) {
         remove_claim(claims, id);
     }
     reposition(board, id, to, position);
@@ -332,11 +352,20 @@ fn move_ticket(
 /// The column-data rules for a move. Entering a state fills exactly that state's fields:
 /// - `todo` carries nothing — owner and branch are dropped.
 /// - `doing` needs an owner: the one supplied, or the existing one when the ticket is already `doing`. The branch survives.
-/// - `review` carries the branch — code-complete, waiting to land.
+/// - `review` carries the branch — code-complete, waiting to land. Nobody owns review work.
 /// - `done` stamps `completed_at` now and carries the branch over. Moves land as kept (`discarded: false`); retiring
 ///   work without landing it is the explicit discard operation, never a plain move.
-fn next_column_state(current: &Column, to: ColumnId, owner: Option<String>, id: &TicketId) -> Result<Column, OpError> {
-    let branch = current.branch().map(str::to_owned);
+///
+/// `branch_override` beats the branch carried on the current state — a companion subtask worked on its parent's branch
+/// records that shared branch as it moves, having never had a worktree of its own.
+fn next_column_state(
+    current: &Column,
+    to: ColumnId,
+    owner: Option<String>,
+    branch_override: Option<String>,
+    id: &TicketId,
+) -> Result<Column, OpError> {
+    let branch = branch_override.or_else(|| current.branch().map(str::to_owned));
     match to {
         ColumnId::Todo => Ok(Column::Todo),
         ColumnId::Doing => {
@@ -351,10 +380,49 @@ fn next_column_state(current: &Column, to: ColumnId, owner: Option<String>, id: 
         }
         ColumnId::Review => Ok(Column::Review { branch }),
         ColumnId::Done => match current {
-            Column::Done { .. } => Ok(current.clone()),
+            Column::Done { .. } if branch.as_deref() == current.branch() => Ok(current.clone()),
+            Column::Done { completed_at, discarded, .. } => Ok(Column::Done { branch, completed_at: *completed_at, discarded: *discarded }),
             _ => Ok(Column::Done { branch, completed_at: Utc::now(), discarded: false }),
         },
     }
+}
+
+/// The landing sweep's move: review → done, with the evidence re-checked under the lock. The sweep's git checks run
+/// *outside* the lock (they are slow), so by the time this applies, the human may have dragged the card elsewhere or a
+/// rework may have re-stamped the branch — in either case the evidence no longer describes the ticket and the landing
+/// refuses, harmlessly: the next sweep re-derives everything from fresh state.
+fn land_ticket(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, expected_branch: Option<&str>, reason: &str) -> Result<OpOutput, OpError> {
+    let ticket = ticket_mut(board, id)?;
+    let Column::Review { branch } = &ticket.column else {
+        return Err(OpError::Invalid(format!("{id} is no longer in review — not landing it")));
+    };
+    if branch.as_deref() != expected_branch {
+        return Err(OpError::Invalid(format!("{id}'s branch changed since the evidence was gathered — not landing it")));
+    }
+    ticket.column = Column::Done { branch: branch.clone(), completed_at: Utc::now(), discarded: false };
+    ticket.notes.push(Note { at: Utc::now(), author: Some("kanban".into()), text: reason.to_owned() });
+    remove_claim(claims, id); // review tickets are unclaimed by construction, but never leave a ghost behind
+    reposition(board, id, ColumnId::Done, None);
+    Ok(OpOutput::plain(json!({ "id": id, "column": ColumnId::Done, "landed_from": "review" })))
+}
+
+/// The explicit human retirement: review → done with `discarded: true`. Dependents stay blocked — that is the point.
+fn discard_ticket(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, reason: &str) -> Result<OpOutput, OpError> {
+    let ticket = ticket_mut(board, id)?;
+    let Column::Review { branch } = &ticket.column else {
+        return Err(OpError::Invalid(format!("{id} is not in review — only code-complete, unlanded work can be discarded")));
+    };
+    ticket.column = Column::Done { branch: branch.clone(), completed_at: Utc::now(), discarded: true };
+    ticket.notes.push(Note { at: Utc::now(), author: Some("kanban".into()), text: reason.to_owned() });
+    remove_claim(claims, id);
+    reposition(board, id, ColumnId::Done, None);
+    Ok(OpOutput::plain(json!({ "id": id, "column": ColumnId::Done, "discarded": true })))
+}
+
+fn set_pr(board: &mut Board, id: &TicketId, pr: Option<crate::store::model::PrRef>) -> Result<OpOutput, OpError> {
+    let ticket = ticket_mut(board, id)?;
+    ticket.pr = pr;
+    Ok(OpOutput::plain(json!({ "id": id, "pr": ticket.pr })))
 }
 
 /// Put `id` at `position` among the tickets of `column` (`None` or past-the-end = bottom), preserving everyone else's
@@ -382,6 +450,8 @@ fn set_epic_status(board: &mut Board, id: &EpicId, status: Status) -> Result<OpO
 /// Claiming enforces the handoff contract: unblocked, unclaimed, not already done, and either `ready` (to implement) or
 /// `stub` (to refine — the card sits in `doing`, tinted pink, while the spec is written; `refine` returns it to `todo`).
 /// (External tickets *are* claimable — delegating claims them on the delegate's behalf; they just never get a worktree.)
+/// A ticket in `review` is claimable too: that is the rework path (PR feedback) — the claim keeps the recorded branch,
+/// and `worktree start` re-attaches to it.
 fn claim(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, agent: &str) -> Result<OpOutput, OpError> {
     if let Some(existing) = find_claim(claims, id) {
         return Err(OpError::AlreadyClaimed { id: id.clone(), agent: existing.agent.clone() });
@@ -393,7 +463,7 @@ fn claim(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, agent: &str)
         Column::Doing { owner, .. } if owner != agent => {
             return Err(OpError::AlreadyClaimed { id: id.clone(), agent: owner.clone() });
         }
-        _ => {}
+        Column::Todo | Column::Doing { .. } | Column::Review { .. } => {}
     }
     if !matches!(ticket.status, Status::Ready | Status::Stub) {
         return Err(OpError::Invalid(format!("{id} is {} — only ready tickets (to implement) or stubs (to refine) can be claimed", ticket.status)));
@@ -632,7 +702,7 @@ mod tests {
         assert!(matches!(&board.ticket(&id).unwrap().column, Column::Doing { owner, .. } if owner == "claude"));
         assert_eq!(store.read_claims().unwrap().len(), 1);
 
-        apply(&store, None, Op::MoveTicket { id: id.clone(), to: ColumnId::Done, position: None, owner: None }).unwrap();
+        apply(&store, None, Op::MoveTicket { id: id.clone(), to: ColumnId::Done, position: None, owner: None, branch: None }).unwrap();
         let board = store.read_board().unwrap();
         assert!(matches!(board.ticket(&id).unwrap().column, Column::Done { .. }));
         assert!(store.read_claims().unwrap().is_empty(), "reaching done drops the live claim");
@@ -683,7 +753,7 @@ mod tests {
         assert!(matches!(err, OpError::AlreadyClaimed { agent, .. } if agent == "claude"));
 
         // Done.
-        apply(&store, None, Op::MoveTicket { id: a.clone(), to: ColumnId::Done, position: None, owner: None }).unwrap();
+        apply(&store, None, Op::MoveTicket { id: a.clone(), to: ColumnId::Done, position: None, owner: None, branch: None }).unwrap();
         let err = apply(&store, None, Op::Claim { id: a, agent: "claude".into() }).unwrap_err();
         assert!(err.to_string().contains("already done"), "{err}");
     }
@@ -709,22 +779,22 @@ mod tests {
         let ids: Vec<TicketId> = ["a", "b", "c"].iter().map(|t| create(&store, t)).collect();
 
         // Within a column: bottom → top.
-        apply(&store, None, Op::MoveTicket { id: ids[2].clone(), to: ColumnId::Todo, position: Some(0), owner: None }).unwrap();
+        apply(&store, None, Op::MoveTicket { id: ids[2].clone(), to: ColumnId::Todo, position: Some(0), owner: None, branch: None }).unwrap();
         let board = store.read_board().unwrap();
         let todo: Vec<&str> = board.tickets_in(ColumnId::Todo).map(|t| t.id.0.as_str()).collect();
         assert_eq!(todo, vec!["K-3", "K-1", "K-2"]);
 
         // Across columns with an owner; position past the end clamps to bottom.
-        apply(&store, None, Op::MoveTicket { id: ids[0].clone(), to: ColumnId::Doing, position: Some(99), owner: Some("user".into()) }).unwrap();
+        apply(&store, None, Op::MoveTicket { id: ids[0].clone(), to: ColumnId::Doing, position: Some(99), owner: Some("user".into()), branch: None }).unwrap();
         let board = store.read_board().unwrap();
         assert!(matches!(&board.ticket(&ids[0]).unwrap().column, Column::Doing { owner, .. } if owner == "user"));
 
         // Entering doing without any owner refuses.
-        let err = apply(&store, None, Op::MoveTicket { id: ids[1].clone(), to: ColumnId::Doing, position: None, owner: None }).unwrap_err();
+        let err = apply(&store, None, Op::MoveTicket { id: ids[1].clone(), to: ColumnId::Doing, position: None, owner: None, branch: None }).unwrap_err();
         assert!(err.to_string().contains("needs an owner"), "{err}");
 
         // Back to todo drops the owner; the branch is dropped too (todo carries nothing).
-        apply(&store, None, Op::MoveTicket { id: ids[0].clone(), to: ColumnId::Todo, position: None, owner: None }).unwrap();
+        apply(&store, None, Op::MoveTicket { id: ids[0].clone(), to: ColumnId::Todo, position: None, owner: None, branch: None }).unwrap();
         assert!(matches!(store.read_board().unwrap().ticket(&ids[0]).unwrap().column, Column::Todo));
     }
 
@@ -734,7 +804,7 @@ mod tests {
         let id = create(&store, "with branch");
         apply(&store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
         apply(&store, None, Op::StampWorktree { id: id.clone(), branch: "k-1/with-branch".into(), path: "/tmp/wt".into() }).unwrap();
-        apply(&store, None, Op::MoveTicket { id: id.clone(), to: ColumnId::Done, position: None, owner: None }).unwrap();
+        apply(&store, None, Op::MoveTicket { id: id.clone(), to: ColumnId::Done, position: None, owner: None, branch: None }).unwrap();
 
         let board = store.read_board().unwrap();
         match &board.ticket(&id).unwrap().column {
@@ -954,5 +1024,170 @@ mod tests {
 
         // Sanity: the read model still nominates it.
         assert_eq!(derive::next_ticket(&board, &store.read_claims().unwrap()).unwrap().id, id);
+    }
+
+    /// Claim + stamp + move to review: the standard close-out shape for a worked ticket.
+    fn to_review(store: &Store, id: &TicketId, branch: &str) {
+        apply(store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
+        apply(store, None, Op::StampWorktree { id: id.clone(), branch: branch.into(), path: "/tmp/unused".into() }).unwrap();
+        apply(store, None, Op::MoveTicket { id: id.clone(), to: ColumnId::Review, position: None, owner: None, branch: None }).unwrap();
+    }
+
+    #[test]
+    fn moving_to_review_carries_the_branch_and_drops_the_claim() {
+        let (_dir, store) = scratch();
+        let id = create(&store, "worked");
+        to_review(&store, &id, "k-1/worked");
+
+        let board = store.read_board().unwrap();
+        assert!(matches!(&board.ticket(&id).unwrap().column, Column::Review { branch: Some(b) } if b == "k-1/worked"));
+        assert!(store.read_claims().unwrap().is_empty(), "review work is nobody's — the claim drops on entry");
+    }
+
+    #[test]
+    fn a_branch_override_on_the_move_records_a_companion_subtasks_shared_branch() {
+        // A companion subtask is worked in its parent's worktree: claimed, never stamped. Without the override it would
+        // reach review branchless and the auto-lander could never resolve it.
+        let (_dir, store) = scratch();
+        let id = create(&store, "companion");
+        apply(&store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::MoveTicket { id: id.clone(), to: ColumnId::Review, position: None, owner: None, branch: Some("k-9/parent".into()) },
+        )
+        .unwrap();
+
+        let board = store.read_board().unwrap();
+        assert!(matches!(&board.ticket(&id).unwrap().column, Column::Review { branch: Some(b) } if b == "k-9/parent"));
+    }
+
+    #[test]
+    fn claiming_from_review_is_the_rework_path_and_keeps_the_branch() {
+        let (_dir, store) = scratch();
+        let id = create(&store, "needs rework");
+        to_review(&store, &id, "k-1/needs-rework");
+
+        apply(&store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
+        let board = store.read_board().unwrap();
+        assert!(
+            matches!(&board.ticket(&id).unwrap().column, Column::Doing { owner, branch: Some(b) } if owner == "claude" && b == "k-1/needs-rework"),
+            "rework re-claims with the branch intact, so worktree start re-attaches"
+        );
+    }
+
+    #[test]
+    fn land_ticket_moves_review_to_done_with_the_reason_on_the_record() {
+        let (_dir, store) = scratch();
+        let id = create(&store, "landed");
+        to_review(&store, &id, "k-1/landed");
+
+        apply(
+            &store,
+            None,
+            Op::LandTicket { id: id.clone(), expected_branch: Some("k-1/landed".into()), reason: "k-1/landed merged into main".into() },
+        )
+        .unwrap();
+        let board = store.read_board().unwrap();
+        let ticket = board.ticket(&id).unwrap();
+        assert!(matches!(&ticket.column, Column::Done { discarded: false, branch: Some(b), .. } if b == "k-1/landed"));
+        assert_eq!(ticket.notes.last().unwrap().text, "k-1/landed merged into main");
+        assert_eq!(ticket.notes.last().unwrap().author.as_deref(), Some("kanban"));
+    }
+
+    #[test]
+    fn land_ticket_refuses_stale_evidence() {
+        let (_dir, store) = scratch();
+        let id = create(&store, "moved on");
+
+        // Not in review at all.
+        let err =
+            apply(&store, None, Op::LandTicket { id: id.clone(), expected_branch: None, reason: "x".into() }).unwrap_err();
+        assert!(err.to_string().contains("no longer in review"), "{err}");
+
+        // In review, but the branch changed since the evidence was gathered.
+        to_review(&store, &id, "k-1/rebranded");
+        let err = apply(
+            &store,
+            None,
+            Op::LandTicket { id: id.clone(), expected_branch: Some("k-1/original".into()), reason: "x".into() },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("branch changed"), "{err}");
+        let board = store.read_board().unwrap();
+        assert!(matches!(board.ticket(&id).unwrap().column, Column::Review { .. }), "a refused landing changes nothing");
+    }
+
+    #[test]
+    fn discarding_closes_the_ticket_but_its_dependents_stay_blocked() {
+        let (_dir, store) = scratch();
+        let parent = create(&store, "abandoned approach");
+        let child = create(&store, "follow-up");
+        apply(
+            &store,
+            None,
+            Op::UpdateTicket { id: child.clone(), patch: TicketPatch { depends_on: Some(vec![parent.clone()]), ..TicketPatch::default() } },
+        )
+        .unwrap();
+        to_review(&store, &parent, "k-1/abandoned");
+
+        apply(&store, None, Op::DiscardTicket { id: parent.clone(), reason: "superseded by a different design".into() }).unwrap();
+        let board = store.read_board().unwrap();
+        assert!(matches!(board.ticket(&parent).unwrap().column, Column::Done { discarded: true, .. }));
+        assert!(derive::blocked(board.ticket(&child).unwrap(), &board), "the promised code never landed — the dependent stays blocked");
+        assert!(derive::next_ticket(&board, &[]).is_none(), "nothing on this board is workable");
+
+        // Only review tickets can be discarded — done and todo tickets refuse.
+        let err = apply(&store, None, Op::DiscardTicket { id: parent, reason: "again".into() }).unwrap_err();
+        assert!(err.to_string().contains("not in review"), "{err}");
+    }
+
+    #[test]
+    fn set_pr_records_updates_and_clears() {
+        use crate::store::model::{PrRef, PrState};
+        let (_dir, store) = scratch();
+        let id = create(&store, "tracked");
+
+        let open = PrRef { number: 7, url: "https://example.invalid/pull/7".into(), state: PrState::Open, merged_commit: None };
+        apply(&store, None, Op::SetPr { id: id.clone(), pr: Some(open) }).unwrap();
+        let board = store.read_board().unwrap();
+        assert_eq!(board.ticket(&id).unwrap().pr.as_ref().unwrap().number, 7);
+
+        let merged =
+            PrRef { number: 7, url: "https://example.invalid/pull/7".into(), state: PrState::Merged, merged_commit: Some("abc123".into()) };
+        apply(&store, None, Op::SetPr { id: id.clone(), pr: Some(merged) }).unwrap();
+        let board = store.read_board().unwrap();
+        assert_eq!(board.ticket(&id).unwrap().pr.as_ref().unwrap().state, PrState::Merged);
+
+        apply(&store, None, Op::SetPr { id: id.clone(), pr: None }).unwrap();
+        assert!(store.read_board().unwrap().ticket(&id).unwrap().pr.is_none());
+    }
+
+    #[test]
+    fn every_ticket_sharing_a_branch_lands_when_it_lands() {
+        // One worktree, one branch, several tickets (a parent and its companion subtasks): when the branch reaches main,
+        // the sweep lands each of them independently — none may be left behind.
+        let (_dir, store) = scratch();
+        let parent = create(&store, "parent");
+        let companion = create(&store, "companion");
+        to_review(&store, &parent, "k-1/shared");
+        apply(&store, None, Op::Claim { id: companion.clone(), agent: "claude".into() }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::MoveTicket { id: companion.clone(), to: ColumnId::Review, position: None, owner: None, branch: Some("k-1/shared".into()) },
+        )
+        .unwrap();
+
+        for id in [&parent, &companion] {
+            apply(
+                &store,
+                None,
+                Op::LandTicket { id: id.clone(), expected_branch: Some("k-1/shared".into()), reason: "k-1/shared merged into main".into() },
+            )
+            .unwrap();
+        }
+        let board = store.read_board().unwrap();
+        assert!(board.tickets.iter().all(|t| matches!(t.column, Column::Done { discarded: false, .. })));
     }
 }

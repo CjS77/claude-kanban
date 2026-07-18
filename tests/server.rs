@@ -221,12 +221,19 @@ async fn detail_and_edit_panes_render_and_404_cleanly() {
     assert_eq!(res.headers()["hx-retarget"], "#toasts", "a missing ticket toasts instead of breaking the pane");
 }
 
-/// Walk a seeded ticket to `done` carrying `branch`, the shape `pr::eligible` inspects.
-fn to_done_with_branch(store: &Store, id: &str, branch: &str) {
+/// Walk a seeded ticket to `review` carrying `branch`, the shape `pr::eligible` inspects.
+fn to_review_with_branch(store: &Store, id: &str, branch: &str) {
     let id = TicketId(id.into());
     ops::apply(store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
     ops::apply(store, None, Op::StampWorktree { id: id.clone(), branch: branch.into(), path: "/tmp/unused".into() }).unwrap();
-    ops::apply(store, None, Op::MoveTicket { id, to: ColumnId::Done, position: None, owner: None }).unwrap();
+    ops::apply(store, None, Op::MoveTicket { id, to: ColumnId::Review, position: None, owner: None, branch: None }).unwrap();
+}
+
+/// Walk a seeded ticket all the way to `done` carrying `branch` — the merged-badge shape.
+fn to_done_with_branch(store: &Store, id: &str, branch: &str) {
+    to_review_with_branch(store, id, branch);
+    ops::apply(store, None, Op::MoveTicket { id: TicketId(id.into()), to: ColumnId::Done, position: None, owner: None, branch: None })
+        .unwrap();
 }
 
 #[tokio::test]
@@ -241,10 +248,10 @@ async fn the_create_pr_button_tracks_eligibility_live() {
     store.init().unwrap();
     let router = router_for(&store);
 
-    seed_ticket(&store, "Done with branch");
-    to_done_with_branch(&store, "K-1", "k-1/work");
+    seed_ticket(&store, "In review with branch");
+    to_review_with_branch(&store, "K-1", "k-1/work");
 
-    // Done + branch, but no remote: no button.
+    // Review + branch, but no remote: no button.
     let html = body_text(router.clone().oneshot(get("/ui/ticket/K-1")).await.unwrap()).await;
     assert!(!html.contains("Create PR"), "{html}");
 
@@ -259,11 +266,18 @@ async fn the_create_pr_button_tracks_eligibility_live() {
     assert!(!html.contains("Create PR"), "{html}");
 
     // Clicking it on the branchless todo ticket refuses with a toast, not a push.
-    let res = router.clone().oneshot(post("/ui/ticket/K-2/create-pr", 4, "")).await.unwrap();
+    let res = router.clone().oneshot(post("/ui/ticket/K-2/create-pr", 5, "")).await.unwrap();
     assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(res.headers()["hx-retarget"], "#toasts");
     let toast = body_text(res).await;
-    assert!(toast.contains("not a done ticket with a branch"), "{toast}");
+    assert!(toast.contains("not a review ticket with a branch"), "{toast}");
+
+    // A done ticket has landed — the PR moment is over, no button however complete its data.
+    git(repo, &["branch", "k-3/landed"]).unwrap();
+    seed_ticket(&store, "Already landed");
+    to_done_with_branch(&store, "K-3", "k-3/landed");
+    let html = body_text(router.clone().oneshot(get("/ui/ticket/K-3")).await.unwrap()).await;
+    assert!(!html.contains("Create PR"), "{html}");
 
     // Deleting the local branch (merged and cleaned up) hides the button again.
     git(repo, &["branch", "-D", "k-1/work"]).unwrap();
