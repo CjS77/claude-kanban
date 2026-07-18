@@ -21,7 +21,8 @@ plugin, so it ends with a working board every time — including when there alre
 
 2. **Read the result.**
    - Success prints `Initialised an empty board at …` — it created `.kanban/board.json`, `.kanban/config.json`, and a
-     store-local `.gitignore`.
+     store-local `.gitignore`. The config is fully defined: every dial explicit at its default, `main_branch` pinned
+     from the repo (origin/HEAD, else main, else master), `port` deliberately `null` so `serve` can hunt.
    - **`already exists` on stderr is not a failure to report.** The project already has a board and `init` refused to
      clobber it — exactly right. Say the board already exists and carry on to step 3.
    - Any other non-zero exit is a real failure: report stderr and stop.
@@ -30,5 +31,6 @@ plugin, so it ends with a working board every time — including when there alre
    reimplement it from memory here. The one thing worth repeating because it bites hardest: **run `serve` in the
    background**, since it blocks until stopped and a foreground call wedges the session.
 
-4. **Tell the user to commit** `.kanban/board.json` and `.kanban/config.json`. The rest of `.kanban/` (claims, locks,
-   pid files) is machine-local and the seeded `.gitignore` already covers it.
+4. **Tell the user to commit** `.kanban/board.json` and `.kanban/config.json`, and that the ⚙ gear in the board's
+   header edits the config later. The rest of `.kanban/` (claims, locks, pid files, landing observations) is
+   machine-local and the seeded `.gitignore` already covers it.

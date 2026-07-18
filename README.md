@@ -1,6 +1,6 @@
 # claude-kanban
 
-A Claude Code plugin that gives a project a Kanban board — three columns, draggable cards, backed by a plain JSON file in your repo. No server accounts, no network: the board lives in `.kanban/board.json` and is committed with your code.
+A Claude Code plugin that gives a project a Kanban board — four columns, draggable cards, backed by a plain JSON file in your repo. No server accounts: the board lives in `.kanban/board.json` and is committed with your code.
 
 You drag cards around in a browser to say what matters. Claude reads the same board over MCP, picks up tickets, works each one in its own git worktree, and moves the cards across as it goes. Both sides see the same thing, live.
 
@@ -43,22 +43,28 @@ Several projects can serve at once: an explicit port (`--port`, `KANBAN_PORT`, o
 The workflow:
 
 1. **Write tickets** on the board — or drop one-line ideas as `stub`s for Claude to flesh out into specs.
-2. **Prioritise by dragging.** Column is workflow state (`todo` / `doing` / `done`); position in the column is priority. A ticket's `status` says how well-defined it is: `draft` (yours, untouchable) → `stub` (flesh me out) → `review` (vet the spec) → `ready` (implementable). Promoting to `ready` is your call, made on the card.
-3. **Run `/kanban:work`** in Claude Code. Claude claims the top eligible ticket, works it in its own worktree on its own branch, notes progress on the card, and moves it to `done` — then takes the next. When the board runs dry the loop doesn't exit: it sleeps and polls again, so you can keep dropping tickets while it runs — interrupt it to stop. Your checkout is never touched; integrating the reported branch is your explicit step — merge it locally, or click **Create PR** on the done ticket's detail pane to push the branch and open a GitHub PR via `gh`, with the PR URL recorded as a note on the card. `.kanban/config.json` tunes the loop: `"max_workers": N` fans out to N tickets at once, `"idle_time"` sets the sleep in seconds (default 300). `init` seeds it with both at their defaults, and re-running `init` never overwrites your edits. It leaves `"port"` out on purpose — no port means `serve` tries 4747 and hunts for a free one, whereas naming a port makes a busy port a hard failure; add it only when you want this project pinned to one.
-4. **Or `/kanban:delegate`** a ticket to an external worker: it's mirrored to a GitHub issue and the board tracks it as worked elsewhere.
+2. **Prioritise by dragging.** Column is workflow state (`todo` / `doing` / `review` / `done`); position in the column is priority. A ticket's `status` says how well-defined it is: `draft` (yours, untouchable) → `stub` (flesh me out) → `review` (vet the spec) → `ready` (implementable). Promoting to `ready` is your call, made on the card.
+3. **Run `/kanban:work`** in Claude Code. Claude claims the top eligible ticket, works it in its own worktree on its own branch, notes progress on the card, and moves it to `review` — code-complete, waiting to land — then takes the next. When the board runs dry the loop doesn't exit: it sleeps and polls again, so you can keep dropping tickets while it runs — interrupt it to stop. Your checkout is never touched; integrating the branch is your explicit step — merge it locally, or click **Create PR** on the review ticket's detail pane to push the branch and open a GitHub PR via `gh`.
+4. **Done happens by itself.** Done means *landed in your local main branch*: the board watches review tickets and moves each to `done` the moment its branch — or its PR's merge commit, once you pull — reaches local main, with a note saying why. A PR merged only on GitHub shows "PR merged — pull main" until the merge arrives locally. Work that will never land is retired with the card's **Discard** button; a discarded ticket closes but keeps its dependents blocked. `.kanban/config.json` tunes everything (editable from the board's ⚙ settings pane): `"main_branch"` anchors landing, `"poll_interval"` sets the PR-poll cadence in seconds (0 turns it off), `"max_workers"` fans `/kanban:work` out to N tickets at once, `"idle_time"` sets the dry-board sleep. `init` seeds every key at its default and never overwrites your edits; `"port"` seeds as `null` on purpose — no port means `serve` tries 4747 and hunts for a free one, whereas naming a port makes a busy port a hard failure.
+5. **Or `/kanban:delegate`** a ticket to an external worker: it's mirrored to a GitHub issue and the board tracks it as worked elsewhere; once its PR opens, move the card to `review` with the PR's head branch and the board lands it like any other.
 
-Dependencies (`depends_on`) block a ticket until they're all done, however high it sits. Epics group tickets, colour their cards, and move themselves — their column is derived from their tickets.
+Dependencies (`depends_on`) block a ticket until they're all done — and since done means landed, a dependent's fresh worktree is guaranteed to contain its predecessors' code. Epics group tickets, colour their cards, and move themselves — their column is derived from their tickets.
+
+**Upgrading from 1.x:** a v1 board upgrades itself in memory on first read and persists on the first write — commit the changed `board.json`. Collaborators still on a 1.x plugin can't read a v2 board, so upgrade together. Old done tickets stay done; drag one back to review if you want the landing machinery to re-judge it.
 
 ## Features
 
-- Three-column board: create, edit, drag, and delete tickets and epics; filter by epic, label, and status
+- Four-column board: create, edit, drag, and delete tickets and epics; filter by epic, label, and status
 - Live updates over SSE — cards move the moment Claude moves them
+- **Done means landed**: review tickets move to done automatically when their branch or PR provably reaches local main (ancestry, or patch-equivalence for rebase-then-delete flows) — never on guesswork; ambiguous cards get flagged for you
+- PR tracking: the Create PR button binds the PR to the ticket, a config-gated `gh` poll follows it to the merge, and daemon- or skill-created PRs are discovered by branch
 - Claimed cards show who's working, the branch, and the worktree; blocked tickets wear a badge
 - Typed MCP tools for Claude (`kanban_board`, `kanban_next`, `kanban_claim`, `kanban_move`, `kanban_refine`, …) — every write goes through the same validated operations as the UI, guarded by an advisory lock and an optimistic version counter
 - One ticket, one git worktree, one branch (`k-7/rate-limit-login`) — parallel sessions can't trample each other or your checkout
-- Everything local: one binary, a JSON file, a loopback server; nothing leaves the machine except on an explicit action of yours — pushing yourself, or clicking a done ticket's **Create PR** button
+- A settings pane (⚙) editing `.kanban/config.json` from the board
+- Everything local: one binary, a JSON file, a loopback server. Network happens in exactly two places, both yours to control: the explicit **Create PR** click, and the read-only `gh` PR poll (`"poll_interval": 0` switches it off)
 
-The reasoning behind these choices — store shape, worktree anchoring, statuses, interop — is in [design.md](design.md).
+The reasoning behind these choices — store shape, worktree anchoring, landing proofs, statuses, interop — is in [design.md](design.md).
 
 ## Development
 
@@ -96,7 +102,8 @@ commands/                    the plugin skills: /kanban:init, /kanban:open, /kan
 src/
   store/                     model, atomic IO, advisory lock, validation, derived read model
   ops.rs                     the single typed-mutation funnel both faces share
-  server/                    axum routes, Askama views, SSE, loopback hardening
+  land.rs                    landing detection: the offline sweep and the gh PR poll
+  server/                    axum routes, Askama views, SSE, loopback hardening, the landing loop
   mcp.rs                     the rmcp stdio server: kanban_* tools → ops
   worktree.rs                one-ticket-one-checkout: start / finish / list
 templates/                   Askama templates (the whole UI)
@@ -104,9 +111,10 @@ assets/                      embedded web assets: htmx, SortableJS, marked, DOMP
                              glue.js (the only hand-written JS), app.css (generated, committed)
 css/app.tailwind.css         Tailwind v4 source — rebuilt with `just css` (standalone CLI, no node)
 vendor/daisyui.js            daisyUI bundle, used only at CSS build time
-design.md                    the v1 design record: decisions and their reasons
+design.md                    the design record: decisions and their reasons
 .kanban/board.json           the board (created by `init`; committed)
 .kanban/claims.json          live claims — machine-local, gitignored
+.kanban/land-state.json      the landing sweep's branch observations — machine-local, gitignored
 ```
 
 ## Licence

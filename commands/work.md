@@ -30,23 +30,35 @@ loop after it):
 
 1. **Pick** — call `kanban_board` (remember the `version`), then `kanban_next`. Its `action` field says what the ticket
    needs: `implement` (a ready ticket — steps 2–8) or `refine` (a stub — see **Refining a stub** below). If nothing is
-   eligible, go idle instead of ending the loop — see **Idling** below.
+   eligible, go idle instead of ending the loop — see **Idling** below. `kanban_next` first auto-lands any review
+   tickets whose branches have reached local main, so **use the `version` it returns** for the claim — the sweep may
+   have advanced the board.
 2. **Claim** — `kanban_claim` the ticket. A pure board mutation; git is untouched.
 3. **Start** — `kanban_worktree_start`. Supply a `slug` yourself: a short kebab-case digest of the title
    (2–3 words, e.g. "Add authorization based on OAuth from Google" → `google-oauth`) beats the mechanical default.
 4. **Work** — `cd` into the reported worktree path and stay there for the ticket's lifetime. Read the ticket's `body` as
    the spec. Commit after each logical chunk — the worktree may live on volatile /tmp, and commits are what survive; but
-   don't spam micro-commits. If a subtask emerges mid-ticket, work it in this same worktree on this same branch —
-   never create a worktree from inside a worktree.
+   don't spam micro-commits. Subtasks that emerge mid-ticket come in two kinds — never confuse them:
+   - **Companion** (extra work you'll do *now*, as part of this ticket's session): create the ticket WITHOUT
+     `depends_on` this one (claiming a blocked ticket is refused, and the work rides this same branch anyway), claim
+     it, work it **in this same worktree on this same branch** — never create a worktree from inside a worktree —
+     and close it out with `kanban_move to=review branch=<this branch>`. The `branch` argument is what lets the board
+     land it: a companion never gets its own worktree, so nothing else records where its code lives.
+   - **Deferred follow-up** (real future work): create it WITH `depends_on` this ticket and leave it in todo. It stays
+     blocked until this ticket's code actually lands in main; only then does a fresh worktree off main contain what it
+     needs. Don't work it now.
 5. **Note** — `kanban_note` progress at meaningful moments: what landed, what's left, anything surprising. The human
    watches these appear live on the card.
 6. **Verify** — run the project's tests/build before calling anything done. A ticket whose tests fail is not done:
    note the failure and either fix it or release the ticket with a note explaining the blocker.
 7. **Finish** — `kanban_worktree_finish` (it refuses if you left uncommitted changes — commit them first; never
    `force_discard` without explicit human approval). Never pass `merge` unless the user asked for it.
-8. **Close out** — `kanban_move` the ticket to `done`. Report the branch name prominently: integrating it is the
-   user's explicit next step. With `--push`: `git push -u origin <branch>` and `gh pr create` (title from the ticket,
-   body summarising the work and linking the ticket id), then include the PR URL in the report.
+8. **Close out** — `kanban_move` the ticket to `review`. Done is not yours to declare: the board lands review tickets
+   in `done` automatically once their branch (or PR) is merged into the **local** main branch, and dependencies
+   unblock only then. Report the branch name prominently: integrating it is the user's explicit next step. With
+   `--push`: `git push -u origin <branch>` and `gh pr create` (title from the ticket, body summarising the work and
+   linking the ticket id), then include the PR URL in the report — you don't record the PR on the board, the server's
+   poller discovers it by branch.
 
 ## The parallel loop (max_workers > 1)
 
@@ -67,9 +79,10 @@ tickets in flight; a refinement counts as one worker, an implementation counts a
      fleshed-out spec text, a sharper title if it found one, and any splits. You call `kanban_refine` with what it
      returned — subagents never hold board-version state.
 3. **Close out as results arrive** — re-read `kanban_board` for a fresh version, then: reported success →
-   `kanban_move` to `done` (with `--push`, push the branch and open the PR first); reported failure or an unusable
-   result → `kanban_note` what happened and `kanban_release` the ticket. If the subagent died leaving the worktree
-   dirty, leave the worktree for the human — never `force_discard`.
+   `kanban_move` to `review` (with `--push`, push the branch and open the PR first; the board lands review tickets in
+   done itself once the merge reaches local main); reported failure or an unusable result → `kanban_note` what
+   happened and `kanban_release` the ticket. If the subagent died leaving the worktree dirty, leave the worktree for
+   the human — never `force_discard`.
 4. **Top up** — after each close-out, pick and claim the next eligible ticket while others are still running.
    Between close-outs, while tickets are in flight and fewer than `max_workers` are running, don't only wait for a
    completion: re-poll the board on a fixed 60-second cadence. Workers are active, so the human is likely at the
@@ -103,6 +116,17 @@ eligible (and, in the parallel loop, nothing is in flight):
 Only the user ends an idling loop — by interrupting or saying stop. The exceptions never reach idling at all: a
 ticket-id argument or `--one` means one ticket, so finish it, report, and end.
 
+## Rework (a review ticket got feedback)
+
+A ticket in `review` is code-complete but unlanded — PR feedback or human review can send it back. Only do this when
+the user asks for the rework (or the ticket's notes clearly request it):
+
+1. `kanban_claim` the ticket — review tickets are claimable; the claim keeps the recorded branch.
+2. `kanban_worktree_start` — it re-attaches to the existing `k-<n>/…` branch idempotently; your previous commits are
+   all there.
+3. Address the feedback, commit, and — if the ticket has an open PR — push the branch so the PR updates.
+4. `kanban_worktree_finish`, then `kanban_move` back to `review`. The board takes it from there.
+
 ## Refining a stub
 
 A stub is a spec to write, not code to build. When `kanban_next` says `action: "refine"`:
@@ -119,8 +143,11 @@ A stub is a spec to write, not code to build. When `kanban_next` says `action: "
 
 - Only `ready` (implement) or `stub` (refine), unblocked, unclaimed, non-external tickets. Never touch `draft`
   tickets at all.
-- Every mutating kanban tool needs `expected_version` from your latest `kanban_board` read. On a version conflict,
-  re-read the board and retry the operation against the new state.
+- Every mutating kanban tool needs `expected_version` from your latest `kanban_board` read (or the `version`
+  `kanban_next` returns — its landing sweep may have advanced the board). On a version conflict, re-read the board
+  and retry the operation against the new state.
+- Never move a ticket to `done` yourself, and never discard one — landing is the board's job (it needs proof the code
+  reached local main) and discarding is the human's.
 - If a ticket turns out to be much bigger than its spec, don't silently balloon: `kanban_note` the discovery, create
   follow-up tickets with `kanban_create_ticket` (they land in `review` for the human to vet), and finish the
   original at its honest scope.
