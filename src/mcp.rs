@@ -673,18 +673,22 @@ mod tests {
 
     #[test]
     fn an_explicit_column_is_honoured_verbatim_and_adds_no_summary() {
-        let expected = [
-            (ColumnId::Todo, vec!["K-1"]),
-            (ColumnId::Doing, vec!["K-2"]),
-            (ColumnId::Review, vec!["K-3"]),
-            (ColumnId::Done, vec!["K-4", "K-5", "K-6"]),
-        ];
-        expected.into_iter().for_each(|(col, want)| {
-            // include_done is deliberately absent: asking for a column answers that column, done or not.
-            let shaped = shape(view(), Some(col), false);
-            assert_eq!(ids(&shaped, "tickets"), want, "column={col} must return exactly its own tickets");
-            assert!(shaped.get("done").is_none(), "column={col} was asked for verbatim, so no summary is bolted on");
-        });
+        // include_done is deliberately absent throughout: asking for a column answers that column, done or not.
+        let got: Vec<(Vec<String>, bool)> = ColumnId::ALL
+            .iter()
+            .map(|&col| {
+                let shaped = shape(view(), Some(col), false);
+                (ids(&shaped, "tickets"), shaped.get("done").is_some())
+            })
+            .collect();
+        let want = [vec!["K-1"], vec!["K-2"], vec!["K-3"], vec!["K-4", "K-5", "K-6"]]
+            .map(|ids| (ids.iter().map(ToString::to_string).collect::<Vec<_>>(), false));
+        assert_eq!(
+            got,
+            want.to_vec(),
+            "in ColumnId::ALL order, each column returns exactly its own tickets and never a done summary — which is what \
+             makes column=\"done\" the unchanged way to read finished work"
+        );
     }
 
     #[test]
@@ -702,9 +706,13 @@ mod tests {
     #[test]
     fn the_version_is_the_boards_version_whatever_the_shape() {
         let shapes = [shape(view(), None, false), shape(view(), None, true), shape(view(), Some(ColumnId::Todo), false)];
-        shapes.iter().for_each(|s| {
-            assert_eq!(s["version"], 216, "version means the board's version, not the version of the subset returned: {s}");
-        });
+        let versions: Vec<&serde_json::Value> = shapes.iter().map(|s| &s["version"]).collect();
+        assert_eq!(
+            versions,
+            [&serde_json::json!(216); 3],
+            "version means the board's version, not the version of the subset returned — so every shape yields a token \
+             that is still valid as expected_version"
+        );
     }
 
     #[test]

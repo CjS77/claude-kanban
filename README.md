@@ -59,7 +59,7 @@ Dependencies (`depends_on`) block a ticket until they're all done — and since 
 - **Done means landed**: review tickets move to done automatically when their branch or PR provably reaches local main (ancestry, or patch-equivalence for rebase-then-delete flows) — never on guesswork; ambiguous cards get flagged for you
 - PR tracking: the Create PR button binds the PR to the ticket, a config-gated `gh` poll follows it to the merge, and daemon- or skill-created PRs are discovered by branch
 - Claimed cards show who's working, the branch, and the worktree; blocked tickets wear a badge
-- Typed MCP tools for Claude (`kanban_board`, `kanban_next`, `kanban_claim`, `kanban_move`, `kanban_refine`, …) — every write goes through the same validated operations as the UI, guarded by an advisory lock and an optimistic version counter
+- Typed MCP tools for Claude (`kanban_board`, `kanban_next`, `kanban_claim`, `kanban_move`, `kanban_refine`, …) — every write goes through the same validated operations as the UI, guarded by an advisory lock and an optimistic version counter. `kanban_board` omits done tickets by default, summarizing their ids instead, so a work loop can poll cheaply; `include_done=true` or `column="done"` reads them in full, and your browser board is unaffected
 - One ticket, one git worktree, one branch (`k-7/rate-limit-login`) — parallel sessions can't trample each other or your checkout
 - A settings pane (⚙) editing `.kanban/config.json` from the board
 - Everything local: one binary, a JSON file, a loopback server. Network happens in exactly two places, both yours to control: the explicit **Create PR** click, and the read-only `gh` PR poll (`"poll_interval": 0` switches it off)

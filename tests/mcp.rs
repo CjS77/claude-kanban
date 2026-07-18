@@ -164,9 +164,9 @@ fn seed_a_fat_done_ticket(dir: &std::path::Path) -> std::path::PathBuf {
     };
     ops::apply(&store, None, create("landed work", "## Refined spec\n".to_owned() + &"every decision, recorded. ".repeat(600))).unwrap();
     let k1 = TicketId("K-1".into());
-    ["claimed it, starting on the parser", "parser done, wiring the views up next"].iter().for_each(|text| {
-        ops::apply(&store, None, Op::AddNote { id: k1.clone(), text: (*text).into(), author: Some("claude".into()) }).unwrap();
-    });
+    let note = |text: &str| Op::AddNote { id: k1.clone(), text: text.into(), author: Some("claude".into()) };
+    ops::apply(&store, None, note("claimed it, starting on the parser")).unwrap();
+    ops::apply(&store, None, note("parser done, wiring the views up next")).unwrap();
     ops::apply(&store, None, Op::MoveTicket { id: k1, to: ColumnId::Done, position: None, owner: None, branch: None }).unwrap();
     ops::apply(&store, None, create("still to do", "short".into())).unwrap();
     store_dir

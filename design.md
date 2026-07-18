@@ -172,8 +172,14 @@ ticket; machine-local facts stay in the sidecars. All files sit under the same a
 
 The files are meant to be readable and hand-editable. If you fix something in an editor, it still loads.
 
-`done` is deliberately uncapped: the column, and with it the file, just grows. An archive can come later if size ever becomes a problem in
-practice. And when two humans edit the board on parallel branches, the per-ticket objects keep any merge conflict in `board.json` small and
+`done` is deliberately uncapped: the column, and with it the file, just grows. Size did become a problem in practice, but on the *read*
+side first, and only for Claude: landed tickets keep their refined specs and progress logs, which on this repo's own board were 98% of the
+`kanban_board` response — re-read on every pick step and every idle re-poll of a work loop, to no purpose, since finished work is not input
+to the next decision. So `kanban_board` now omits done tickets by default and returns a summary of their ids in their place
+(`include_done=true`, or `column="done"`, still reads them in full). The *file* stays whole and the in-memory board still holds every done
+ticket: dependency unblocking, epic columns, the landing sweep and the browser board all consult them by id or by scan, and the human's
+board shows the done column exactly as before. Only the MCP response is shaped. Splitting persistence itself can still come later if the
+file, rather than the read, becomes the problem. And when two humans edit the board on parallel branches, the per-ticket objects keep any merge conflict in `board.json` small and
 local — resolving it is ordinary git conflict work, no special tooling required, though a custom merge driver could close even that gap one
 day. (Ticket branches themselves can never conflict over the board — see the sparse checkout below.)
 
