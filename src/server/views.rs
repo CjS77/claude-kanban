@@ -217,12 +217,14 @@ pub fn board(view: &BoardView, filters: &Filters, unmerged: Option<&HashSet<Stri
     }
 }
 
-/// Whether the ticket reads as merged: done, with a recorded branch that is *absent* from the unmerged set — either its
-/// tip is an ancestor of HEAD or the branch is gone (merged-and-deleted; see [`crate::git::unmerged_branches`]). Done
-/// tickets with no branch are never merged — there is nothing to check; they stay visible. `unmerged: None` (no git
-/// answer) flags nothing.
+/// Whether the ticket reads as merged: done, non-external, with a recorded branch that is *absent* from the unmerged
+/// set — either its tip is an ancestor of the anchor or the branch is gone (merged-and-deleted; see
+/// [`crate::git::unmerged_branches`]). External tickets never wear the badge: their `branch` is whatever the delegate
+/// created on the far side and was never a local branch, so its absence proves nothing. Done tickets with no branch are
+/// never merged — there is nothing to check; they stay visible. `unmerged: None` (no git answer) flags nothing.
 fn is_merged(t: &TicketView, unmerged: Option<&HashSet<String>>) -> bool {
     t.ticket.column.id() == ColumnId::Done
+        && t.ticket.external.is_none()
         && t.ticket.column.branch().is_some_and(|b| unmerged.is_some_and(|u| !u.contains(b)))
 }
 

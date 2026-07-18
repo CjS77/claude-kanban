@@ -39,7 +39,7 @@ pub fn eligible(store: &Store, ticket: &Ticket) -> bool {
         return false; // external tickets are worked elsewhere; their PRs are the daemon's business
     }
     let Ok(repo) = worktree::repo_root(store) else { return false };
-    has_remote(&repo) && branch_exists(&repo, branch)
+    has_remote(&repo) && git::branch_exists(&repo, branch)
 }
 
 /// Push the done ticket's branch and open a GitHub PR, deduping against an already-open PR for the branch first (the
@@ -55,7 +55,7 @@ pub fn create_pr(store: &Store, id: &TicketId) -> anyhow::Result<PrReport> {
     if ticket.external.is_some() {
         bail!("{id} is external — its PRs are worked elsewhere");
     }
-    if !branch_exists(&repo, branch) {
+    if !git::branch_exists(&repo, branch) {
         bail!("branch {branch} no longer exists locally — already merged and deleted?");
     }
     let remote = pick_remote(&repo)?;
@@ -88,10 +88,6 @@ fn pick_remote(repo: &Path) -> anyhow::Result<String> {
 
 fn has_remote(repo: &Path) -> bool {
     git(repo, &["remote"]).is_ok_and(|out| !out.is_empty())
-}
-
-fn branch_exists(repo: &Path, branch: &str) -> bool {
-    git(repo, &["rev-parse", "--quiet", "--verify", &format!("refs/heads/{branch}")]).is_ok()
 }
 
 /// The URL of an already-open PR whose head is `branch`, if any.
@@ -195,7 +191,7 @@ mod tests {
     fn branch_and_remote_probes_answer_false_cleanly() {
         let repo = scratch_repo();
         assert!(!has_remote(repo.path()));
-        assert!(!branch_exists(repo.path(), "k-7/nope"));
+        assert!(!git::branch_exists(repo.path(), "k-7/nope"));
         let outside = tempfile::tempdir().unwrap();
         assert!(!has_remote(outside.path()), "not a repo counts as no remote, not an error");
     }

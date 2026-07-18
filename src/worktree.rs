@@ -160,12 +160,22 @@ pub fn finish(store: &Store, id: &TicketId, force_discard: bool, merge: bool) ->
     let mut merged = false;
     if merge {
         let Some(branch) = &branch else { bail!("{id} has no branch to merge") };
+        // --merge targets THE integration branch, not wherever the checkout happens to sit: done means landed in main.
+        // With no configured or detectable main branch there is no target to enforce, and the v1 behaviour (merge into
+        // the current branch) is all that's left.
+        if let Some(main) = Config::load(store.dir())?.main_branch(&repo) {
+            match git::current_branch(&repo) {
+                Some(current) if current == main => {}
+                Some(current) => bail!("the main checkout is on '{current}', not '{main}' — finish --merge only targets the main branch"),
+                None => bail!("the main checkout is on a detached HEAD — check out '{main}' before finish --merge"),
+            }
+        }
         // The board itself is tracked and mutates constantly — that's the tracker doing its job, not user work at risk,
         // so changes under .kanban/ don't count as dirt here.
         if !git(&repo, &["status", "--porcelain", "--", ".", ":(exclude).kanban"])?.is_empty() {
             bail!("the main checkout has uncommitted changes — merge refused; commit or stash them first");
         }
-        git(&repo, &["merge", "--no-edit", branch]).with_context(|| format!("merging {branch} into the main checkout's current branch"))?;
+        git(&repo, &["merge", "--no-edit", branch]).with_context(|| format!("merging {branch} into the main branch"))?;
         merged = true;
     }
 
@@ -259,10 +269,10 @@ fn worktree_entries(repo: &Path) -> anyhow::Result<Vec<WorktreeEntry>> {
                 entries.push(done);
             }
             current = Some(WorktreeEntry { path: PathBuf::from(path), branch: None });
-        } else if let Some(branch) = line.strip_prefix("branch refs/heads/") {
-            if let Some(entry) = current.as_mut() {
-                entry.branch = Some(branch.to_owned());
-            }
+        } else if let Some(branch) = line.strip_prefix("branch refs/heads/")
+            && let Some(entry) = current.as_mut()
+        {
+            entry.branch = Some(branch.to_owned());
         }
     }
     entries.extend(current);

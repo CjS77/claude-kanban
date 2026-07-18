@@ -3,9 +3,12 @@
 //! All keys are optional and the file itself may be absent. Settings that also exist as flags or environment variables
 //! resolve as **flag beats env beats config** — clap merges flag and env, so helpers here only arbitrate against the config.
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::store::StoreError;
 
@@ -16,9 +19,12 @@ pub const DEFAULT_WORKTREE_ROOT: &str = "/tmp/claude-kanban";
 /// How long `/kanban:work` idles between polls when the board has nothing eligible: 5 minutes.
 pub const DEFAULT_IDLE_TIME_SECS: u64 = 300;
 
+/// How often `serve` runs the landing sweep and gh PR poll when `poll_interval` says nothing: 1 minute.
+pub const DEFAULT_POLL_INTERVAL_SECS: u64 = 60;
+
 /// The config file's shape. Unknown keys are ignored (the file is hand-written; a typo shouldn't brick the tool — though it
 /// also won't warn. Keep the schema small.)
-#[derive(Debug, Default, Clone, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     /// Where ticket worktrees are created: `<worktree_root>/<repo-name>-<hash>/<ticket-id>`.
@@ -35,6 +41,12 @@ pub struct Config {
     /// Port for `serve`. An explicit port — here, `--port`, or `KANBAN_PORT` — is honoured or fails loudly; when none is
     /// given, `serve` tries 4747 and hunts for a free port if another project holds it.
     pub port: Option<u16>,
+    /// The integration branch that defines "landed": a review ticket moves to done when its code reaches this branch
+    /// *locally*. Absent → auto-detect (what `origin/HEAD` names, else a local `main`, else `master`).
+    pub main_branch: Option<String>,
+    /// **Seconds** between `serve`'s landing sweeps and gh PR polls. Absent → 60. `0` disables polling entirely —
+    /// unlike `idle_time`, this dial needs a real off switch, so zero is honoured rather than collapsed to the default.
+    pub poll_interval: Option<u64>,
 }
 
 impl Config {
@@ -67,6 +79,23 @@ impl Config {
     #[must_use]
     pub fn port(&self, flag: Option<u16>) -> Option<u16> {
         flag.or(self.port)
+    }
+
+    /// The effective integration branch: config beats [`crate::git::detect_main_branch`]. `None` — nothing configured
+    /// and nothing detectable — degrades landing detection to a no-op and the merged badge to HEAD-anchored.
+    #[must_use]
+    pub fn main_branch(&self, repo: &Path) -> Option<String> {
+        self.main_branch.clone().or_else(|| crate::git::detect_main_branch(repo))
+    }
+
+    /// The effective poll cadence for `serve`: absent → [`DEFAULT_POLL_INTERVAL_SECS`]; `0` → `None`, polling off.
+    #[must_use]
+    pub fn poll_interval(&self) -> Option<Duration> {
+        match self.poll_interval {
+            Some(0) => None,
+            Some(secs) => Some(Duration::from_secs(secs)),
+            None => Some(Duration::from_secs(DEFAULT_POLL_INTERVAL_SECS)),
+        }
     }
 }
 
@@ -132,6 +161,32 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("config.json"), r#"{ "idle_time": 60 }"#).unwrap();
         assert_eq!(Config::load(dir.path()).unwrap().idle_time(), 60);
+    }
+
+    #[test]
+    fn poll_interval_defaults_to_a_minute_and_zero_switches_it_off() {
+        assert_eq!(Config::default().poll_interval(), Some(Duration::from_secs(DEFAULT_POLL_INTERVAL_SECS)));
+        assert_eq!(Config { poll_interval: Some(0), ..Config::default() }.poll_interval(), None, "0 is the off switch");
+        assert_eq!(Config { poll_interval: Some(15), ..Config::default() }.poll_interval(), Some(Duration::from_secs(15)));
+    }
+
+    #[test]
+    fn main_branch_config_beats_detection() {
+        // The tempdir is no git repo, so detection yields nothing — config is the only voice.
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = Config { main_branch: Some("trunk".into()), ..Config::default() };
+        assert_eq!(cfg.main_branch(dir.path()).as_deref(), Some("trunk"));
+        assert_eq!(Config::default().main_branch(dir.path()), None, "no config, no repo: no answer");
+    }
+
+    #[test]
+    fn config_serializes_every_key_for_the_settings_pane() {
+        let json = serde_json::to_value(Config::default()).unwrap();
+        let obj = json.as_object().unwrap();
+        let keys = ["worktree_root", "copy_to_worktrees", "max_workers", "idle_time", "port", "main_branch", "poll_interval"];
+        let missing: Vec<_> = keys.iter().filter(|key| !obj.contains_key(**key)).collect();
+        assert!(missing.is_empty(), "missing {missing:?}");
+        assert!(obj["port"].is_null(), "unset options serialize as null, preserving 'nobody chose'");
     }
 
     #[test]

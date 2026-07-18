@@ -15,7 +15,7 @@ use claude_kanban::{
     server::{App, router},
     store::{
         Store,
-        model::{ColumnId, Status, TicketId},
+        model::{ColumnId, External, Status, TicketId},
     },
 };
 use http_body_util::BodyExt;
@@ -311,6 +311,42 @@ async fn merged_done_tickets_hide_by_default_and_return_with_the_toggle() {
 
     // The merged toggle alone must not disable dragging — it is not a card filter in the draggable sense.
     assert!(html.contains(r#"data-draggable="true""#), "{html}");
+}
+
+#[tokio::test]
+async fn an_external_done_ticket_never_wears_the_merged_badge() {
+    // An external ticket's branch is whatever the delegate created on the far side — never a local branch, so its
+    // absence from the local unmerged set proves nothing. The badge must stay off however the git query answers.
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    git(repo, &["init", "-q", "-b", "main"]).unwrap();
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "seed"]).unwrap();
+    let store = Store::at(repo.join(".kanban"));
+    store.init().unwrap();
+    let router = router_for(&store);
+
+    seed_ticket(&store, "Delegated elsewhere");
+    ops::apply(
+        &store,
+        None,
+        Op::BindExternal {
+            id: TicketId("K-1".into()),
+            external: Some(External { provider: "github".into(), kind: "issue".into(), number: 42 }),
+        },
+    )
+    .unwrap();
+    // The daemon's branch name lands on the column by hand-edit shape: no local branch of that name exists.
+    store
+        .mutate(None, |board, _| {
+            board.tickets[0].column =
+                claude_kanban::store::model::Column::Done { branch: Some("myrepo-issue0042".into()), completed_at: chrono::Utc::now() };
+            Ok::<_, claude_kanban::store::StoreError>(())
+        })
+        .unwrap();
+
+    let html = body_text(router.oneshot(get("/ui/board?merged=1")).await.unwrap()).await;
+    assert!(html.contains("Delegated elsewhere"), "{html}");
+    assert!(!html.contains(">merged</span>") && !html.contains("+1 merged"), "{html}");
 }
 
 #[tokio::test]

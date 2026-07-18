@@ -166,8 +166,12 @@ pub async fn board(State(app): State<AppState>, Query(filters): Query<views::Fil
     blocking(&app, move |store| {
         let view = derive::board_view(&store.read_board()?, &store.read_claims()?);
         // One subprocess per render, in the main checkout (the store's parent — the same derivation `ui_owner` uses).
-        // `None` (no parent, not a repo, unborn HEAD) degrades to flagging nothing merged.
-        let unmerged = store.dir().parent().and_then(crate::git::unmerged_branches);
+        // Merged-ness anchors to the configured/detected main branch, so the badge means "landed in main" even when the
+        // checkout sits elsewhere; no answer falls back to HEAD, and `None` degrades to flagging nothing merged.
+        let unmerged = store.dir().parent().and_then(|repo| {
+            let anchor = crate::config::Config::load(store.dir()).ok().and_then(|c| c.main_branch(repo));
+            crate::git::unmerged_branches(repo, anchor.as_deref().unwrap_or("HEAD"))
+        });
         Ok(Html(views::board(&view, &filters, unmerged.as_ref()).render()?))
     })
     .await

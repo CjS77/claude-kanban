@@ -499,6 +499,7 @@ fn new_epic_spec(p: NewEpicParam) -> NewEpicSpec {
 }
 
 #[tool_handler]
+#[allow(clippy::unused_async_trait_impl)] // the macro generates an async fn with no awaits; not ours to change
 impl ServerHandler for KanbanServer {
     fn get_info(&self) -> ServerInfo {
         let mut info = ServerInfo::default();

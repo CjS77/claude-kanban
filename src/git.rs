@@ -62,20 +62,75 @@ pub fn main_worktree(cwd: &Path) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// Local branches NOT merged into the main checkout's current HEAD. `None` when it can't be
-/// determined (not a git repo, unborn HEAD) — callers must then flag nothing as merged.
+/// Local branches NOT merged into `anchor` (a branch name, or `"HEAD"` for the current checkout). `None` when it can't
+/// be determined (not a git repo, unborn HEAD, unknown anchor) — callers must then flag nothing as merged.
 ///
 /// A done ticket's branch counts merged iff it is *absent* from this set, which covers two cases at once: the branch tip
-/// is an ancestor of `HEAD` (a real merge), or the branch no longer exists locally (merged-and-deleted — the main case
-/// here: `merge.sh` rebases, fast-forwards `main`, then deletes the branch, and GitHub's squash-and-delete lands the same
-/// way). Caveat: a branch squash-merged upstream but kept alive locally reads as not merged (its tip is no ancestor);
-/// conversely a branch deleted because the work was *abandoned* reads as merged — accepted, since deleting the branch is
-/// how you retire it either way.
+/// is an ancestor of the anchor (a real merge), or the branch no longer exists locally (merged-and-deleted — the main
+/// case here: `merge.sh` rebases, fast-forwards `main`, then deletes the branch, and GitHub's squash-and-delete lands
+/// the same way). Caveat: a branch squash-merged upstream but kept alive locally reads as not merged (its tip is no
+/// ancestor); conversely a branch deleted because the work was *abandoned* reads as merged — accepted for the *badge*,
+/// since deleting the branch is how you retire it either way. (Landing detection is stricter: see `land`.)
 #[must_use]
-pub fn unmerged_branches(repo: &Path) -> Option<HashSet<String>> {
-    git(repo, &["branch", "--no-merged", "HEAD", "--format=%(refname:short)"])
+pub fn unmerged_branches(repo: &Path, anchor: &str) -> Option<HashSet<String>> {
+    git(repo, &["branch", "--no-merged", anchor, "--format=%(refname:short)"])
         .ok()
         .map(|out| out.lines().map(str::to_owned).collect())
+}
+
+/// Whether `rev` is an ancestor of `of` (`git merge-base --is-ancestor`). `None` when git cannot answer — no repo,
+/// unknown rev — as distinct from a definite no.
+#[must_use]
+pub fn is_ancestor(repo: &Path, rev: &str, of: &str) -> Option<bool> {
+    let out = Command::new("git").current_dir(repo).args(["merge-base", "--is-ancestor", rev, of]).output().ok()?;
+    match out.status.code() {
+        Some(0) => Some(true),
+        Some(1) => Some(false),
+        _ => None, // 128 etc.: not a repo, unknown revision — no answer, not a "no"
+    }
+}
+
+/// The repository's integration branch, best effort: what `origin/HEAD` points at when the remote has declared one,
+/// else a local `main`, else a local `master`, else `None`. Config (`main_branch`) beats this — see
+/// [`crate::config::Config::main_branch`].
+#[must_use]
+pub fn detect_main_branch(repo: &Path) -> Option<String> {
+    if let Ok(sym) = git(repo, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]) {
+        // "origin/main" → "main"
+        if let Some((_, name)) = sym.split_once('/') {
+            return Some(name.to_owned());
+        }
+    }
+    ["main", "master"].into_iter().find(|b| branch_exists(repo, b)).map(str::to_owned)
+}
+
+/// The branch currently checked out in `dir`; `None` on a detached HEAD or outside a repo.
+#[must_use]
+pub fn current_branch(dir: &Path) -> Option<String> {
+    git(dir, &["branch", "--show-current"]).ok().filter(|b| !b.is_empty())
+}
+
+/// Every local branch name. `None` when git can't answer.
+#[must_use]
+pub fn local_heads(repo: &Path) -> Option<HashSet<String>> {
+    git(repo, &["for-each-ref", "refs/heads", "--format=%(refname:short)"])
+        .ok()
+        .map(|out| out.lines().map(str::to_owned).collect())
+}
+
+/// Whether the local branch exists.
+#[must_use]
+pub fn branch_exists(repo: &Path, branch: &str) -> bool {
+    git(repo, &["rev-parse", "--quiet", "--verify", &format!("refs/heads/{branch}")]).is_ok()
+}
+
+/// Whether every commit reachable from `tip` but not from `upstream` is patch-equivalent to a commit already in
+/// `upstream` (`git cherry` reports each as `-`). This is what proves a rebase-then-fast-forward landing *after* the
+/// original branch ref is gone: the rebased copies in `upstream` carry the same patch-ids. `None` when git can't answer
+/// (no repo, or the tip's objects have been gc'd).
+#[must_use]
+pub fn cherry_equivalent(repo: &Path, upstream: &str, tip: &str) -> Option<bool> {
+    git(repo, &["cherry", upstream, tip]).ok().map(|out| out.lines().all(|l| l.starts_with('-')))
 }
 
 #[cfg(test)]
@@ -112,43 +167,143 @@ mod tests {
         assert!(found.is_none() || found.unwrap().canonicalize().unwrap() != dir.path().canonicalize().unwrap());
     }
 
+    fn commit_in(repo: &Path, msg: &str) {
+        let sign = ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"];
+        let args: Vec<&str> = sign.iter().chain(&["commit", "--allow-empty", "-q", "-m", msg]).copied().collect();
+        git(repo, &args).unwrap();
+    }
+
     #[test]
     fn unmerged_branches_tracks_merge_and_deletion() {
         let repo = scratch_repo();
-        let sign = ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"];
-        let commit = |msg: &str| {
-            let args: Vec<&str> = sign.iter().chain(&["commit", "--allow-empty", "-q", "-m", msg]).copied().collect();
-            git(repo.path(), &args).unwrap();
-        };
+        let commit = |msg: &str| commit_in(repo.path(), msg);
         commit("seed");
 
         // A branch with a commit HEAD lacks is unmerged.
         git(repo.path(), &["checkout", "-q", "-b", "k-9/feature"]).unwrap();
         commit("work");
         git(repo.path(), &["checkout", "-q", "main"]).unwrap();
-        assert!(unmerged_branches(repo.path()).unwrap().contains("k-9/feature"));
+        assert!(unmerged_branches(repo.path(), "HEAD").unwrap().contains("k-9/feature"));
+        assert!(unmerged_branches(repo.path(), "main").unwrap().contains("k-9/feature"), "a named anchor works too");
 
         // Fast-forwarding main onto it makes the tip an ancestor: merged.
         git(repo.path(), &["merge", "-q", "--ff-only", "k-9/feature"]).unwrap();
-        assert!(!unmerged_branches(repo.path()).unwrap().contains("k-9/feature"));
+        assert!(!unmerged_branches(repo.path(), "HEAD").unwrap().contains("k-9/feature"));
 
         // A deleted branch is simply absent — the merged-and-deleted arm.
         git(repo.path(), &["checkout", "-q", "-b", "k-10/gone"]).unwrap();
         commit("orphaned work");
         git(repo.path(), &["checkout", "-q", "main"]).unwrap();
-        assert!(unmerged_branches(repo.path()).unwrap().contains("k-10/gone"));
+        assert!(unmerged_branches(repo.path(), "HEAD").unwrap().contains("k-10/gone"));
         git(repo.path(), &["branch", "-q", "-D", "k-10/gone"]).unwrap();
-        assert!(!unmerged_branches(repo.path()).unwrap().contains("k-10/gone"));
+        assert!(!unmerged_branches(repo.path(), "HEAD").unwrap().contains("k-10/gone"));
     }
 
     #[test]
     fn unmerged_branches_is_none_where_it_cannot_answer() {
         // An unborn HEAD (fresh init, no commit) can't anchor --no-merged.
         let repo = scratch_repo();
-        assert!(unmerged_branches(repo.path()).is_none());
+        assert!(unmerged_branches(repo.path(), "HEAD").is_none());
         // Neither can a directory that is no repository at all (a clean /tmp is not inside one).
         let plain = tempfile::tempdir().unwrap();
-        assert!(unmerged_branches(plain.path()).is_none());
+        assert!(unmerged_branches(plain.path(), "HEAD").is_none());
+        // A named anchor that doesn't exist can't answer either.
+        commit_in(repo.path(), "seed");
+        assert!(unmerged_branches(repo.path(), "no-such-branch").is_none());
+    }
+
+    #[test]
+    fn is_ancestor_distinguishes_yes_no_and_cannot_answer() {
+        let repo = scratch_repo();
+        commit_in(repo.path(), "seed");
+        git(repo.path(), &["checkout", "-q", "-b", "k-1/work"]).unwrap();
+        commit_in(repo.path(), "work");
+        git(repo.path(), &["checkout", "-q", "main"]).unwrap();
+
+        assert_eq!(is_ancestor(repo.path(), "main", "k-1/work"), Some(true));
+        assert_eq!(is_ancestor(repo.path(), "k-1/work", "main"), Some(false));
+        assert_eq!(is_ancestor(repo.path(), "no-such-rev", "main"), None, "an unknown rev is no answer, not a no");
+        let plain = tempfile::tempdir().unwrap();
+        assert_eq!(is_ancestor(plain.path(), "a", "b"), None);
+    }
+
+    #[test]
+    fn detect_main_branch_prefers_origin_head_then_local_names() {
+        // A repo whose default branch is neither main nor master: only origin/HEAD can name it.
+        let upstream = tempfile::tempdir().unwrap();
+        git(upstream.path(), &["init", "-q", "-b", "trunk"]).unwrap();
+        commit_in(upstream.path(), "seed");
+
+        let clone_parent = tempfile::tempdir().unwrap();
+        let clone = clone_parent.path().join("clone");
+        git(clone_parent.path(), &["clone", "-q", upstream.path().to_str().unwrap(), clone.to_str().unwrap()]).unwrap();
+        assert_eq!(detect_main_branch(&clone).as_deref(), Some("trunk"), "clone sets origin/HEAD");
+
+        // No remote: fall back to a local main…
+        let repo = scratch_repo();
+        commit_in(repo.path(), "seed");
+        assert_eq!(detect_main_branch(repo.path()).as_deref(), Some("main"));
+
+        // …then master, then nothing.
+        let older = tempfile::tempdir().unwrap();
+        git(older.path(), &["init", "-q", "-b", "master"]).unwrap();
+        commit_in(older.path(), "seed");
+        assert_eq!(detect_main_branch(older.path()).as_deref(), Some("master"));
+
+        let odd = tempfile::tempdir().unwrap();
+        git(odd.path(), &["init", "-q", "-b", "trunk"]).unwrap();
+        commit_in(odd.path(), "seed");
+        assert_eq!(detect_main_branch(odd.path()), None);
+    }
+
+    #[test]
+    fn current_branch_and_local_heads_answer_and_degrade() {
+        let repo = scratch_repo();
+        commit_in(repo.path(), "seed");
+        git(repo.path(), &["branch", "-q", "k-2/extra"]).unwrap();
+
+        assert_eq!(current_branch(repo.path()).as_deref(), Some("main"));
+        let heads = local_heads(repo.path()).unwrap();
+        assert!(heads.contains("main") && heads.contains("k-2/extra"));
+        assert!(branch_exists(repo.path(), "k-2/extra") && !branch_exists(repo.path(), "k-3/nope"));
+
+        git(repo.path(), &["checkout", "-q", "--detach"]).unwrap();
+        assert_eq!(current_branch(repo.path()), None, "detached HEAD is no branch");
+        let plain = tempfile::tempdir().unwrap();
+        assert_eq!(local_heads(plain.path()), None);
+    }
+
+    #[test]
+    fn cherry_equivalent_proves_a_rebase_then_ff_landing() {
+        // The merge.sh shape: work on a branch, main moves on, the branch is rebased onto main and main fast-forwarded.
+        // The *original* (pre-rebase) tip's commits are then patch-equivalent to what landed, even though the tip itself
+        // is no ancestor of main.
+        let repo = scratch_repo();
+        std::fs::write(repo.path().join("f"), "seed\n").unwrap();
+        git(repo.path(), &["add", "f"]).unwrap();
+        commit_in(repo.path(), "seed");
+
+        git(repo.path(), &["checkout", "-q", "-b", "k-4/work"]).unwrap();
+        std::fs::write(repo.path().join("work"), "work\n").unwrap();
+        git(repo.path(), &["add", "work"]).unwrap();
+        commit_in(repo.path(), "work");
+        let original_tip = git(repo.path(), &["rev-parse", "k-4/work"]).unwrap();
+
+        git(repo.path(), &["checkout", "-q", "main"]).unwrap();
+        std::fs::write(repo.path().join("other"), "other\n").unwrap();
+        git(repo.path(), &["add", "other"]).unwrap();
+        commit_in(repo.path(), "mainline moves");
+
+        assert_eq!(cherry_equivalent(repo.path(), "main", &original_tip), Some(false), "not landed yet");
+
+        git(repo.path(), &["checkout", "-q", "k-4/work"]).unwrap();
+        git(repo.path(), &["-c", "user.name=t", "-c", "user.email=t@example.com", "rebase", "-q", "main"]).unwrap();
+        git(repo.path(), &["checkout", "-q", "main"]).unwrap();
+        git(repo.path(), &["merge", "-q", "--ff-only", "k-4/work"]).unwrap();
+        git(repo.path(), &["branch", "-q", "-D", "k-4/work"]).unwrap();
+
+        assert_eq!(cherry_equivalent(repo.path(), "main", &original_tip), Some(true), "patch-ids prove the landing");
+        assert_eq!(cherry_equivalent(repo.path(), "main", "no-such-rev"), None);
     }
 
     #[test]

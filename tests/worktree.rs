@@ -136,6 +136,24 @@ fn finish_with_merge_lands_the_commits_on_the_current_branch() {
 }
 
 #[test]
+fn merge_refuses_when_the_main_checkout_is_not_on_the_main_branch() {
+    let s = scratch();
+    let id = TicketId("K-1".into());
+    let report = worktree::start(&s.store, &id, &opts(&s)).unwrap();
+    fs::write(report.path.join("feature.txt"), "the work\n").unwrap();
+    sh(&report.path, "git", &["add", "-A"]);
+    sh(&report.path, "git", &["commit", "-qm", "feat: the work"]);
+
+    // Park the main checkout on a side branch: --merge must refuse rather than land the ticket somewhere random.
+    sh(&s.repo, "git", &["checkout", "-qb", "elsewhere"]);
+    let err = worktree::finish(&s.store, &id, false, true).unwrap_err();
+    assert!(err.to_string().contains("'elsewhere', not 'main'"), "{err}");
+
+    sh(&s.repo, "git", &["checkout", "-q", "main"]);
+    assert!(worktree::finish(&s.store, &id, false, true).unwrap().merged, "back on main, the merge proceeds");
+}
+
+#[test]
 fn merge_refuses_when_the_main_checkout_is_dirty() {
     let s = scratch();
     let id = TicketId("K-1".into());

@@ -50,12 +50,22 @@ const CLAIMS_FILE: &str = "claims.json";
 /// File name of the store config inside the store directory.
 pub(crate) const CONFIG_FILE: &str = "config.json";
 /// Store-local gitignore written by `init`, covering the runtime artifacts (never the board itself).
-const STORE_GITIGNORE: &str = "# claude-kanban runtime artifacts — machine-local, never committed. (board.json and this file ARE committed.)\n.lock\n*.tmp\nserve.pid\nclaims.json\n";
-/// Store-local config written by `init`, and committed like the board. Seeds only the two `/kanban:work` dials at their
-/// defaults; `port` is deliberately absent, since an explicit port fails loudly when taken while no choice means
-/// "try 4747, then hunt". Strict JSON — [`crate::config::Config`] is serde-parsed and a malformed file is a loud error,
+const STORE_GITIGNORE: &str = "# claude-kanban runtime artifacts — machine-local, never committed. (board.json and this file ARE committed.)\n.lock\n*.tmp\nserve.pid\nclaims.json\nland-state.json\n";
+
+/// Store-local config written by `init`, and committed like the board. Every dial appears explicitly at its default so
+/// the file documents itself. `port` is `null`: an explicit port fails loudly when taken, while no choice means "try
+/// 4747, then hunt". `main_branch` is detected from the surrounding repo and pinned concretely, falling back to
+/// `"main"` outside one. Strict JSON — [`crate::config::Config`] is serde-parsed and a malformed file is a loud error,
 /// so this cannot carry comments.
-const STORE_CONFIG: &str = "{\n  \"max_workers\": 1,\n  \"idle_time\": 300\n}\n";
+fn seeded_config(store_dir: &Path) -> String {
+    let main = store_dir.parent().and_then(crate::git::detect_main_branch).unwrap_or_else(|| "main".to_owned());
+    format!(
+        "{{\n  \"worktree_root\": {root},\n  \"copy_to_worktrees\": [],\n  \"max_workers\": 1,\n  \"idle_time\": 300,\n  \
+         \"port\": null,\n  \"main_branch\": {main},\n  \"poll_interval\": 60\n}}\n",
+        root = serde_json::json!(crate::config::DEFAULT_WORKTREE_ROOT),
+        main = serde_json::json!(main),
+    )
+}
 
 /// Everything that can go wrong below the operation layer.
 #[derive(Debug, thiserror::Error)]
@@ -138,7 +148,7 @@ impl Store {
             return Err(StoreError::AlreadyExists(self.board_path()));
         }
         io::write_json_atomic(&self.board_path(), &Board::empty())?;
-        seed_if_absent(&self.config_path(), STORE_CONFIG)?;
+        seed_if_absent(&self.config_path(), &seeded_config(&self.dir))?;
         seed_if_absent(&self.dir.join(".gitignore"), STORE_GITIGNORE)?;
         tracing::info!(path = %self.board_path().display(), "board initialised");
         Ok(())
@@ -179,11 +189,11 @@ impl Store {
     {
         let _lock = lock::acquire(&self.dir)?;
         let mut board = self.read_board()?;
-        if let Some(expected) = expected_version {
-            if board.version != expected {
-                tracing::warn!(expected, actual = board.version, "version conflict — the caller acted on a stale board");
-                return Err(StoreError::VersionConflict { expected, actual: board.version }.into());
-            }
+        if let Some(expected) = expected_version
+            && board.version != expected
+        {
+            tracing::warn!(expected, actual = board.version, "version conflict — the caller acted on a stale board");
+            return Err(StoreError::VersionConflict { expected, actual: board.version }.into());
         }
         let mut claims = self.read_claims()?;
         let claims_before = claims.clone();
@@ -245,7 +255,20 @@ mod tests {
         let config = crate::config::Config::load(store.dir()).expect("the seeded config must parse");
         assert_eq!(config.max_workers(), 1);
         assert_eq!(config.idle_time(), 300);
-        assert!(config.port.is_none(), "no seeded port: that is what lets serve try 4747 and then hunt");
+        assert!(config.port.is_none(), "port seeds as null: that is what lets serve try 4747 and then hunt");
+        assert_eq!(config.poll_interval(), Some(std::time::Duration::from_secs(60)));
+
+        // The seeded file is fully defined: every dial present, port explicitly null, main_branch pinned concretely.
+        let raw: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(store.config_path()).unwrap()).unwrap();
+        let obj = raw.as_object().unwrap();
+        let keys = ["worktree_root", "copy_to_worktrees", "max_workers", "idle_time", "port", "main_branch", "poll_interval"];
+        let missing: Vec<_> = keys.iter().filter(|key| !obj.contains_key(**key)).collect();
+        assert!(missing.is_empty(), "seeded config missing {missing:?}");
+        assert!(obj["port"].is_null());
+        assert_eq!(obj["main_branch"], "main", "no surrounding repo in this test: the fallback is 'main'");
+
+        let gitignore = std::fs::read_to_string(store.dir().join(".gitignore")).unwrap();
+        assert!(gitignore.contains("land-state.json"), "the landing observations sidecar is machine-local");
     }
 
     #[test]
