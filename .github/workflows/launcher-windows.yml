@@ -28,6 +28,10 @@ jobs:
           $version = (Get-Content -Raw -Path .claude-plugin/plugin.json | ConvertFrom-Json).version
           $work = Join-Path $env:RUNNER_TEMP 'kanban-shim'
           $asset = 'claude-kanban-x86_64-pc-windows-msvc.zip'
+          # Named after the archive stem, exactly as release.yml publishes it -- NOT "$asset.sha256". Serving the
+          # fixture under the wrong name is what let this job stay green while every real install 404'd on the
+          # checksum and fell back to cargo.
+          $sum = 'claude-kanban-x86_64-pc-windows-msvc.sha256'
 
           # --- stub exes: the current plugin version and a stale one, compiled with the Framework csc (no cargo, no dotnet restore)
           $csc = "$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
@@ -59,16 +63,16 @@ jobs:
           $good = "$work\srv\good\v$version"; New-Item -ItemType Directory -Force -Path $good | Out-Null
           Compress-Archive -Path "$stub\claude-kanban.exe" -DestinationPath "$good\$asset" -Force
           $hash = (Get-FileHash -Algorithm SHA256 -Path "$good\$asset").Hash.ToLower()
-          Set-Content -Path "$good\$asset.sha256" -Value "$hash  $asset"
+          Set-Content -Path "$good\$sum" -Value "$hash  $asset"
           $bad = "$work\srv\bad\v$version"; New-Item -ItemType Directory -Force -Path $bad | Out-Null
           Copy-Item -Path "$good\$asset" -Destination "$bad\$asset"
-          Set-Content -Path "$bad\$asset.sha256" -Value (('0' * 64) + "  $asset")
+          Set-Content -Path "$bad\$sum" -Value (('0' * 64) + "  $asset")
 
           # --- local asset server
           $server = Start-Process -FilePath python -ArgumentList '-m','http.server','8317','--bind','127.0.0.1' `
               -WorkingDirectory "$work\srv" -PassThru -WindowStyle Hidden
           $up = $false
-          $probe = "http://127.0.0.1:8317/good/v$version/$asset.sha256"
+          $probe = "http://127.0.0.1:8317/good/v$version/$sum"
           foreach ($i in 1..50) {
               try { Invoke-WebRequest -UseBasicParsing -Uri $probe | Out-Null; $up = $true; break }
               catch { Start-Sleep -Milliseconds 200 }

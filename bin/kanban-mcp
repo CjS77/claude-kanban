@@ -52,6 +52,14 @@ release_archive() { # $1 target
     esac
 }
 
+# The published checksum sibling for a target. upload-rust-binary-action names it after the archive *stem*, so it is
+# claude-kanban-<target>.sha256 — no .tar.gz/.zip in the middle. Appending .sha256 to the archive name instead 404s,
+# which failed the fetch and sent every install down the cargo fallback; every release so far (v1.2.0, v2.0.0) is
+# published under this name, so requesting it keeps the existing releases working with no republish.
+release_checksum() { # $1 target
+    echo "claude-kanban-$1.sha256"
+}
+
 fetch() { # $1 url, $2 destination file
     if command -v curl >/dev/null 2>&1; then
         curl -fsSL -o "$2" "$1"
@@ -109,16 +117,17 @@ download_release() {
     version=$(plugin_version)
     [ -n "$version" ] || { log "cannot read \"version\" from $root/.claude-plugin/plugin.json"; return 1; }
     archive=$(release_archive "$target")
+    checksum=$(release_checksum "$target")
     url="$base_url/v$version/$archive"
     mkdir -p "$root/target/release" || return 1
     staging=$(mktemp -d "$root/target/release/.fetch.XXXXXX") || return 1
     log "fetching prebuilt v$version for $target..."
-    if ! fetch "$url" "$staging/$archive" || ! fetch "$url.sha256" "$staging/$archive.sha256"; then
+    if ! fetch "$url" "$staging/$archive" || ! fetch "$base_url/v$version/$checksum" "$staging/$checksum"; then
         rm -rf "$staging"
         log "download failed ($url)"
         return 1
     fi
-    if ! verify_checksum "$staging/$archive" "$staging/$archive.sha256"; then
+    if ! verify_checksum "$staging/$archive" "$staging/$checksum"; then
         rm -rf "$staging"
         log "checksum mismatch for $archive — refusing the download"
         return 1

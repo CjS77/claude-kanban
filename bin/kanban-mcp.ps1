@@ -62,6 +62,10 @@ function Install-Release {
     $version = Get-PluginVersion
     if (-not $version) { Write-Log "cannot read `"version`" from $root/.claude-plugin/plugin.json"; return $false }
     $archive = "claude-kanban-$target.zip"
+    # The checksum sibling is named after the archive *stem*, so it is claude-kanban-<target>.sha256 -- no .zip in the
+    # middle. Appending .sha256 to the archive name instead 404s, which failed the fetch and sent every install down the
+    # cargo fallback; every release so far (v1.2.0, v2.0.0) publishes this name, so existing releases keep working.
+    $checksum = "claude-kanban-$target.sha256"
     $url = "$baseUrl/v$version/$archive"
     $staging = "$root/target/release/.fetch." + [IO.Path]::GetRandomFileName()
     try { New-Item -ItemType Directory -Force -Path $staging | Out-Null } catch { Write-Log "cannot create $staging"; return $false }
@@ -70,13 +74,13 @@ function Install-Release {
         # Old Windows PowerShell defaults exclude TLS 1.2; harmless everywhere else.
         try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072 } catch {}
         Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile "$staging/$archive"
-        Invoke-WebRequest -UseBasicParsing -Uri "$url.sha256" -OutFile "$staging/$archive.sha256"
+        Invoke-WebRequest -UseBasicParsing -Uri "$baseUrl/v$version/$checksum" -OutFile "$staging/$checksum"
     } catch {
         Remove-Item -Recurse -Force -Path $staging
         Write-Log "download failed ($url)"
         return $false
     }
-    if (-not (Test-Checksum "$staging/$archive" "$staging/$archive.sha256")) {
+    if (-not (Test-Checksum "$staging/$archive" "$staging/$checksum")) {
         Remove-Item -Recurse -Force -Path $staging
         Write-Log "checksum mismatch for $archive -- refusing the download"
         return $false
