@@ -54,7 +54,10 @@ Dependencies (`depends_on`) block a ticket until they're all done — and since 
 
 ## Features
 
-- Four-column board: create, edit, drag, and delete tickets and epics; filter by epic, label, and status
+- Four-column board: create, edit, drag, and delete tickets and epics; one search box narrows it — `landed: true, label: ux, realtime
+  results` is three ANDed terms. Bare text matches anywhere in a ticket (id, title, body, labels, branch, external binding, PR); the keys
+  are `text:` `label:` `epic:` `id:` `note:` `status:` `col:` `landed:` `discarded:` `blocked:`. Quote a value to keep a comma inside it
+  (`label:"foo, bar"`); anything the grammar doesn't recognise is searched as plain text
 - Live updates over SSE — cards move the moment Claude moves them
 - **Done means landed**: review tickets move to done automatically when their branch or PR provably reaches local main (ancestry, or patch-equivalence for rebase-then-delete flows) — never on guesswork; ambiguous cards get flagged for you
 - PR tracking: the Create PR button binds the PR to the ticket, a config-gated `gh` poll follows it to the merge, and daemon- or skill-created PRs are discovered by branch

@@ -359,7 +359,14 @@ The implementation checklist, kept as the record of scope.
   `worktree start`" rather than looking like live work
 - [x] Show and set `status` (draft / stub / review / ready) on cards — promoting `review` to `ready` or pushing back to `stub` is the user's
   call, made here
-- [x] Filter by epic, label, and status
+- [x] One search box over the whole board, plus the epic dropdown (a discovery affordance for ids and titles nobody memorises; it ANDs
+  with the box). The query is a comma-separated conjunction: bare text is a phrase matched anywhere in a ticket — id, title, body,
+  labels, branch, external binding, PR — and `key: value` narrows one field. Keys: `text:` `label:` `epic:` `id:` `note:` `status:`
+  `col:`/`column:` `landed:` `discarded:` `blocked:`. Values are substrings (`status:` allows a prefix, so `status:re` is review;
+  booleans take `true/yes/y/1/on` and their negatives), and `"quotes"` protect a comma or force a fragment to free text. Notes are
+  excluded from bare-text search — they're machine-written progress logs, near-identical on every landed ticket, so folding them in
+  would make common words match almost everything; `note:` opts back in. Parsing is infallible: an unknown key, a bad boolean or a
+  half-typed `label:` degrades to a phrase, because the box fires on every keystroke and must render a board, never an error
 - [x] Create PR button on eligible done tickets (branch still exists, repo has a remote, not external) — pushes the branch and opens a
   GitHub PR via `gh` with a body templated from the card, recording the URL as a progress note; the binary's one network egress, behind the
   explicit click
