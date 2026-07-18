@@ -3,7 +3,7 @@
   page load and reloads on every `kanban:refresh` event (fired by glue.js when the SSE stream reports a change) — one
   rendering path for initial load, user actions, and live updates alike.
 
-  The filter bar sits OUTSIDE #board so swaps never clobber a half-typed label filter; the epic dropdown alone is refreshed
+  The filter bar sits OUTSIDE #board so swaps never clobber a half-typed search query; the epic dropdown alone is refreshed
   out-of-band by the board fragment (it re-renders with the current selection, so nothing is lost).
 -#}
 <!doctype html>
@@ -28,16 +28,10 @@
         <div class="flex gap-3 items-center justify-center flex-wrap">
             <div id="filters" class="flex gap-2 items-center flex-wrap">
                 {% include "filter_epic.html" %}
-                <input name="label" placeholder="filter label" class="input input-sm w-32"
+                <input name="q" class="input input-sm w-72" aria-label="Search tickets"
+                       placeholder="search… or label:ux, status:ready, landed:true"
+                       title="Comma-separated. Bare text searches the whole ticket. Keys: label: epic: id: note: status: col: landed: discarded: blocked:. Quote to keep commas: label:&quot;foo, bar&quot;"
                        hx-get="/ui/board" hx-target="#board" hx-include="#filters" hx-trigger="input changed delay:300ms">
-                <select name="status" class="select select-sm w-32" aria-label="Filter by status"
-                        hx-get="/ui/board" hx-target="#board" hx-include="#filters" hx-trigger="change">
-                    <option value="">Any status</option>
-                    <option value="draft">draft</option>
-                    <option value="stub">stub</option>
-                    <option value="review">review</option>
-                    <option value="ready">ready</option>
-                </select>
             </div>
             <div class="flex gap-2">
                 <button class="btn btn-primary" onclick="document.getElementById('new-ticket-modal').showModal()">+ Ticket</button>

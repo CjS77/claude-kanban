@@ -9,40 +9,44 @@ use std::collections::HashSet;
 use askama::Template;
 use chrono::{DateTime, Utc};
 
-use crate::store::{
-    Claim,
-    derive::{self, BoardView, ClaimView, EpicView, TicketView},
-    model::{Board, ColumnId, Status},
+use crate::{
+    server::search::Query,
+    store::{
+        Claim,
+        derive::{self, BoardView, ClaimView, EpicView, TicketView},
+        model::{Board, ColumnId, Status},
+    },
 };
 
 /// The four statuses in workflow order, for the status button groups.
 const STATUSES: [Status; 4] = [Status::Draft, Status::Stub, Status::Review, Status::Ready];
 
 /// The board's active filters, straight from the query string. Empty strings mean "no filter" (that's what empty form
-/// fields submit).
+/// fields submit). The epic dropdown stays its own parameter — it is a *discovery* affordance for ids and titles nobody
+/// memorises — and ANDs with the search box.
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 pub struct Filters {
     #[serde(default)]
     pub epic: String,
+    /// The search box, raw. Parsed by [`crate::server::search::Query::parse`].
     #[serde(default)]
-    pub label: String,
-    #[serde(default)]
-    pub status: String,
+    pub q: String,
 }
 
 impl Filters {
-    fn is_empty(&self) -> bool {
-        self.epic.is_empty() && self.label.is_empty() && self.status.is_empty()
+    /// Whether these filters hide nothing — the board only drags while that holds. The query half is the parsed
+    /// query's own emptiness, never a string check on `q`: a query that parses to no terms hides nothing by
+    /// construction.
+    fn is_empty(&self, q: &Query) -> bool {
+        self.epic.is_empty() && q.is_empty()
     }
 
-    fn admits_ticket(&self, t: &TicketView) -> bool {
-        (self.epic.is_empty() || t.ticket.epic.as_ref().is_some_and(|e| e.0 == self.epic))
-            && (self.label.is_empty() || t.ticket.labels.iter().any(|l| l == &self.label))
-            && (self.status.is_empty() || t.ticket.status.as_str() == self.status)
+    fn admits_ticket(&self, q: &Query, t: &TicketView, epics: &[EpicView]) -> bool {
+        (self.epic.is_empty() || t.ticket.epic.as_ref().is_some_and(|e| e.0 == self.epic)) && q.matches(t, epics)
     }
 
-    fn admits_epic(&self, e: &EpicView) -> bool {
-        (self.epic.is_empty() || e.epic.id.0 == self.epic) && (self.status.is_empty() || e.epic.status.as_str() == self.status)
+    fn admits_epic(&self, q: &Query, e: &EpicView) -> bool {
+        (self.epic.is_empty() || e.epic.id.0 == self.epic) && q.matches_epic(e)
     }
 }
 
@@ -190,6 +194,9 @@ const NO_EPIC_COLOR: &str = "#9ca3af";
 #[allow(clippy::implicit_hasher)]
 #[must_use]
 pub fn board(view: &BoardView, filters: &Filters, heads: Option<&HashSet<String>>) -> BoardTpl {
+    // Parsed once per render, not once per card: a linear scan over ~26 tickets is dwarfed by the git subprocess the
+    // handler already spawns, but re-parsing per ticket would be gratuitous.
+    let query = Query::parse(&filters.q);
     let columns = view
         .columns
         .iter()
@@ -199,15 +206,15 @@ pub fn board(view: &BoardView, filters: &Filters, heads: Option<&HashSet<String>
             cards: view
                 .tickets
                 .iter()
-                .filter(|t| t.ticket.column.id() == meta.id && filters.admits_ticket(t))
+                .filter(|t| t.ticket.column.id() == meta.id && filters.admits_ticket(&query, t, &view.epics))
                 .map(|t| card(t, view, heads))
                 .collect(),
-            epics: view.epics.iter().filter(|e| e.column == meta.id && filters.admits_epic(e)).map(epic_card).collect(),
+            epics: view.epics.iter().filter(|e| e.column == meta.id && filters.admits_epic(&query, e)).map(epic_card).collect(),
         })
         .collect();
     BoardTpl {
         version: view.version,
-        draggable: filters.is_empty(),
+        draggable: filters.is_empty(&query),
         columns,
         epics: view
             .epics

@@ -4,6 +4,7 @@
 
 pub mod assets;
 pub mod routes;
+pub mod search;
 pub mod security;
 pub mod sse;
 pub mod views;
