@@ -28,22 +28,11 @@ pub struct Filters {
     pub label: String,
     #[serde(default)]
     pub status: String,
-    /// The "show merged" toggle: an unchecked checkbox submits nothing, checked submits `merged=1`.
-    #[serde(default)]
-    pub merged: String,
 }
 
 impl Filters {
-    /// Deliberately ignores `merged`: it drives `draggable`, and disabling drag on the default view would kill the
-    /// board's core interaction. Consequence: with merged cards hidden, a drop *into* the Done column can land at an
-    /// index offset by the hidden cards above it — cosmetic only, since order in `done` carries no priority semantics;
-    /// todo/doing are untouched (only done tickets are ever hidden).
     fn is_empty(&self) -> bool {
         self.epic.is_empty() && self.label.is_empty() && self.status.is_empty()
-    }
-
-    fn show_merged(&self) -> bool {
-        !self.merged.is_empty()
     }
 
     fn admits_ticket(&self, t: &TicketView) -> bool {
@@ -117,9 +106,6 @@ pub struct ColumnCtx {
     pub title: String,
     pub cards: Vec<CardCtx>,
     pub epics: Vec<EpicCardCtx>,
-    /// Merged done cards dropped by the default view — the Done header hints at them so they never look lost.
-    /// Always 0 except Done.
-    pub hidden_merged: usize,
 }
 
 // Not a state machine: each bool is an independent display flag with its own badge or styling.
@@ -135,8 +121,6 @@ pub struct CardCtx {
     pub blocked: bool,
     /// A stub sitting in `doing` is having its spec written right now — the card renders pink while that lasts.
     pub refining: bool,
-    /// A done ticket whose branch has landed in the main branch (or is gone) — purple badge, hidden by default.
-    pub merged: bool,
     /// A done ticket retired without landing: closed, but its dependents stay blocked.
     pub discarded: bool,
     /// The bound PR, rendered as a linked badge on cards still in flight (done cards drop it — the story is over).
@@ -205,28 +189,20 @@ const NO_EPIC_COLOR: &str = "#9ca3af";
 // A view-model builder has one caller and no use for custom hashers.
 #[allow(clippy::implicit_hasher)]
 #[must_use]
-pub fn board(view: &BoardView, filters: &Filters, unmerged: Option<&HashSet<String>>, heads: Option<&HashSet<String>>) -> BoardTpl {
+pub fn board(view: &BoardView, filters: &Filters, heads: Option<&HashSet<String>>) -> BoardTpl {
     let columns = view
         .columns
         .iter()
-        .map(|meta| {
-            let (shown, hidden): (Vec<_>, Vec<_>) = view
+        .map(|meta| ColumnCtx {
+            id: meta.id,
+            title: meta.title.clone(),
+            cards: view
                 .tickets
                 .iter()
                 .filter(|t| t.ticket.column.id() == meta.id && filters.admits_ticket(t))
-                .partition(|t| filters.show_merged() || !is_merged(t, unmerged));
-            ColumnCtx {
-                id: meta.id,
-                title: meta.title.clone(),
-                cards: shown.into_iter().map(|t| card(t, view, unmerged, heads)).collect(),
-                epics: view
-                    .epics
-                    .iter()
-                    .filter(|e| e.column == meta.id && filters.admits_epic(e))
-                    .map(epic_card)
-                    .collect(),
-                hidden_merged: hidden.len(),
-            }
+                .map(|t| card(t, view, heads))
+                .collect(),
+            epics: view.epics.iter().filter(|e| e.column == meta.id && filters.admits_epic(e)).map(epic_card).collect(),
         })
         .collect();
     BoardTpl {
@@ -246,19 +222,7 @@ pub fn board(view: &BoardView, filters: &Filters, unmerged: Option<&HashSet<Stri
     }
 }
 
-/// Whether the ticket reads as merged: done (and not discarded — retired work never landed anywhere), non-external,
-/// with a recorded branch that is *absent* from the unmerged set — either its tip is an ancestor of the anchor or the
-/// branch is gone (merged-and-deleted; see [`crate::git::unmerged_branches`]). External tickets never wear the badge:
-/// their `branch` is whatever the delegate created on the far side and was never a local branch, so its absence proves
-/// nothing. Done tickets with no branch are never merged — there is nothing to check; they stay visible.
-/// `unmerged: None` (no git answer) flags nothing.
-fn is_merged(t: &TicketView, unmerged: Option<&HashSet<String>>) -> bool {
-    matches!(t.ticket.column, crate::store::model::Column::Done { discarded: false, .. })
-        && t.ticket.external.is_none()
-        && t.ticket.column.branch().is_some_and(|b| unmerged.is_some_and(|u| !u.contains(b)))
-}
-
-fn card(t: &TicketView, view: &BoardView, unmerged: Option<&HashSet<String>>, heads: Option<&HashSet<String>>) -> CardCtx {
+fn card(t: &TicketView, view: &BoardView, heads: Option<&HashSet<String>>) -> CardCtx {
     let done = t.ticket.column.id() == ColumnId::Done;
     CardCtx {
         id: t.ticket.id.to_string(),
@@ -269,7 +233,6 @@ fn card(t: &TicketView, view: &BoardView, unmerged: Option<&HashSet<String>>, he
         done,
         blocked: t.blocked,
         refining: t.ticket.status == Status::Stub && t.ticket.column.id() == ColumnId::Doing,
-        merged: is_merged(t, unmerged),
         discarded: matches!(t.ticket.column, crate::store::model::Column::Done { discarded: true, .. }),
         pr: (!done).then(|| t.ticket.pr.as_ref().map(pr_ctx)).flatten(),
         branch_gone: t.ticket.column.id() == ColumnId::Review

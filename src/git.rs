@@ -62,22 +62,6 @@ pub fn main_worktree(cwd: &Path) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// Local branches NOT merged into `anchor` (a branch name, or `"HEAD"` for the current checkout). `None` when it can't
-/// be determined (not a git repo, unborn HEAD, unknown anchor) — callers must then flag nothing as merged.
-///
-/// A done ticket's branch counts merged iff it is *absent* from this set, which covers two cases at once: the branch tip
-/// is an ancestor of the anchor (a real merge), or the branch no longer exists locally (merged-and-deleted — the main
-/// case here: `merge.sh` rebases, fast-forwards `main`, then deletes the branch, and GitHub's squash-and-delete lands
-/// the same way). Caveat: a branch squash-merged upstream but kept alive locally reads as not merged (its tip is no
-/// ancestor); conversely a branch deleted because the work was *abandoned* reads as merged — accepted for the *badge*,
-/// since deleting the branch is how you retire it either way. (Landing detection is stricter: see `land`.)
-#[must_use]
-pub fn unmerged_branches(repo: &Path, anchor: &str) -> Option<HashSet<String>> {
-    git(repo, &["branch", "--no-merged", anchor, "--format=%(refname:short)"])
-        .ok()
-        .map(|out| out.lines().map(str::to_owned).collect())
-}
-
 /// Whether `rev` is an ancestor of `of` (`git merge-base --is-ancestor`). `None` when git cannot answer — no repo,
 /// unknown rev — as distinct from a definite no.
 #[must_use]
@@ -171,45 +155,6 @@ mod tests {
         let sign = ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"];
         let args: Vec<&str> = sign.iter().chain(&["commit", "--allow-empty", "-q", "-m", msg]).copied().collect();
         git(repo, &args).unwrap();
-    }
-
-    #[test]
-    fn unmerged_branches_tracks_merge_and_deletion() {
-        let repo = scratch_repo();
-        let commit = |msg: &str| commit_in(repo.path(), msg);
-        commit("seed");
-
-        // A branch with a commit HEAD lacks is unmerged.
-        git(repo.path(), &["checkout", "-q", "-b", "k-9/feature"]).unwrap();
-        commit("work");
-        git(repo.path(), &["checkout", "-q", "main"]).unwrap();
-        assert!(unmerged_branches(repo.path(), "HEAD").unwrap().contains("k-9/feature"));
-        assert!(unmerged_branches(repo.path(), "main").unwrap().contains("k-9/feature"), "a named anchor works too");
-
-        // Fast-forwarding main onto it makes the tip an ancestor: merged.
-        git(repo.path(), &["merge", "-q", "--ff-only", "k-9/feature"]).unwrap();
-        assert!(!unmerged_branches(repo.path(), "HEAD").unwrap().contains("k-9/feature"));
-
-        // A deleted branch is simply absent — the merged-and-deleted arm.
-        git(repo.path(), &["checkout", "-q", "-b", "k-10/gone"]).unwrap();
-        commit("orphaned work");
-        git(repo.path(), &["checkout", "-q", "main"]).unwrap();
-        assert!(unmerged_branches(repo.path(), "HEAD").unwrap().contains("k-10/gone"));
-        git(repo.path(), &["branch", "-q", "-D", "k-10/gone"]).unwrap();
-        assert!(!unmerged_branches(repo.path(), "HEAD").unwrap().contains("k-10/gone"));
-    }
-
-    #[test]
-    fn unmerged_branches_is_none_where_it_cannot_answer() {
-        // An unborn HEAD (fresh init, no commit) can't anchor --no-merged.
-        let repo = scratch_repo();
-        assert!(unmerged_branches(repo.path(), "HEAD").is_none());
-        // Neither can a directory that is no repository at all (a clean /tmp is not inside one).
-        let plain = tempfile::tempdir().unwrap();
-        assert!(unmerged_branches(plain.path(), "HEAD").is_none());
-        // A named anchor that doesn't exist can't answer either.
-        commit_in(repo.path(), "seed");
-        assert!(unmerged_branches(repo.path(), "no-such-branch").is_none());
     }
 
     #[test]

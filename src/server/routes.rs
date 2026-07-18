@@ -165,17 +165,10 @@ pub async fn page(State(app): State<AppState>) -> Result<Html<String>, AppError>
 pub async fn board(State(app): State<AppState>, Query(filters): Query<views::Filters>) -> Result<Html<String>, AppError> {
     blocking(&app, move |store| {
         let view = derive::board_view(&store.read_board()?, &store.read_claims()?);
-        // Two subprocesses per render, in the main checkout (the store's parent — the same derivation `ui_owner` uses).
-        // Merged-ness anchors to the configured/detected main branch, so the badge means "landed in main" even when the
-        // checkout sits elsewhere; no answer falls back to HEAD, and `None` degrades to flagging nothing merged. The
-        // local branch list feeds the review column's "branch gone" flag the same way: no answer flags nothing.
-        let repo = store.dir().parent();
-        let unmerged = repo.and_then(|repo| {
-            let anchor = crate::config::Config::load(store.dir()).ok().and_then(|c| c.main_branch(repo));
-            crate::git::unmerged_branches(repo, anchor.as_deref().unwrap_or("HEAD"))
-        });
-        let heads = repo.and_then(crate::git::local_heads);
-        Ok(Html(views::board(&view, &filters, unmerged.as_ref(), heads.as_ref()).render()?))
+        // One subprocess per render, in the main checkout (the store's parent — the same derivation `ui_owner` uses).
+        // The local branch list feeds the review column's "branch gone" flag: no answer flags nothing.
+        let heads = store.dir().parent().and_then(crate::git::local_heads);
+        Ok(Html(views::board(&view, &filters, heads.as_ref()).render()?))
     })
     .await
 }
