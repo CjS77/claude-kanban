@@ -26,6 +26,8 @@ enum Term {
     Text(String),
     Label(String),
     Epic(String),
+    /// Tickets attached to no epic at all — `epic:none` / `epic:null`.
+    NoEpic,
     Id(String),
     Note(String),
     Status(Status),
@@ -102,7 +104,7 @@ fn keyed(key: &str, value: &str) -> Option<Term> {
     match key {
         "text" => needle(value).map(Term::Text),
         "label" => needle(value).map(Term::Label),
-        "epic" => needle(value).map(Term::Epic),
+        "epic" => epic(value),
         "id" => needle(value).map(Term::Id),
         "note" => needle(value).map(Term::Note),
         "status" => status(value).map(Term::Status),
@@ -138,6 +140,17 @@ fn status(value: &str) -> Option<Status> {
     [Status::Draft, Status::Stub, Status::Review, Status::Ready].into_iter().find(|s| s.as_str().starts_with(&v))
 }
 
+/// An epic to match by id or title, or the two spellings of "no epic at all". `none` and `null` are reserved words here,
+/// so an epic actually titled "none" is only reachable by its id — a fair trade for the far commoner question, "what
+/// isn't filed under anything?".
+fn epic(value: &str) -> Option<Term> {
+    let n = needle(value)?;
+    match n.as_str() {
+        "none" | "null" => Some(Term::NoEpic),
+        _ => Some(Term::Epic(n)),
+    }
+}
+
 fn boolean(value: &str) -> Option<bool> {
     match needle(value)?.as_str() {
         "true" | "yes" | "y" | "1" | "on" => Some(true),
@@ -154,6 +167,7 @@ fn admits_ticket(term: &Term, t: &TicketView, epics: &[EpicView]) -> bool {
         Term::Text(p) => free_text(p, ticket),
         Term::Label(p) => ticket.labels.iter().any(|l| contains(l, p)),
         Term::Epic(p) => epic_named(p, ticket, epics),
+        Term::NoEpic => ticket.epic.is_none(),
         Term::Id(p) => contains(&ticket.id.0, p),
         Term::Note(p) => ticket.notes.iter().any(|n| contains(&n.text, p)),
         Term::Status(s) => ticket.status == *s,
@@ -170,7 +184,8 @@ fn admits_epic(term: &Term, e: &EpicView) -> bool {
         Term::Epic(p) => contains(&e.epic.id.0, p) || contains(&e.epic.title, p),
         Term::Status(s) => e.epic.status == *s,
         // An epic has no labels, no notes and never lands: a ticket-only term can't be satisfied, and leaving the card
-        // on screen would misrepresent the filter.
+        // on screen would misrepresent the filter. `epic:none` asks for cards filed under nothing, which an epic card
+        // is the very opposite of, so it goes the same way.
         _ => false,
     }
 }
@@ -391,5 +406,42 @@ mod tests {
         assert!(Query::parse("epic: board").matches(&v, &epics));
         assert!(!Query::parse("epic: landing").matches(&v, &epics));
         assert!(!Query::parse("epic: board").matches(&view(ticket("K-2", "Epicless")), &epics));
+    }
+
+    #[test]
+    fn epic_none_and_epic_null_both_find_the_unfiled() {
+        let epics = [epic_view("EP-1", "Board UI")];
+        let mut filed = ticket("K-1", "Filed");
+        filed.epic = Some(EpicId("EP-1".into()));
+        let (filed, loose) = (view(filed), view(ticket("K-2", "Loose")));
+
+        let spellings = ["epic:none", "epic: NULL", "epic:Null", "epic: none"];
+        let wrong: Vec<&str> = spellings
+            .into_iter()
+            .filter(|q| !Query::parse(q).matches(&loose, &epics) || Query::parse(q).matches(&filed, &epics))
+            .collect();
+        assert!(wrong.is_empty(), "every spelling must admit only the unfiled ticket: {wrong:?}");
+
+        // Identical parses, not merely identical outcomes on this pair of tickets.
+        assert_eq!(Query::parse("epic:none").terms, vec![Term::NoEpic]);
+        assert_eq!(Query::parse("epic:null").terms, Query::parse("epic:none").terms);
+    }
+
+    /// The reserved words cost `epic:` two titles, and the escape hatch is the epic's id.
+    #[test]
+    fn epic_none_beats_an_epic_actually_called_none() {
+        let epics = [epic_view("EP-9", "None")];
+        let mut t = ticket("K-1", "Filed under None");
+        t.epic = Some(EpicId("EP-9".into()));
+        let v = view(t);
+        assert!(!Query::parse("epic: none").matches(&v, &epics), "none is reserved, not a title lookup");
+        assert!(Query::parse("epic: ep-9").matches(&v, &epics), "its id still reaches it");
+    }
+
+    #[test]
+    fn epic_none_hides_epic_cards() {
+        let e = epic_view("EP-1", "Board UI");
+        assert!(!Query::parse("epic:none").matches_epic(&e), "an epic card is the opposite of unfiled");
+        assert!(!Query::parse("epic:null").matches_epic(&e));
     }
 }
