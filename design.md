@@ -363,7 +363,11 @@ The implementation checklist, kept as the record of scope.
   with the box). The query is a comma-separated conjunction: bare text is a phrase matched anywhere in a ticket — id, title, body,
   labels, branch, external binding, PR — and `key: value` narrows one field. Keys: `text:` `label:` `epic:` `id:` `note:` `status:`
   `col:`/`column:` `landed:` `discarded:` `blocked:`. Values are substrings (`status:` allows a prefix, so `status:re` is review;
-  booleans take `true/yes/y/1/on` and their negatives), and `"quotes"` protect a comma or force a fragment to free text. Notes are
+  booleans take `true/yes/y/1/on` and their negatives), and `"quotes"` protect a comma or force a fragment to free text.
+  `epic:` reserves two values — `none` and `null`, either of which matches the tickets attached to no epic, the complement of the
+  dropdown's every entry. The cost is that an epic *titled* "none" is reachable only by id, which is the cheaper loss: unfiled
+  work is a standing question, an epic by that name is a curiosity. Epic cards themselves never satisfy `epic:none` — being an
+  epic is the opposite of being unfiled — so they hide, exactly as they do under a ticket-only term. Notes are
   excluded from bare-text search — they're machine-written progress logs, near-identical on every landed ticket, so folding them in
   would make common words match almost everything; `note:` opts back in. Parsing is infallible: an unknown key, a bad boolean or a
   half-typed `label:` degrades to a phrase, because the box fires on every keystroke and must render a board, never an error.

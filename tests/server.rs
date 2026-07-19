@@ -241,6 +241,10 @@ async fn the_search_box_wears_a_magnifier_and_a_javascript_free_help_popup() {
     assert!(missing.is_empty(), "the popup must document every search key — missing {missing:?}: {popup}");
     assert!(!popup.contains("merged:"), "there is no merged: key: {popup}");
 
+    // `epic:` reserves two values, and a reserved value nobody can discover may as well not exist.
+    let unlisted: Vec<_> = ["none", "null"].into_iter().filter(|word| !popup.contains(word)).collect();
+    assert!(unlisted.is_empty(), "the popup must spell out epic's reserved values — missing {unlisted:?}: {popup}");
+
     // The old title= tooltip is folded into the popup, so there is exactly one explanation of the grammar.
     assert!(!html.contains("Comma-separated. Bare text searches"), "the tooltip must not duplicate the popup: {html}");
 }

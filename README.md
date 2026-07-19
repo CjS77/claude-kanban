@@ -56,7 +56,8 @@ Dependencies (`depends_on`) block a ticket until they're all done — and since 
 
 - Four-column board: create, edit, drag, and delete tickets and epics; one search box narrows it — `landed: true, label: ux, realtime
   results` is three ANDed terms. Bare text matches anywhere in a ticket (id, title, body, labels, branch, external binding, PR); the keys
-  are `text:` `label:` `epic:` `id:` `note:` `status:` `col:` `landed:` `discarded:` `blocked:`. Quote a value to keep a comma inside it
+  are `text:` `label:` `epic:` `id:` `note:` `status:` `col:` `landed:` `discarded:` `blocked:`. `epic:none` (or `epic:null`) finds the
+  tickets filed under no epic at all. Quote a value to keep a comma inside it
   (`label:"foo, bar"`); anything the grammar doesn't recognise is searched as plain text. The `?` beside the box opens the same
   reference in the app
 - Live updates over SSE — cards move the moment Claude moves them
