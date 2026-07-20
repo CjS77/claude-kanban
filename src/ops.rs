@@ -916,6 +916,37 @@ mod tests {
         apply(store, None, Op::UpdateTicket { id: ticket.clone(), patch }).unwrap();
     }
 
+    /// The whole point of the id counters, end to end through the store: every `apply` is its own read-modify-write
+    /// cycle, so this is also the save/load round trip — a counter that didn't survive serialisation would hand `K-3`
+    /// straight back.
+    #[test]
+    fn deleting_the_newest_ticket_never_gives_its_number_back() {
+        let (_dir, store) = scratch();
+        create(&store, "a");
+        create(&store, "b");
+        let third = create(&store, "c");
+        assert_eq!(third.0, "K-3");
+
+        apply(&store, None, Op::DeleteTicket { id: third }).unwrap();
+        assert_eq!(create(&store, "d").0, "K-4", "K-3's branch and worktree may still be on disk — the number is spent");
+
+        // And it keeps climbing however often the newest card is deleted.
+        apply(&store, None, Op::DeleteTicket { id: TicketId("K-4".into()) }).unwrap();
+        apply(&store, None, Op::DeleteTicket { id: TicketId("K-2".into()) }).unwrap();
+        assert_eq!(create(&store, "e").0, "K-5");
+    }
+
+    #[test]
+    fn deleting_the_newest_epic_never_gives_its_number_back() {
+        let (_dir, store) = scratch();
+        create_epic_id(&store, "first");
+        let second = create_epic_id(&store, "second");
+        assert_eq!(second.0, "EP-2");
+
+        apply(&store, None, Op::DeleteEpic { id: second }).unwrap();
+        assert_eq!(create_epic_id(&store, "third").0, "EP-3");
+    }
+
     #[test]
     fn deleting_an_epic_deletes_its_tickets() {
         let (_dir, store) = scratch();

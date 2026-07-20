@@ -746,30 +746,106 @@ mod tests {
         assert!(matches!(t.column, Column::Todo));
     }
 
+    fn bare_ticket(id: &str) -> Ticket {
+        Ticket {
+            id: TicketId(id.into()),
+            title: "t".into(),
+            epic: None,
+            status: Status::Ready,
+            body: String::new(),
+            labels: vec![],
+            model: None,
+            effort: None,
+            depends_on: vec![],
+            notes: vec![],
+            external: None,
+            pr: None,
+            column: Column::Todo,
+        }
+    }
+
     #[test]
     fn id_minting_skips_nonconforming_ids_and_starts_at_one() {
         let mut board = Board::empty();
         assert_eq!(board.next_ticket_id().0, "K-1");
         assert_eq!(board.next_epic_id().0, "EP-1");
-        board.tickets = vec!["K-2", "K-9", "custom-name", "K-x"]
-            .into_iter()
-            .map(|id| Ticket {
-                id: TicketId(id.into()),
-                title: "t".into(),
-                epic: None,
+        board.tickets = ["K-2", "K-9", "custom-name", "K-x"].into_iter().map(bare_ticket).collect();
+        assert_eq!(board.next_ticket_id().0, "K-10", "a hand-named ticket can't wedge minting, and the floor still clears K-9");
+    }
+
+    #[test]
+    fn minting_advances_the_counter_and_deleting_never_winds_it_back() {
+        let mut board = Board::empty();
+        let ids: Vec<String> = (0..3).map(|_| board.mint_ticket_id().0).collect();
+        assert_eq!(ids, ["K-1", "K-2", "K-3"]);
+        board.tickets = ids.iter().map(|id| bare_ticket(id)).collect();
+
+        board.tickets.retain(|t| t.id.0 != "K-3");
+        assert_eq!(board.next_ticket_id().0, "K-4", "K-3 is spent — its branch and worktree may still exist");
+        board.tickets.clear();
+        assert_eq!(board.mint_ticket_id().0, "K-4", "emptying the board doesn't reset the numbering either");
+    }
+
+    #[test]
+    fn a_batch_mint_hands_out_consecutive_ids_before_any_ticket_lands() {
+        // A refine split builds all its tickets before pushing any, so the counter alone has to keep them apart.
+        let mut board = Board::empty();
+        let ids: Vec<String> = board.mint_ticket_ids(3).into_iter().map(|id| id.0).collect();
+        assert_eq!(ids, ["K-1", "K-2", "K-3"]);
+        assert_eq!(board.mint_ticket_ids(2).into_iter().map(|id| id.0).collect::<Vec<_>>(), ["K-4", "K-5"]);
+    }
+
+    #[test]
+    fn the_counters_survive_a_round_trip() {
+        let mut board = Board::empty();
+        board.mint_ticket_id();
+        board.mint_epic_id();
+        let json = serde_json::to_string(&board).unwrap();
+        let back: Board = serde_json::from_str(&json).unwrap();
+        assert_eq!((back.next_ticket_seq, back.next_epic_seq), (2, 2), "the counters are on the wire, not recomputed on load");
+        assert_eq!(back, board);
+    }
+
+    /// A board written before the counters existed: they parse as zero, and load-time reconciliation must floor them
+    /// above every id in use rather than starting over at one.
+    #[test]
+    fn a_pre_counter_board_mints_above_its_highest_ids() {
+        let raw = serde_json::to_value(&Board {
+            tickets: ["K-1", "K-7", "K-4"].into_iter().map(bare_ticket).collect(),
+            epics: vec![Epic {
+                id: EpicId("EP-3".into()),
+                title: "auth".into(),
+                color: "#7c9cf5".into(),
                 status: Status::Ready,
                 body: String::new(),
-                labels: vec![],
-                model: None,
-                effort: None,
-                depends_on: vec![],
-                notes: vec![],
-                external: None,
-                pr: None,
-                column: Column::Todo,
-            })
-            .collect();
-        assert_eq!(board.next_ticket_id().0, "K-10");
+            }],
+            ..Board::empty()
+        })
+        .map(|mut v| {
+            let obj = v.as_object_mut().unwrap();
+            obj.remove("next_ticket_seq");
+            obj.remove("next_epic_seq");
+            v
+        })
+        .unwrap();
+
+        let mut board: Board = serde_json::from_value(raw).expect("a board without the counters still parses");
+        assert_eq!((board.next_ticket_seq, board.next_epic_seq), (0, 0), "absent means zero, pending reconciliation");
+
+        assert!(!migrate(&mut board).unwrap(), "reconciling the counters is not a schema change to persist eagerly");
+        assert_eq!((board.next_ticket_seq, board.next_epic_seq), (8, 4), "floored above the highest id in use, not reset to one");
+        assert_eq!(board.next_ticket_id().0, "K-8");
+        assert_eq!(board.next_epic_id().0, "EP-4");
+    }
+
+    /// The board file is hand-editable, so the floor is a standing safety net and not just a one-shot upgrade: a counter
+    /// that has fallen behind a hand-added id must never hand that id out a second time.
+    #[test]
+    fn a_counter_behind_a_hand_added_id_is_floored_on_load() {
+        let mut board = Board { tickets: vec![bare_ticket("K-99")], next_ticket_seq: 3, ..Board::empty() };
+        assert!(!migrate(&mut board).unwrap());
+        assert_eq!(board.next_ticket_seq, 100);
+        assert_eq!(board.mint_ticket_id().0, "K-100");
     }
 
     #[test]
