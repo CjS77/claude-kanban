@@ -8,6 +8,8 @@
 //! version check, whole-board validation, atomic write. On top of that this module owns the *semantic* rules — what a move
 //! does to a ticket's column data, what claiming requires, what refine creates.
 
+use std::collections::HashSet;
+
 use chrono::Utc;
 use serde_json::{Value, json};
 
@@ -42,7 +44,8 @@ pub enum Op {
     UpdateEpic { id: EpicId, patch: EpicPatch },
     /// Delete a ticket, cascade-removing it from other tickets' `depends_on` and dropping its claim.
     DeleteTicket { id: TicketId },
-    /// Delete an epic, detaching its tickets (they survive, epicless).
+    /// Delete an epic and every ticket in it, cascade-removing those tickets from other tickets' `depends_on` and
+    /// dropping their claims.
     DeleteEpic { id: EpicId },
     /// Move a ticket to a column at a position (`None` = bottom). `owner` is required to *enter* `doing` unless the ticket
     /// is already there; entering `review` or `done` drops any live claim; entering `done` stamps `completed_at`.
@@ -247,7 +250,7 @@ fn transition(op: Op, board: &mut Board, claims: &mut Vec<Claim>) -> Result<OpOu
         Op::UpdateTicket { id, patch } => update_ticket(board, &id, patch),
         Op::UpdateEpic { id, patch } => update_epic(board, &id, patch),
         Op::DeleteTicket { id } => delete_ticket(board, claims, &id),
-        Op::DeleteEpic { id } => delete_epic(board, &id),
+        Op::DeleteEpic { id } => delete_epic(board, claims, &id),
         Op::MoveTicket { id, to, position, owner, branch } => move_ticket(board, claims, &id, to, position, owner, branch),
         Op::SetTicketStatus { id, status } => set_ticket_status(board, &id, status),
         Op::SetEpicStatus { id, status } => set_epic_status(board, &id, status),
@@ -354,23 +357,33 @@ fn update_epic(board: &mut Board, id: &EpicId, patch: EpicPatch) -> Result<OpOut
     Ok(OpOutput::plain(json!({ "id": id })))
 }
 
+/// Remove `doomed` tickets, cascade-removing them from surviving tickets' `depends_on` and dropping their claims.
+///
+/// Note that the ids themselves are *not* retired: `Board::next_ticket_id` counts from the highest surviving id, so
+/// deleting the tail of the board hands the next ticket an id a deleted one already wore. That's a separate concern.
+fn remove_tickets(board: &mut Board, claims: &mut Vec<Claim>, doomed: &HashSet<TicketId>) {
+    board.tickets.retain(|t| !doomed.contains(&t.id));
+    board.tickets.iter_mut().for_each(|t| t.depends_on.retain(|dep| !doomed.contains(dep)));
+    doomed.iter().for_each(|id| {
+        remove_claim(claims, id);
+    });
+}
+
 fn delete_ticket(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId) -> Result<OpOutput, OpError> {
     ticket_mut(board, id)?;
-    board.tickets.retain(|t| &t.id != id);
-    board.tickets.iter_mut().for_each(|t| t.depends_on.retain(|dep| dep != id));
-    remove_claim(claims, id);
+    remove_tickets(board, claims, &HashSet::from([id.clone()]));
     Ok(OpOutput::plain(json!({ "deleted": id })))
 }
 
-fn delete_epic(board: &mut Board, id: &EpicId) -> Result<OpOutput, OpError> {
+/// Deleting an epic takes its tickets with it — done ones included. The confirm dialog on the board is the only safety
+/// net, so the returned payload names every ticket that went, for the log line and any future caller.
+fn delete_epic(board: &mut Board, claims: &mut Vec<Claim>, id: &EpicId) -> Result<OpOutput, OpError> {
     epic_mut(board, id)?;
+    // Collected in board order so the payload reads the way the epic's checklist did.
+    let doomed: Vec<TicketId> = board.tickets.iter().filter(|t| t.epic.as_ref() == Some(id)).map(|t| t.id.clone()).collect();
+    remove_tickets(board, claims, &doomed.iter().cloned().collect());
     board.epics.retain(|e| &e.id != id);
-    board
-        .tickets
-        .iter_mut()
-        .filter(|t| t.epic.as_ref() == Some(id))
-        .for_each(|t| t.epic = None);
-    Ok(OpOutput::plain(json!({ "deleted": id })))
+    Ok(OpOutput::plain(json!({ "deleted": id, "tickets": doomed })))
 }
 
 fn move_ticket(

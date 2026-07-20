@@ -489,12 +489,36 @@ pub struct EpicDetailCtx {
     pub has_body: bool,
     pub items: Vec<ItemCtx>,
     pub statuses: Vec<StatusOptCtx>,
+    /// The whole text of the delete confirmation, spelled out server-side — deletion cascades and there is no undo, so
+    /// the dialog has to name what goes with the epic before the human clicks.
+    pub delete_confirm: String,
 }
 
-#[must_use] 
+/// Spell out what deleting `EP-n — title` costs, counting the tickets that go with it and the done ones among them.
+fn epic_delete_confirm(id: &str, title: &str, items: &[ItemCtx]) -> String {
+    if items.is_empty() {
+        return format!("Delete {id} — {title}? It has no tickets.");
+    }
+    let count = items.len();
+    let plural = if count == 1 { "ticket" } else { "tickets" };
+    let done = items.iter().filter(|i| i.done).count();
+    let already_done = if done == 0 { String::new() } else { format!(" ({done} already done)") };
+    format!(
+        "Delete {id} — {title} and its {count} {plural}{already_done}? The tickets are deleted with it, other tickets' \
+         dependencies on them are removed, and any worktrees or branches stay on disk. There is no undo."
+    )
+}
+
+#[must_use]
 pub fn epic_detail(board: &Board, id: &crate::store::model::EpicId) -> Option<EpicDetailTpl> {
     use crate::store::model::Column;
     let e = board.epic(id)?;
+    let items: Vec<ItemCtx> = board
+        .tickets
+        .iter()
+        .filter(|t| t.epic.as_ref() == Some(id))
+        .map(|t| ItemCtx { ticket: t.id.to_string(), title: t.title.clone(), done: matches!(t.column, Column::Done { .. }) })
+        .collect();
     Some(EpicDetailTpl {
         epic: EpicDetailCtx {
             id: e.id.to_string(),
@@ -504,12 +528,8 @@ pub fn epic_detail(board: &Board, id: &crate::store::model::EpicId) -> Option<Ep
             status_badge: status_badge(e.status),
             column: derive::epic_column(id, board),
             has_body: !e.body.is_empty(),
-            items: board
-                .tickets
-                .iter()
-                .filter(|t| t.epic.as_ref() == Some(id))
-                .map(|t| ItemCtx { ticket: t.id.to_string(), title: t.title.clone(), done: matches!(t.column, Column::Done { .. }) })
-                .collect(),
+            delete_confirm: epic_delete_confirm(&e.id.to_string(), &e.title, &items),
+            items,
             statuses: STATUSES.map(|s| StatusOptCtx { name: s.as_str(), current: s == e.status }).into(),
         },
     })

@@ -51,6 +51,6 @@
         <button class="btn btn-sm" hx-get="/ui/epic/{{ epic.id }}/edit" hx-target="#detail" hx-swap="innerHTML">Edit</button>
         <button class="btn btn-sm btn-error btn-outline"
                 hx-post="/ui/epic/{{ epic.id }}/delete" hx-swap="none" data-close-modal
-                hx-confirm="Delete {{ epic.id }} — {{ epic.title }}? Its tickets survive, detached.">Delete</button>
+                hx-confirm="{{ epic.delete_confirm }}">Delete</button>
     </div>
 </div>
