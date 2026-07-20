@@ -15,7 +15,7 @@ use claude_kanban::{
     server::{App, router},
     store::{
         Store,
-        model::{ColumnId, Effort, External, PrRef, PrState, Status, TicketId},
+        model::{ColumnId, Effort, EpicId, External, PrRef, PrState, Status, TicketId},
     },
 };
 use http_body_util::BodyExt;
@@ -297,6 +297,54 @@ async fn mutations_flow_create_move_status_delete() {
     let res = router.clone().oneshot(post("/ui/ticket/K-1/delete", 3, "")).await.unwrap();
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
     assert!(store.read_board().unwrap().tickets.is_empty());
+}
+
+/// Seed an epic and file `titles` under it, returning the epic's id.
+fn seed_epic(store: &Store, title: &str, titles: &[&str]) -> EpicId {
+    let created =
+        ops::apply(store, None, Op::CreateEpic { title: title.into(), color: None, body: String::new(), status: Status::Ready }).unwrap();
+    let epic = EpicId(created.created_ids[0].clone());
+    titles.iter().for_each(|t| {
+        let id = TicketId(seed_ticket(store, t));
+        let patch = ops::TicketPatch { epic: Some(Some(epic.clone())), ..ops::TicketPatch::default() };
+        ops::apply(store, None, Op::UpdateTicket { id, patch }).unwrap();
+    });
+    epic
+}
+
+#[tokio::test]
+async fn deleting_an_epic_from_the_board_takes_its_tickets() {
+    let (_dir, router, store) = test_app();
+    seed_epic(&store, "Auth", &["Inside one", "Inside two"]);
+    seed_ticket(&store, "Outside the epic");
+
+    let version = store.read_board().unwrap().version;
+    let res = router.oneshot(post("/ui/epic/EP-1/delete", version, "")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+    let board = store.read_board().unwrap();
+    let left: Vec<&str> = board.tickets.iter().map(|t| t.title.as_str()).collect();
+    assert_eq!(left, vec!["Outside the epic"], "the epic's tickets go with it, the outsider stays");
+    assert!(board.epics.is_empty());
+}
+
+/// The confirm dialog is the whole safety net for an irreversible cascade, so it has to say what goes — and must no
+/// longer promise the tickets survive.
+#[tokio::test]
+async fn the_epic_delete_confirm_says_the_tickets_go_too() {
+    let (_dir, router, store) = test_app();
+    seed_epic(&store, "Auth", &["Inside one", "Inside two"]);
+    ops::apply(&store, None, Op::MoveTicket { id: TicketId("K-1".into()), to: ColumnId::Done, position: None, owner: None, branch: None })
+        .unwrap();
+
+    let html = body_text(router.clone().oneshot(get("/ui/epic/EP-1")).await.unwrap()).await;
+    assert!(html.contains("its 2 tickets (1 already done)"), "the confirm must count the tickets and the done ones: {html}");
+    assert!(html.contains("There is no undo."), "and say the cascade is final: {html}");
+    assert!(!html.contains("survive, detached"), "the old promise must be gone: {html}");
+
+    seed_epic(&store, "Empty", &[]);
+    let html = body_text(router.oneshot(get("/ui/epic/EP-2")).await.unwrap()).await;
+    assert!(html.contains("Delete EP-2 — Empty? It has no tickets."), "an empty epic gets the short wording: {html}");
 }
 
 /// The edit form posts every field, so a save that omits nothing must still be able to *clear* the pair — and a bad

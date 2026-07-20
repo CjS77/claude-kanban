@@ -918,18 +918,70 @@ mod tests {
         assert!(store.read_claims().unwrap().is_empty());
     }
 
+    /// Create an epic and return its id — the three cascade tests below all start here.
+    fn create_epic_id(store: &Store, title: &str) -> EpicId {
+        let applied =
+            apply(store, None, Op::CreateEpic { title: title.into(), color: None, body: String::new(), status: Status::Ready }).unwrap();
+        EpicId(applied.created_ids[0].clone())
+    }
+
+    fn put_in_epic(store: &Store, ticket: &TicketId, epic: &EpicId) {
+        let patch = TicketPatch { epic: Some(Some(epic.clone())), ..TicketPatch::default() };
+        apply(store, None, Op::UpdateTicket { id: ticket.clone(), patch }).unwrap();
+    }
+
     #[test]
-    fn deleting_an_epic_detaches_its_tickets() {
+    fn deleting_an_epic_deletes_its_tickets() {
         let (_dir, store) = scratch();
-        let epic = apply(&store, None, Op::CreateEpic { title: "auth".into(), color: None, body: String::new(), status: Status::Ready }).unwrap();
-        let epic_id = EpicId(epic.created_ids[0].clone());
-        let t = create(&store, "in epic");
-        apply(&store, None, Op::UpdateTicket { id: t.clone(), patch: TicketPatch { epic: Some(Some(epic_id.clone())), ..TicketPatch::default() } }).unwrap();
+        let epic_id = create_epic_id(&store, "auth");
+        let inside = create(&store, "in epic");
+        let outside = create(&store, "no epic");
+        put_in_epic(&store, &inside, &epic_id);
         apply(&store, None, Op::DeleteEpic { id: epic_id }).unwrap();
 
         let board = store.read_board().unwrap();
         assert!(board.epics.is_empty());
-        assert!(board.ticket(&t).unwrap().epic.is_none(), "tickets survive their epic");
+        assert!(board.ticket(&inside).is_none(), "the epic's tickets go with it");
+        assert!(board.ticket(&outside).is_some(), "a ticket in no epic is untouched");
+    }
+
+    /// Cascade takes completed history and live work alike: a done ticket is deleted, not spared, and a claimed one is
+    /// deleted with its claim dropped (its worktree and branch survive on disk — git is not this op's business).
+    #[test]
+    fn deleting_an_epic_takes_done_and_claimed_tickets_with_it() {
+        let (_dir, store) = scratch();
+        let epic_id = create_epic_id(&store, "auth");
+        let finished = create(&store, "already done");
+        let working = create(&store, "under way");
+        put_in_epic(&store, &finished, &epic_id);
+        put_in_epic(&store, &working, &epic_id);
+
+        apply(&store, None, Op::MoveTicket { id: finished.clone(), to: ColumnId::Done, position: None, owner: None, branch: None }).unwrap();
+        apply(&store, None, Op::Claim { id: working.clone(), agent: "claude".into() }).unwrap();
+        apply(&store, None, Op::StampWorktree { id: working.clone(), branch: "k-2/under-way".into(), path: "/tmp/wt".into() }).unwrap();
+        assert_eq!(store.read_claims().unwrap().len(), 1, "the claimed ticket really is claimed before the delete");
+
+        apply(&store, None, Op::DeleteEpic { id: epic_id }).unwrap();
+        let board = store.read_board().unwrap();
+        assert!(board.tickets.is_empty(), "neither the done ticket nor the claimed one survives: {:?}", board.tickets);
+        assert!(store.read_claims().unwrap().is_empty(), "the claim on the deleted ticket is dropped");
+    }
+
+    /// A dangling `depends_on` fails whole-board validation, so the cascade has to clean the survivors in the same
+    /// transition — an `Ok` here is the proof that it wrote at all.
+    #[test]
+    fn deleting_an_epic_clears_dependencies_on_its_tickets() {
+        let (_dir, store) = scratch();
+        let epic_id = create_epic_id(&store, "auth");
+        let inside = create(&store, "in epic");
+        let outside = create(&store, "depends on it");
+        put_in_epic(&store, &inside, &epic_id);
+        let patch = TicketPatch { depends_on: Some(vec![inside]), ..TicketPatch::default() };
+        apply(&store, None, Op::UpdateTicket { id: outside.clone(), patch }).unwrap();
+
+        apply(&store, None, Op::DeleteEpic { id: epic_id }).expect("the cascade must leave the board valid");
+        let board = store.read_board().unwrap();
+        assert!(board.ticket(&outside).unwrap().depends_on.is_empty(), "the survivor is silently unblocked, not left dangling");
     }
 
     #[test]
