@@ -21,8 +21,8 @@ use serde::Deserialize;
 
 use crate::{
     config::Config,
-    ops::{self, Applied, NewEpicSpec, NewTicketSpec, Op, OpError, RefineTarget},
-    store::{Store, derive, derive::BoardView, model::{Column, ColumnId, Effort, EpicId, Status, TicketId}},
+    ops::{self, Applied, NewEpicSpec, NewTicketSpec, Op, OpError, RefineTarget, TicketPatch},
+    store::{Store, derive, derive::BoardView, model::{Board, Column, ColumnId, Effort, EpicId, Status, TicketId}},
 };
 
 /// What Claude is called on the board when a tool doesn't say otherwise.
@@ -40,8 +40,11 @@ Stubs are specs to write, not code to build: kanban_claim (the card sits pink in
 which lands it back in todo at status=review for the human — no worktree. \
 Only claim tickets kanban_next surfaces — ready (implement) or stub (refine), in todo, unblocked; never claim \
 spontaneously outside an explicit work loop. Never touch draft tickets. Tickets you create default to status=review so \
-the human vets them. Mutating tools need expected_version from your latest kanban_board read (kanban_next also returns \
-one — use it, its landing sweep may have advanced the board); on a version conflict, re-read and retry. \
+the human vets them. kanban_update_ticket edits an existing ticket's fields — including depends_on, so a dependency \
+discovered mid-flight can be added, dropped or rewired instead of living only in a note; it replaces the whole list, so \
+read the ticket first and send the set you want. Mutating tools need expected_version from your latest kanban_board \
+read (kanban_next also returns one — use it, its landing sweep may have advanced the board); on a version conflict, \
+re-read and retry. \
 kanban_board omits done tickets by default and returns a `done` summary of their ids instead — their specs and progress \
 logs are the bulk of the board and finished work is not input to your next decision; pass include_done=true, or \
 column=\"done\", when you actually need to read them.";
@@ -145,6 +148,51 @@ pub struct CreateTicketParams {
     /// work queue unless explicitly told to create ready tickets.
     #[serde(default)]
     pub status: Option<String>,
+    /// The board version from your latest `kanban_board` read.
+    pub expected_version: u64,
+}
+
+/// Distinguish "field absent" from "field present and null". `#[serde(default)]` yields `None` when the key is missing;
+/// this yields `Some(None)` when it is there as `null` — the difference between "leave it alone" and "clear it".
+#[allow(clippy::option_option)] // the three states are the point, and they mirror `TicketPatch`'s own nested options
+fn present_or_null<'de, T, D>(de: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    Option::deserialize(de).map(Some)
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct UpdateTicketParams {
+    /// The ticket id, e.g. "K-7".
+    pub ticket: String,
+    /// A new title. Omit to leave it alone.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// A new markdown body, replacing the spec wholesale. Omit to leave it alone.
+    #[serde(default)]
+    pub body: Option<String>,
+    /// The whole label set, replacing the current one. Omit to leave it alone; `[]` clears every label.
+    #[serde(default)]
+    pub labels: Option<Vec<String>>,
+    /// The whole dependency list, replacing the current one — read the ticket first and send the set you want, not just the
+    /// edge you are adding. Omit to leave it alone; `[]` clears every dependency. Ids must exist, and the graph must stay
+    /// acyclic: a dangling id or a cycle is refused and nothing is written.
+    #[serde(default)]
+    pub depends_on: Option<Vec<String>>,
+    /// Epic id, e.g. "EP-2". `null` detaches the ticket from its epic; omit to leave it alone.
+    #[serde(default, deserialize_with = "present_or_null")]
+    pub epic: Option<Option<String>>,
+    /// The model this ticket's work should run on — an alias like "opus", or a full id like "claude-opus-4-8". `null`
+    /// clears the preference back to "inherit"; omit to leave it alone.
+    #[serde(default, deserialize_with = "present_or_null")]
+    pub model: Option<Option<String>>,
+    /// Reasoning effort: "low", "medium", "high", "xhigh", or "max". `null` clears it back to "inherit"; omit to leave it
+    /// alone.
+    #[serde(default, deserialize_with = "present_or_null")]
+    pub effort: Option<Option<String>>,
     /// The board version from your latest `kanban_board` read.
     pub expected_version: u64,
 }
@@ -387,6 +435,28 @@ impl KanbanServer {
         self.apply(Some(p.expected_version), op).await
     }
 
+    /// Edit an existing ticket's descriptive fields — including `depends_on`, which is how you rewire the dependency graph
+    /// after the fact (add an edge you missed, drop one that turned out not to hold, or clear the list). Every field is
+    /// optional: omit one and it is left untouched. `depends_on` and `labels` replace the whole list rather than merging,
+    /// so read the ticket first and send the set you want; `[]` clears. `epic`, `model` and `effort` additionally accept
+    /// `null`, which clears them. Dangling dependency ids and cycles are refused, and nothing is written when they are.
+    /// Drafts are refused — they are the human's to shape. `status` is deliberately absent: promoting work to ready stays
+    /// the human's call.
+    #[tool]
+    async fn kanban_update_ticket(&self, Parameters(p): Parameters<UpdateTicketParams>) -> Result<CallToolResult, ErrorData> {
+        let patch = TicketPatch {
+            title: p.title,
+            body: p.body,
+            labels: p.labels,
+            depends_on: p.depends_on.map(|ids| ids.into_iter().map(TicketId).collect()),
+            epic: p.epic.map(|e| e.map(EpicId)),
+            model: p.model,
+            effort: p.effort.map(|e| parse_effort(e.as_deref())).transpose()?,
+        };
+        let id = TicketId(p.ticket);
+        self.apply_unless_draft(p.expected_version, id.clone(), Op::UpdateTicket { id, patch }).await
+    }
+
     /// Create an epic. Defaults to `status=review` — the human promotes it to ready.
     #[tool]
     async fn kanban_create_epic(&self, Parameters(p): Parameters<CreateEpicParams>) -> Result<CallToolResult, ErrorData> {
@@ -489,18 +559,49 @@ impl KanbanServer {
         let result = tokio::task::spawn_blocking(move || ops::apply(&store, expected_version, op))
             .await
             .map_err(|e| ErrorData::internal_error(format!("task failed: {e}"), None))?;
-        Ok(match result {
-            Ok(Applied { version, created_ids, mut result }) => {
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert("version".into(), version.into());
-                    if !created_ids.is_empty() {
-                        obj.insert("created".into(), serde_json::json!(created_ids));
-                    }
-                }
-                CallToolResult::structured(result)
-            }
-            Err(e) => tool_error(&e),
+        Ok(shape_applied(result))
+    }
+
+    /// Mutating tools that drafts are off-limits to: check the status, then apply. The check and the apply take the store
+    /// lock separately, but `expected_version` closes the gap — anything landing in between bumps the board version, and
+    /// the apply is then rejected as a conflict rather than acting on the status this read saw.
+    async fn apply_unless_draft(&self, expected_version: u64, id: TicketId, op: Op) -> Result<CallToolResult, ErrorData> {
+        let store = self.store.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            refuse_draft(&store.read_board()?, &id)?;
+            ops::apply(&store, Some(expected_version), op)
         })
+        .await
+        .map_err(|e| ErrorData::internal_error(format!("task failed: {e}"), None))?;
+        Ok(shape_applied(result))
+    }
+}
+
+/// Shape an applied op for the wire: the op's own result, plus the board's new version and any ids it minted.
+fn shape_applied(result: Result<Applied, OpError>) -> CallToolResult {
+    match result {
+        Ok(Applied { version, created_ids, mut result }) => {
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert("version".into(), version.into());
+                if !created_ids.is_empty() {
+                    obj.insert("created".into(), serde_json::json!(created_ids));
+                }
+            }
+            CallToolResult::structured(result)
+        }
+        Err(e) => tool_error(&e),
+    }
+}
+
+/// Drafts are the human's scratch space — the standing instruction is "never touch draft tickets" — so Claude's edit tools
+/// refuse them even though the ops layer and the browser both allow the edit.
+fn refuse_draft(board: &Board, id: &TicketId) -> Result<(), OpError> {
+    match board.ticket(id) {
+        None => Err(OpError::NotFound(id.to_string())),
+        Some(t) if t.status == Status::Draft => {
+            Err(OpError::Invalid(format!("{id} is a draft — drafts are the human's to shape, not yours to edit")))
+        }
+        Some(_) => Ok(()),
     }
 }
 

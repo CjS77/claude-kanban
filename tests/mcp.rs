@@ -278,3 +278,75 @@ fn kanban_next_lands_merged_review_work_and_the_move_records_companion_branches(
     assert!(matches!(&board.ticket(&TicketId("K-2".into())).unwrap().column, Column::Review { branch: Some(b) } if b == "k-1/work"));
     assert!(store.read_claims().unwrap().is_empty(), "entering review drops the claim");
 }
+
+/// Dependencies were write-once over MCP until `kanban_update_ticket`: creation could set them, nothing could change them.
+/// This drives the whole edit lifecycle over the wire — add, rewire, clear — plus the guards that keep the tool from being
+/// a way around the board's rules: no cycles, no dangling ids, no touching drafts.
+#[test]
+fn kanban_update_ticket_rewires_dependencies_and_guards_drafts() {
+    use claude_kanban::store::model::{Effort, Status, TicketId};
+
+    let dir = tempfile::tempdir().unwrap();
+    let store_dir = dir.path().join(".kanban");
+    let store = claude_kanban::store::Store::at(&store_dir);
+    store.init().unwrap();
+    let mut mcp = McpSession::start(&store_dir);
+    let deps = |id: &str| store.read_board().unwrap().ticket(&TicketId(id.into())).unwrap().depends_on.clone();
+
+    // The tool is advertised, and its schema really carries depends_on.
+    let tools = mcp.request(1, "tools/list", &json!({}));
+    let update = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == json!("kanban_update_ticket"))
+        .expect("kanban_update_ticket must be advertised")
+        .clone();
+    assert!(update["inputSchema"]["properties"]["depends_on"].is_object(), "depends_on must be editable: {update}");
+
+    ["first", "second", "third"].iter().enumerate().for_each(|(i, title)| {
+        mcp.call_tool(10 + i as u64, "kanban_create_ticket", &json!({ "title": title, "status": "ready", "expected_version": i }));
+    });
+
+    // The edge nobody knew about at creation time.
+    let updated = mcp.call_tool(20, "kanban_update_ticket", &json!({ "ticket": "K-3", "depends_on": ["K-1", "K-2"], "expected_version": 3 }));
+    assert_eq!(updated["structuredContent"]["id"], "K-3", "{updated}");
+    assert_eq!(deps("K-3"), vec![TicketId("K-1".into()), TicketId("K-2".into())]);
+    let next = mcp.call_tool(21, "kanban_next", &json!({}));
+    assert_eq!(next["structuredContent"]["ticket"]["id"], "K-1", "K-3 is now blocked behind the others: {next}");
+
+    // Rewire: one edge turned out not to hold.
+    mcp.call_tool(22, "kanban_update_ticket", &json!({ "ticket": "K-3", "depends_on": ["K-2"], "expected_version": 4 }));
+    assert_eq!(deps("K-3"), vec![TicketId("K-2".into())], "the list is replaced wholesale, not merged");
+
+    // A dangling id and a cycle are both refused, and neither writes.
+    let dangling = mcp.call_tool(23, "kanban_update_ticket", &json!({ "ticket": "K-3", "depends_on": ["K-99"], "expected_version": 5 }));
+    assert_eq!(dangling["isError"], true, "{dangling}");
+    let cyclic = mcp.call_tool(24, "kanban_update_ticket", &json!({ "ticket": "K-2", "depends_on": ["K-3"], "expected_version": 5 }));
+    assert_eq!(cyclic["isError"], true, "K-3 already depends on K-2: {cyclic}");
+    assert_eq!(deps("K-3"), vec![TicketId("K-2".into())], "a refused edit leaves the graph exactly as it was");
+
+    // And the whole list clears.
+    mcp.call_tool(25, "kanban_update_ticket", &json!({ "ticket": "K-3", "depends_on": [], "expected_version": 5 }));
+    assert!(deps("K-3").is_empty(), "[] clears every dependency");
+
+    // Drafts stay the human's, even though the ops layer and the browser both allow the edit.
+    mcp.call_tool(26, "kanban_create_ticket", &json!({ "title": "human's scratch", "status": "draft", "expected_version": 6 }));
+    let draft = mcp.call_tool(27, "kanban_update_ticket", &json!({ "ticket": "K-4", "title": "meddling", "expected_version": 7 }));
+    assert_eq!(draft["isError"], true, "{draft}");
+    assert!(draft["content"][0]["text"].as_str().unwrap().contains("draft"), "the refusal says why: {draft}");
+
+    // Omitted leaves a field alone; explicit null clears it — the distinction the patch is built on.
+    mcp.call_tool(28, "kanban_create_ticket", &json!({ "title": "tuned", "status": "ready", "model": "opus", "effort": "high", "expected_version": 7 }));
+    mcp.call_tool(29, "kanban_update_ticket", &json!({ "ticket": "K-5", "title": "retitled", "expected_version": 8 }));
+    let tuned = store.read_board().unwrap().ticket(&TicketId("K-5".into())).unwrap().clone();
+    assert_eq!(tuned.title, "retitled");
+    assert_eq!(tuned.model.as_deref(), Some("opus"), "an omitted model is left alone");
+    assert_eq!(tuned.effort, Some(Effort::High), "an omitted effort is left alone");
+
+    mcp.call_tool(30, "kanban_update_ticket", &json!({ "ticket": "K-5", "model": null, "expected_version": 9 }));
+    let cleared = store.read_board().unwrap().ticket(&TicketId("K-5".into())).unwrap().clone();
+    assert_eq!(cleared.model, None, "an explicit null clears the model");
+    assert_eq!(cleared.effort, Some(Effort::High), "and clears only what was named");
+    assert_eq!(cleared.status, Status::Ready, "status is not patchable here — promotion stays the human's call");
+}

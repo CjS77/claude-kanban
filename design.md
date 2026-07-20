@@ -433,6 +433,12 @@ The implementation checklist, kept as the record of scope.
 - [x] `kanban_claim` / `kanban_release` — take and give back a ticket
 - [x] `kanban_move` — move a ticket to a column, at a position
 - [x] `kanban_create_ticket` / `kanban_create_epic`
+- [x] `kanban_update_ticket` — edit an existing ticket's descriptive fields, `depends_on` included, so the dependency graph
+  can be rewired after creation instead of being write-once at it. Omitted fields are left alone; `depends_on` and `labels`
+  replace the whole list (`[]` clears); `epic`, `model` and `effort` also take an explicit `null` to clear, which is why
+  they are nested options on `TicketPatch` and get a `present_or_null` deserializer on the wire. Two things are deliberately
+  out of reach: `status`, so Claude still cannot promote its own work to ready, and `draft` tickets, refused outright — the
+  browser and the ops layer both allow that edit, but the MCP face keeps the standing "never touch draft tickets" rule
 - [x] `kanban_note` — append to a ticket's progress log
 - [x] `kanban_bind_external` — record (or clear) a ticket's binding to an external work item; used by `/kanban:delegate`
 - [x] `kanban_refine` — flesh out a `stub` ticket or epic into a detailed spec, splitting into subtasks or sub-epics when it's too big;

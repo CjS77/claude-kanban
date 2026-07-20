@@ -189,6 +189,10 @@ A stub is a spec to write, not code to build. When `kanban_next` says `action: "
 - If a ticket turns out to be much bigger than its spec, don't silently balloon: `kanban_note` the discovery, create
   follow-up tickets with `kanban_create_ticket` (they land in `review` for the human to vet), and finish the
   original at its honest scope.
+- If you discover a real ordering constraint mid-flight — this ticket can't land before another, or a dependency it was
+  given turns out not to hold — put it on the board with `kanban_update_ticket`, not just in a note: `depends_on` is what
+  actually gates `kanban_next`, a note is prose nobody's scheduler reads. It replaces the whole list, so read the ticket
+  first and send the set you want. Dangling ids and cycles are refused, and drafts are off-limits.
 - If genuinely stuck, `kanban_note` why, `kanban_release` the ticket (it returns to the top of todo), clean up with
   `kanban_worktree_finish`, and move to the next ticket.
 - At the end of the loop, summarise: tickets completed, branches created (and PRs, with `--push`), tickets released
