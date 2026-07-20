@@ -14,6 +14,8 @@
     <span class="badge {{ epic.status_badge }}">{{ epic.status }}</span>
     <span class="badge badge-outline" title="derived from this epic's tickets">{{ epic.column }}</span>
     <span class="badge badge-ghost">epic</span>
+    {% if epic.auto_merge %}<span class="badge badge-warning"
+          title="every ticket under this epic lands itself on reaching review: /kanban:work rebases its branch onto main and fast-forwards main into it, with no human review of the merge">auto-merge</span>{% endif %}
 </div>
 
 {% if epic.has_body %}
@@ -48,6 +50,12 @@
         {% endfor %}
     </div>
     <div class="flex gap-2">
+        {#- One click grants auto-merge to every ticket filed under the epic, so the confirm counts them out. -#}
+        <button class="btn btn-sm btn-warning {% if !epic.auto_merge %}btn-outline{% endif %}"
+                hx-post="/ui/epic/{{ epic.id }}/auto-merge" hx-target="#detail" hx-swap="innerHTML"
+                hx-confirm="{{ epic.auto_merge_confirm }}"
+                title="let /kanban:work land this epic's tickets on main by itself, with no human review of the merge">
+            Auto-merge</button>
         <button class="btn btn-sm" hx-get="/ui/epic/{{ epic.id }}/edit" hx-target="#detail" hx-swap="innerHTML">Edit</button>
         <button class="btn btn-sm btn-error btn-outline"
                 hx-post="/ui/epic/{{ epic.id }}/delete" hx-swap="none" data-close-modal

@@ -14,7 +14,7 @@ use crate::{
     store::{
         Claim,
         derive::{self, BoardView, ClaimView, EpicView, TicketView},
-        model::{Board, ColumnId, Effort, Status},
+        model::{Board, ColumnId, Effort, Epic, Status},
     },
 };
 
@@ -152,6 +152,11 @@ pub struct CardCtx {
     pub pr: Option<PrCtx>,
     /// A review ticket whose recorded branch no longer exists locally and nothing proves it landed — the human's call.
     pub branch_gone: bool,
+    /// The *effective* auto-merge grant — the ticket's own flag or its epic's. A card wearing it will move main with
+    /// nobody watching, so it gets a warning badge.
+    pub auto_merge: bool,
+    /// The grant is the epic's alone, so the badge says `auto-merge (epic)` — clearing it is done on the epic.
+    pub auto_merge_inherited: bool,
     pub labels: Vec<String>,
     /// The model/effort preference, pre-rendered as one badge — the point is spotting the expensive tickets at a glance.
     pub run: Option<String>,
@@ -268,6 +273,9 @@ fn card(t: &TicketView, view: &BoardView, heads: Option<&HashSet<String>>) -> Ca
         branch_gone: t.ticket.column.id() == ColumnId::Review
             && t.ticket.external.is_none()
             && t.ticket.column.branch().is_some_and(|b| heads.is_some_and(|h| !h.contains(b))),
+        // Already derived once per board render, by `derive::board_view` — the card has no `Board` to ask again.
+        auto_merge: t.auto_merge_effective,
+        auto_merge_inherited: t.auto_merge_effective && !t.ticket.auto_merge,
         labels: t.ticket.labels.clone(),
         run: run_badge(&t.ticket),
         external: t.ticket.external.as_ref().map(|e| format!("{} {}#{}", e.provider, e.kind, e.number)),
@@ -339,6 +347,12 @@ pub struct TicketCtx {
     /// Review tickets can be retired without landing: done with `discarded: true`, dependents stay blocked.
     pub can_discard: bool,
     pub discarded: bool,
+    /// The effective auto-merge grant, same as the card's — it fills the toggle button and raises the warning badge.
+    pub auto_merge: bool,
+    /// The grant is the epic's alone: the button says so, and its confirm explains it cannot take the epic's away.
+    pub auto_merge_inherited: bool,
+    /// The whole text of the toggle's confirmation, spelled out server-side — see [`ticket_auto_merge_confirm`].
+    pub auto_merge_confirm: String,
     pub deps: Vec<DepCtx>,
     pub notes: Vec<NoteCtx>,
     pub statuses: Vec<StatusOptCtx>,
@@ -371,6 +385,41 @@ pub struct StatusOptCtx {
     pub current: bool,
 }
 
+/// The scare text shared by both auto-merge toggles: what the machine does to main once a flagged ticket reaches review.
+/// Written out server-side like [`epic_delete_confirm`] — a cost this size belongs in the dialog, not in the docs.
+fn auto_merge_on_confirm(target: &str, subject: &str) -> String {
+    format!(
+        "Turn on auto-merge for {target}? When {subject} reaches review, /kanban:work will rebase its branch onto main \
+         and fast-forward main into it with no human review of the merge, resolving any rebase conflicts on its own. \
+         There is no undo once main has moved."
+    )
+}
+
+/// What the ticket's toggle asks. Turning it off is the safe direction and stays terse — unless the grant is the epic's,
+/// where the honest answer is that this button cannot take it away. `from_epic` is `Some` only in that case.
+fn ticket_auto_merge_confirm(id: &str, title: &str, on: bool, from_epic: Option<&Epic>) -> String {
+    match (on, from_epic) {
+        (false, _) => auto_merge_on_confirm(&format!("{id} — {title}"), "this ticket"),
+        (true, Some(e)) => format!(
+            "Auto-merge for {id} — {title} comes from {} — {}, not from the ticket. Clearing the ticket's own flag \
+             leaves the epic's grant standing, so {id} still auto-merges — switch it off on the epic instead.",
+            e.id, e.title
+        ),
+        (true, None) => format!("Turn off auto-merge for {id} — {title}? It goes back to waiting for your review before it lands."),
+    }
+}
+
+/// What the epic's toggle asks. Turning it on names how many tickets the grant reaches: it is one click for the list.
+fn epic_auto_merge_confirm(id: &str, title: &str, on: bool, count: usize) -> String {
+    if on {
+        return format!("Turn off auto-merge for {id} — {title}? Its tickets keep whatever flags they set for themselves.");
+    }
+    let plural = if count == 1 { "ticket" } else { "tickets" };
+    let target = if count == 0 { format!("{id} — {title}") } else { format!("{id} — {title} and its {count} {plural}") };
+    let subject = if count == 0 { "a ticket filed under it" } else { "any of them" };
+    auto_merge_on_confirm(&target, subject)
+}
+
 pub fn detail(board: &Board, claims: &[Claim], id: &crate::store::model::TicketId, can_pr: bool) -> Option<DetailTpl> {
     use crate::store::model::Column;
     let t = board.ticket(id)?;
@@ -379,6 +428,10 @@ pub fn detail(board: &Board, claims: &[Claim], id: &crate::store::model::TicketI
         Column::Done { completed_at, .. } => Some(human_time(*completed_at)),
         _ => None,
     };
+    let epic = t.epic.as_ref().and_then(|eid| board.epic(eid));
+    let auto_merge = derive::auto_merge(t, board);
+    // The epic granted it and the ticket's own flag is clear — which is exactly when the toggle cannot switch it off.
+    let auto_merge_inherited = auto_merge && !t.auto_merge;
     Some(DetailTpl {
         ticket: TicketCtx {
             id: t.id.to_string(),
@@ -388,11 +441,7 @@ pub fn detail(board: &Board, claims: &[Claim], id: &crate::store::model::TicketI
             column: t.column.id(),
             blocked: derive::blocked(t, board),
             external: t.external.as_ref().map(|e| format!("{} {}#{}", e.provider, e.kind, e.number)),
-            epic: t.epic.as_ref().and_then(|eid| board.epic(eid)).map(|e| EpicRefCtx {
-                id: e.id.to_string(),
-                title: e.title.clone(),
-                color: e.color.clone(),
-            }),
+            epic: epic.map(|e| EpicRefCtx { id: e.id.to_string(), title: e.title.clone(), color: e.color.clone() }),
             labels: t.labels.clone(),
             run: run_badge(t),
             claim,
@@ -402,6 +451,14 @@ pub fn detail(board: &Board, claims: &[Claim], id: &crate::store::model::TicketI
             pr: t.pr.as_ref().map(pr_ctx),
             can_discard: t.column.id() == ColumnId::Review,
             discarded: matches!(t.column, Column::Done { discarded: true, .. }),
+            auto_merge,
+            auto_merge_inherited,
+            auto_merge_confirm: ticket_auto_merge_confirm(
+                &t.id.to_string(),
+                &t.title,
+                auto_merge,
+                auto_merge_inherited.then_some(epic).flatten(),
+            ),
             deps: t
                 .depends_on
                 .iter()
@@ -492,6 +549,10 @@ pub struct EpicDetailCtx {
     /// The whole text of the delete confirmation, spelled out server-side — deletion cascades and there is no undo, so
     /// the dialog has to name what goes with the epic before the human clicks.
     pub delete_confirm: String,
+    /// The epic's own auto-merge grant, which every ticket under it inherits.
+    pub auto_merge: bool,
+    /// The whole text of the toggle's confirmation — see [`epic_auto_merge_confirm`].
+    pub auto_merge_confirm: String,
 }
 
 /// Spell out what deleting `EP-n — title` costs, counting the tickets that go with it and the done ones among them.
@@ -529,6 +590,8 @@ pub fn epic_detail(board: &Board, id: &crate::store::model::EpicId) -> Option<Ep
             column: derive::epic_column(id, board),
             has_body: !e.body.is_empty(),
             delete_confirm: epic_delete_confirm(&e.id.to_string(), &e.title, &items),
+            auto_merge: e.auto_merge,
+            auto_merge_confirm: epic_auto_merge_confirm(&e.id.to_string(), &e.title, e.auto_merge, items.len()),
             items,
             statuses: STATUSES.map(|s| StatusOptCtx { name: s.as_str(), current: s == e.status }).into(),
         },

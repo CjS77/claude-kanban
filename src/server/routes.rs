@@ -357,6 +357,32 @@ pub async fn ticket_status(
     mutate_then_detail(&app, &headers, op, id).await
 }
 
+/// The ticket's *effective* auto-merge — its own flag or its epic's. Read just before the toggle so the button always
+/// flips what the pane showed; a board that moved in between is caught by the version check on the apply that follows.
+async fn current_auto_merge(app: &AppState, id: &TicketId) -> Result<bool, AppError> {
+    let id = id.clone();
+    blocking(app, move |store| {
+        let board = store.read_board()?;
+        let ticket = board.ticket(&id).ok_or_else(|| AppError::not_found(&id.to_string()))?;
+        Ok(derive::auto_merge(ticket, &board))
+    })
+    .await
+}
+
+/// The auto-merge toggle: its own route and its own confirm, deliberately not a checkbox on the edit form — that form
+/// has one blanket Save, so a confirm there would fire on every unrelated edit. Only the ticket's own flag is written,
+/// so a click on an epic-granted ticket clears nothing; the confirm text says as much before it fires.
+pub async fn ticket_auto_merge(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Html<String>, AppError> {
+    let id = TicketId(id);
+    let on = current_auto_merge(&app, &id).await?;
+    let patch = TicketPatch { auto_merge: Some(!on), ..TicketPatch::default() };
+    mutate_then_detail(&app, &headers, Op::UpdateTicket { id: id.clone(), patch }, id).await
+}
+
 #[derive(Debug, Deserialize)]
 pub struct NoteForm {
     text: String,
@@ -505,6 +531,21 @@ pub async fn epic_status(
     let version = client_version(&headers)?;
     blocking(&app, move |store| {
         ops::apply(store, Some(version), op)?;
+        let tpl = views::epic_detail(&store.read_board()?, &id).ok_or_else(|| AppError::not_found(&id.to_string()))?;
+        Ok(Html(tpl.render()?))
+    })
+    .await
+}
+
+/// The epic's auto-merge toggle — the same deliberate second action as the ticket's, but the grant reaches every ticket
+/// filed under it at once, which is what its confirm counts out.
+pub async fn epic_auto_merge(State(app): State<AppState>, Path(id): Path<String>, headers: HeaderMap) -> Result<Html<String>, AppError> {
+    let id = EpicId(id);
+    let version = client_version(&headers)?;
+    blocking(&app, move |store| {
+        let on = store.read_board()?.epic(&id).ok_or_else(|| AppError::not_found(&id.to_string()))?.auto_merge;
+        let patch = crate::ops::EpicPatch { auto_merge: Some(!on), ..crate::ops::EpicPatch::default() };
+        ops::apply(store, Some(version), Op::UpdateEpic { id: id.clone(), patch })?;
         let tpl = views::epic_detail(&store.read_board()?, &id).ok_or_else(|| AppError::not_found(&id.to_string()))?;
         Ok(Html(tpl.render()?))
     })

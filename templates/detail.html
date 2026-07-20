@@ -13,6 +13,8 @@
     <span class="badge badge-outline" title="workflow column">{{ ticket.column }}</span>
     {% if ticket.discarded %}<span class="badge badge-neutral" title="retired without landing — tickets depending on this stay blocked">discarded</span>{% endif %}
     {% if ticket.blocked %}<span class="badge badge-error">blocked</span>{% endif %}
+    {% if ticket.auto_merge %}<span class="badge badge-warning"
+          title="on reaching review this lands itself: /kanban:work rebases the branch onto main and fast-forwards main into it, with no human review of the merge">auto-merge{% if ticket.auto_merge_inherited %} (epic){% endif %}</span>{% endif %}
     {% if let Some(ext) = ticket.external %}<span class="badge badge-neutral" title="worked elsewhere — this board never touches it">↗ {{ ext }}</span>{% endif %}
     {% if let Some(epic) = ticket.epic %}
     <span class="badge text-white cursor-pointer" style="background-color: {{ epic.color }}; border-color: {{ epic.color }}"
@@ -109,6 +111,13 @@
                 hx-post="/ui/ticket/{{ ticket.id }}/discard" hx-target="#detail" hx-swap="innerHTML"
                 hx-confirm="Discard {{ ticket.id }} — {{ ticket.title }}? It closes as done without landing, and tickets depending on it stay blocked.">Discard</button>
         {% endif %}
+        {#- Auto-merge gets its own route and its own confirm rather than a checkbox on the edit form: that form's one
+            Save button would fire the dialog on every unrelated edit. Filled means on — see the badge row. -#}
+        <button class="btn btn-sm btn-warning {% if !ticket.auto_merge %}btn-outline{% endif %}"
+                hx-post="/ui/ticket/{{ ticket.id }}/auto-merge" hx-target="#detail" hx-swap="innerHTML"
+                hx-confirm="{{ ticket.auto_merge_confirm }}"
+                title="let /kanban:work land this ticket on main by itself, with no human review of the merge">
+            Auto-merge{% if ticket.auto_merge_inherited %} (epic){% endif %}</button>
         <button class="btn btn-sm" hx-get="/ui/ticket/{{ ticket.id }}/edit" hx-target="#detail" hx-swap="innerHTML">Edit</button>
         <button class="btn btn-sm btn-error btn-outline"
                 hx-post="/ui/ticket/{{ ticket.id }}/delete" hx-swap="none" data-close-modal

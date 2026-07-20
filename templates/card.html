@@ -18,6 +18,8 @@
                       title="{{ pr.title }}" onclick="event.stopPropagation()">{{ pr.label }}</a>{% endif %}
                 {% if card.branch_gone %}<span class="badge badge-warning badge-xs"
                       title="the recorded branch no longer exists locally and nothing proves it landed — drag to done if it did, or discard it from the detail pane">branch gone</span>{% endif %}
+                {% if card.auto_merge %}<span class="badge badge-warning badge-xs"
+                      title="on reaching review this lands itself: /kanban:work rebases the branch onto main and fast-forwards main into it, with no human review of the merge">auto-merge{% if card.auto_merge_inherited %} (epic){% endif %}</span>{% endif %}
                 {% if let Some(ext) = card.external %}<span class="badge badge-neutral badge-xs" title="worked elsewhere">↗ {{ ext }}</span>{% endif %}
                 {% if let Some(run) = card.run %}<span class="badge badge-ghost badge-xs font-mono"
                       title="/kanban:work runs this ticket at this model and effort">{{ run }}</span>{% endif %}
