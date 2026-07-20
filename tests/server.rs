@@ -239,7 +239,8 @@ async fn the_search_box_wears_a_magnifier_and_a_javascript_free_help_popup() {
     assert!(!popup.contains("onclick") && !popup.contains("hx-"), "the popup must need no script to open: {popup}");
 
     // The keys it documents are exactly the ones search.rs answers to — `merged:` was removed in v2 and must not return.
-    let keys = ["text:", "label:", "epic:", "id:", "note:", "status:", "col: column:", "landed:", "discarded:", "blocked:"];
+    let keys =
+        ["text:", "label:", "epic:", "id:", "note:", "status:", "col: column:", "landed:", "discarded:", "blocked:", "auto-merge:"];
     let missing: Vec<_> = keys.into_iter().filter(|key| !popup.contains(key)).collect();
     assert!(missing.is_empty(), "the popup must document every search key — missing {missing:?}: {popup}");
     assert!(!popup.contains("merged:"), "there is no merged: key: {popup}");
@@ -835,4 +836,58 @@ async fn the_file_watcher_broadcasts_on_store_writes() {
         .unwrap();
     assert_eq!(version, 1);
     shutdown.cancel();
+}
+
+/// Seed a ticket carrying its own `auto_merge` answer.
+fn seed_auto_merging(store: &Store, title: &str, auto_merge: bool) {
+    ops::apply(
+        store,
+        None,
+        Op::CreateTicket {
+            title: title.into(),
+            body: String::new(),
+            epic: None,
+            labels: vec![],
+            depends_on: vec![],
+            status: Status::Ready,
+            model: None,
+            effort: None,
+            auto_merge,
+        },
+    )
+    .unwrap();
+}
+
+#[tokio::test]
+async fn the_auto_merge_filter_splits_the_board_both_ways() {
+    let (_dir, router, store) = test_app();
+    seed_auto_merging(&store, "Merges itself", true);
+    seed_auto_merging(&store, "Waits for a human", false);
+
+    let html = body_text(router.clone().oneshot(get("/ui/board?q=auto-merge:true")).await.unwrap()).await;
+    assert!(html.contains("Merges itself"), "the flagged card must survive: {html}");
+    assert!(!html.contains("Waits for a human"), "an unflagged card must go: {html}");
+
+    let html = body_text(router.oneshot(get("/ui/board?q=auto-merge:false")).await.unwrap()).await;
+    assert!(html.contains("Waits for a human"), "false selects the rest, rather than nothing: {html}");
+    assert!(!html.contains("Merges itself"), "and only the rest: {html}");
+}
+
+/// The filter reads the derived flag, so an epic's permission reaches the tickets filed under it.
+#[tokio::test]
+async fn auto_merge_true_finds_a_ticket_that_inherits_the_flag_from_its_epic() {
+    let (_dir, router, store) = test_app();
+    let created =
+        ops::apply(&store, None, Op::CreateEpic { title: "Chores".into(), color: None, body: String::new(), status: Status::Ready, auto_merge: true })
+            .unwrap();
+    let epic = EpicId(created.created_ids[0].clone());
+    let id = TicketId(seed_ticket(&store, "Inherits from its epic"));
+    let patch = ops::TicketPatch { epic: Some(Some(epic)), ..ops::TicketPatch::default() };
+    ops::apply(&store, None, Op::UpdateTicket { id: id.clone(), patch }).unwrap();
+    seed_auto_merging(&store, "Filed under nothing", false);
+
+    let html = body_text(router.oneshot(get("/ui/board?q=auto-merge:true")).await.unwrap()).await;
+    assert!(html.contains("Inherits from its epic"), "the epic's flag must reach its ticket: {html}");
+    assert!(!store.read_board().unwrap().ticket(&id).unwrap().auto_merge, "though the ticket's own flag stays false");
+    assert!(!html.contains("Filed under nothing"), "a ticket under no epic keeps its own answer: {html}");
 }
