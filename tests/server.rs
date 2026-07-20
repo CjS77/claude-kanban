@@ -377,6 +377,106 @@ async fn the_edit_form_round_trips_model_and_effort_and_refuses_a_bad_level() {
 }
 
 #[tokio::test]
+async fn the_auto_merge_toggle_flips_the_flag_and_hands_back_the_refreshed_pane() {
+    let (_dir, router, store) = test_app();
+    seed_ticket(&store, "lands itself");
+    let flagged = || store.read_board().unwrap().tickets[0].auto_merge;
+
+    let res = router.clone().oneshot(post("/ui/ticket/K-1/auto-merge", 1, "")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body_text(res).await;
+    assert!(flagged(), "the click writes the ticket's own flag");
+    assert!(html.contains("lands itself"), "and answers with the refreshed pane, not a bare 204: {html}");
+    assert!(html.contains(">auto-merge</span>"), "which now wears the warning badge: {html}");
+
+    let version = store.read_board().unwrap().version;
+    let html = body_text(router.oneshot(post("/ui/ticket/K-1/auto-merge", version, "")).await.unwrap()).await;
+    assert!(!flagged(), "a second click takes it back off");
+    assert!(!html.contains(">auto-merge</span>"), "and the badge goes with it: {html}");
+}
+
+/// The whole point of the dedicated route is the dialog on it, so the wording is a test, not a detail: turning it on has
+/// to name the ticket and admit that main moves with nobody reviewing the merge. Turning it off carries no scare text.
+#[tokio::test]
+async fn the_auto_merge_confirm_names_the_ticket_and_says_main_moves_unreviewed() {
+    let (_dir, router, store) = test_app();
+    seed_ticket(&store, "risky one");
+
+    let html = body_text(router.clone().oneshot(get("/ui/ticket/K-1")).await.unwrap()).await;
+    assert!(html.contains("Turn on auto-merge for K-1 — risky one?"), "the confirm must name the ticket: {html}");
+    assert!(html.contains("fast-forward main into it with no human review of the merge"), "and what it costs: {html}");
+    assert!(html.contains("There is no undo once main has moved."), "and that it is final: {html}");
+
+    router.clone().oneshot(post("/ui/ticket/K-1/auto-merge", 1, "")).await.unwrap();
+    let html = body_text(router.oneshot(get("/ui/ticket/K-1")).await.unwrap()).await;
+    assert!(html.contains("Turn off auto-merge for K-1 — risky one?"), "switching it off is the safe direction: {html}");
+    assert!(!html.contains("There is no undo"), "so it gets no scare text: {html}");
+}
+
+/// An epic's grant reaches its tickets without touching their stored flags, so the badge has to say where it came from —
+/// and the ticket's own toggle has to admit it cannot take the epic's grant away.
+#[tokio::test]
+async fn a_card_credits_the_epic_when_the_grant_is_inherited() {
+    let (_dir, router, store) = test_app();
+    seed_epic(&store, "Auth", &["under the epic"]);
+    seed_ticket(&store, "on its own");
+    let patch_ticket = |id: &str, on: bool| {
+        let patch = ops::TicketPatch { auto_merge: Some(on), ..ops::TicketPatch::default() };
+        ops::apply(&store, None, Op::UpdateTicket { id: TicketId(id.into()), patch }).unwrap();
+    };
+
+    patch_ticket("K-2", true);
+    let html = body_text(router.clone().oneshot(get("/ui/board")).await.unwrap()).await;
+    assert!(html.contains(">auto-merge</span>"), "a ticket flagged in its own right wears the plain badge: {html}");
+    assert!(!html.contains("auto-merge (epic)"), "nothing is inherited yet: {html}");
+
+    let patch = ops::EpicPatch { auto_merge: Some(true), ..ops::EpicPatch::default() };
+    ops::apply(&store, None, Op::UpdateEpic { id: EpicId("EP-1".into()), patch }).unwrap();
+    let html = body_text(router.clone().oneshot(get("/ui/board")).await.unwrap()).await;
+    assert!(html.contains(">auto-merge (epic)</span>"), "K-1 never set the flag, so the epic gets the credit: {html}");
+    assert!(!store.read_board().unwrap().tickets[0].auto_merge, "and the epic's grant never wrote itself onto the ticket");
+
+    let html = body_text(router.oneshot(get("/ui/ticket/K-1")).await.unwrap()).await;
+    assert!(html.contains("Auto-merge (epic)</button>"), "the pane's button says where the grant lives: {html}");
+    assert!(html.contains("still auto-merges — switch it off on the epic instead"), "and its confirm says so too: {html}");
+}
+
+/// The edit form has no auto-merge control, and `update_ticket` leaves `auto_merge: None` in its patch precisely so that
+/// an unrelated save cannot quietly clear a dangerous flag. That `None` is the guarantee this test defends.
+#[tokio::test]
+async fn an_ordinary_edit_form_save_leaves_auto_merge_alone() {
+    let (_dir, router, store) = test_app();
+    seed_ticket(&store, "flagged");
+    router.clone().oneshot(post("/ui/ticket/K-1/auto-merge", 1, "")).await.unwrap();
+    assert!(store.read_board().unwrap().tickets[0].auto_merge, "precondition: the flag is on");
+
+    let version = store.read_board().unwrap().version;
+    let form = "title=flagged+and+renamed&body=&epic=&labels=&depends_on=&model=&effort=";
+    assert_eq!(router.oneshot(post("/ui/ticket/K-1", version, form)).await.unwrap().status(), StatusCode::OK);
+
+    let board = store.read_board().unwrap();
+    assert_eq!(board.tickets[0].title, "flagged and renamed", "the save landed");
+    assert!(board.tickets[0].auto_merge, "and it left the one field it carries no control for untouched");
+}
+
+#[tokio::test]
+async fn the_epic_auto_merge_confirm_counts_the_tickets_the_grant_reaches() {
+    let (_dir, router, store) = test_app();
+    seed_epic(&store, "Auth", &["one", "two"]);
+
+    let html = body_text(router.clone().oneshot(get("/ui/epic/EP-1")).await.unwrap()).await;
+    assert!(html.contains("Turn on auto-merge for EP-1 — Auth and its 2 tickets?"), "one click covers the list: {html}");
+
+    let version = store.read_board().unwrap().version;
+    let res = router.oneshot(post("/ui/epic/EP-1/auto-merge", version, "")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(store.read_board().unwrap().epics[0].auto_merge, "the toggle flips the epic's own flag");
+    let html = body_text(res).await;
+    assert!(html.contains(">auto-merge</span>"), "the refreshed epic pane wears the badge: {html}");
+    assert!(html.contains("Turn off auto-merge for EP-1 — Auth?"), "and the confirm has flipped with it: {html}");
+}
+
+#[tokio::test]
 async fn loopback_hardening_rejects_what_it_should() {
     let (_dir, router, store) = test_app();
     seed_ticket(&store, "target");
