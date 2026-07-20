@@ -61,6 +61,17 @@ pub fn blocked(ticket: &Ticket, board: &Board) -> bool {
         .any(|dep| !matches!(board.ticket(dep).map(|t| &t.column), Some(Column::Done { discarded: false, .. })))
 }
 
+/// Whether this ticket may land without a human seeing the merge: its own flag, or its epic's. Inheritance lives here
+/// rather than on the ticket so an epic's dial keeps working in both directions — nothing is copied onto the tickets, so
+/// clearing the epic's flag takes the permission back from every one of them.
+///
+/// A missing epic degrades to the ticket's own answer. Validation refuses a dangling epic reference, so that can only be
+/// a board caught mid-edit — and the safe reading of "I can't tell" is the narrower permission.
+#[must_use]
+pub fn auto_merge(ticket: &Ticket, board: &Board) -> bool {
+    ticket.auto_merge || ticket.epic.as_ref().and_then(|id| board.epic(id)).is_some_and(|e| e.auto_merge)
+}
+
 /// The handoff contract: the highest ticket in `todo` that is unblocked, unclaimed, not `external` (external tickets are
 /// worked elsewhere), and either `ready` (implement it) or `stub` (refine it into a spec). `None` when nothing is eligible.
 #[must_use]
@@ -80,6 +91,7 @@ pub fn board_view(board: &Board, claims: &[Claim]) -> BoardView {
         .map(|t| TicketView {
             ticket: t.clone(),
             blocked: blocked(t, board),
+            auto_merge_effective: auto_merge(t, board),
             claim: claims::find(claims, &t.id).map(ClaimView::from),
         })
         .collect();
@@ -117,6 +129,10 @@ pub struct TicketView {
     pub ticket: Ticket,
     /// True while any dependency is not yet `done`. Blocked tickets stay visible in `todo` but are skipped by `kanban_next`.
     pub blocked: bool,
+    /// The ticket's own `auto_merge` or its epic's — see [`auto_merge`]. Named apart from the stored field on purpose:
+    /// `ticket` is flattened, so a sibling called `auto_merge` would emit the key twice whenever the ticket's own flag
+    /// is set.
+    pub auto_merge_effective: bool,
     /// The live claim, when someone is working this right now.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub claim: Option<ClaimView>,
@@ -177,6 +193,7 @@ mod tests {
             labels: vec![],
             model: None,
             effort: None,
+            auto_merge: false,
             depends_on: vec![],
             notes: vec![],
             external: None,
@@ -195,7 +212,7 @@ mod tests {
 
     fn board(tickets: Vec<Ticket>) -> Board {
         let mut b = Board::empty();
-        b.epics.push(Epic { id: EpicId("EP-1".into()), title: "e".into(), color: "#fff".into(), status: Status::Ready, body: String::new() });
+        b.epics.push(Epic { id: EpicId("EP-1".into()), title: "e".into(), color: "#fff".into(), status: Status::Ready, body: String::new(), auto_merge: false });
         b.tickets = tickets;
         b
     }

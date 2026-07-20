@@ -35,9 +35,10 @@ pub enum Op {
         status: Status,
         model: Option<String>,
         effort: Option<Effort>,
+        auto_merge: bool,
     },
     /// Create an epic. `color: None` picks the next palette colour.
-    CreateEpic { title: String, color: Option<String>, body: String, status: Status },
+    CreateEpic { title: String, color: Option<String>, body: String, status: Status, auto_merge: bool },
     /// Patch a ticket's descriptive fields. Column and status move via their own ops.
     UpdateTicket { id: TicketId, patch: TicketPatch },
     /// Patch an epic's descriptive fields.
@@ -106,6 +107,8 @@ pub struct TicketPatch {
     /// Nested like `epic`: `Some(None)` clears the preference, `None` leaves it alone.
     pub model: Option<Option<String>>,
     pub effort: Option<Option<Effort>>,
+    /// Plain, not nested: `false` *is* the cleared state, so there is no third case to express.
+    pub auto_merge: Option<bool>,
 }
 
 /// Descriptive fields of an epic that `UpdateEpic` may change.
@@ -114,6 +117,8 @@ pub struct EpicPatch {
     pub title: Option<String>,
     pub color: Option<String>,
     pub body: Option<String>,
+    /// Plain, not nested, as on [`TicketPatch`]. Setting it here grants every ticket in the epic the permission at once.
+    pub auto_merge: Option<bool>,
 }
 
 /// A ticket created by `Refine`. `depends_on` entries may be existing ticket ids or `new:<i>` placeholders naming the i-th
@@ -129,6 +134,8 @@ pub struct NewTicketSpec {
     /// A split can mark the hard subtask: which model and effort its work deserves.
     pub model: Option<String>,
     pub effort: Option<Effort>,
+    /// Whether the split may land unattended. A proposal like any other field here — the human still vets the ticket.
+    pub auto_merge: bool,
 }
 
 /// An epic created by `Refine`, with its own tickets — nested so a brand-new ticket can belong to a brand-new epic whose id
@@ -243,10 +250,10 @@ impl OpOutput {
 /// whole-board invariants (dangling refs, cycles) are enforced by `Store::mutate` after this returns.
 fn transition(op: Op, board: &mut Board, claims: &mut Vec<Claim>) -> Result<OpOutput, OpError> {
     match op {
-        Op::CreateTicket { title, body, epic, labels, depends_on, status, model, effort } => {
-            Ok(create_ticket(board, NewTicket { title, body, epic, labels, depends_on, status, model, effort }))
+        Op::CreateTicket { title, body, epic, labels, depends_on, status, model, effort, auto_merge } => {
+            Ok(create_ticket(board, NewTicket { title, body, epic, labels, depends_on, status, model, effort, auto_merge }))
         }
-        Op::CreateEpic { title, color, body, status } => Ok(create_epic(board, title, color, body, status)),
+        Op::CreateEpic { title, color, body, status, auto_merge } => Ok(create_epic(board, title, color, body, status, auto_merge)),
         Op::UpdateTicket { id, patch } => update_ticket(board, &id, patch),
         Op::UpdateEpic { id, patch } => update_epic(board, &id, patch),
         Op::DeleteTicket { id } => delete_ticket(board, claims, &id),
@@ -285,10 +292,11 @@ struct NewTicket {
     status: Status,
     model: Option<String>,
     effort: Option<Effort>,
+    auto_merge: bool,
 }
 
 fn create_ticket(board: &mut Board, new: NewTicket) -> OpOutput {
-    let NewTicket { title, body, epic, labels, depends_on, status, model, effort } = new;
+    let NewTicket { title, body, epic, labels, depends_on, status, model, effort, auto_merge } = new;
     let id = board.mint_ticket_id();
     board.tickets.push(Ticket {
         id: id.clone(),
@@ -299,6 +307,7 @@ fn create_ticket(board: &mut Board, new: NewTicket) -> OpOutput {
         labels,
         model,
         effort,
+        auto_merge,
         depends_on,
         notes: vec![],
         external: None,
@@ -308,16 +317,16 @@ fn create_ticket(board: &mut Board, new: NewTicket) -> OpOutput {
     OpOutput::created(vec![id.to_string()], json!({ "id": id }))
 }
 
-fn create_epic(board: &mut Board, title: String, color: Option<String>, body: String, status: Status) -> OpOutput {
+fn create_epic(board: &mut Board, title: String, color: Option<String>, body: String, status: Status, auto_merge: bool) -> OpOutput {
     let id = board.mint_epic_id();
     let color = color.unwrap_or_else(|| EPIC_PALETTE[board.epics.len() % EPIC_PALETTE.len()].to_owned());
-    board.epics.push(Epic { id: id.clone(), title, color, status, body });
+    board.epics.push(Epic { id: id.clone(), title, color, status, body, auto_merge });
     OpOutput::created(vec![id.to_string()], json!({ "id": id }))
 }
 
 fn update_ticket(board: &mut Board, id: &TicketId, patch: TicketPatch) -> Result<OpOutput, OpError> {
     let ticket = ticket_mut(board, id)?;
-    let TicketPatch { title, body, labels, depends_on, epic, model, effort } = patch;
+    let TicketPatch { title, body, labels, depends_on, epic, model, effort, auto_merge } = patch;
     if let Some(title) = title {
         ticket.title = title;
     }
@@ -339,12 +348,15 @@ fn update_ticket(board: &mut Board, id: &TicketId, patch: TicketPatch) -> Result
     if let Some(effort) = effort {
         ticket.effort = effort;
     }
+    if let Some(auto_merge) = auto_merge {
+        ticket.auto_merge = auto_merge;
+    }
     Ok(OpOutput::plain(json!({ "id": id })))
 }
 
 fn update_epic(board: &mut Board, id: &EpicId, patch: EpicPatch) -> Result<OpOutput, OpError> {
     let epic = epic_mut(board, id)?;
-    let EpicPatch { title, color, body } = patch;
+    let EpicPatch { title, color, body, auto_merge } = patch;
     if let Some(title) = title {
         epic.title = title;
     }
@@ -353,6 +365,9 @@ fn update_epic(board: &mut Board, id: &EpicId, patch: EpicPatch) -> Result<OpOut
     }
     if let Some(body) = body {
         epic.body = body;
+    }
+    if let Some(auto_merge) = auto_merge {
+        epic.auto_merge = auto_merge;
     }
     Ok(OpOutput::plain(json!({ "id": id })))
 }
@@ -587,7 +602,9 @@ fn refine(
         .flat_map(|spec| {
             let epic_id = board.mint_epic_id();
             let color = spec.color.unwrap_or_else(|| EPIC_PALETTE[board.epics.len() % EPIC_PALETTE.len()].to_owned());
-            board.epics.push(Epic { id: epic_id.clone(), title: spec.title, color, status: Status::Review, body: spec.body });
+            board
+                .epics
+                .push(Epic { id: epic_id.clone(), title: spec.title, color, status: Status::Review, body: spec.body, auto_merge: false });
             created.push(epic_id.to_string());
             spec.tickets.into_iter().map(move |t| (t, epic_id.clone())).collect::<Vec<_>>()
         })
@@ -680,6 +697,7 @@ fn build_refined_ticket(spec: NewTicketSpec, id: TicketId, default_epic: Option<
         labels: spec.labels,
         model: spec.model,
         effort: spec.effort,
+        auto_merge: spec.auto_merge,
         depends_on,
         notes: vec![],
         external: None,
@@ -728,7 +746,7 @@ mod tests {
         let applied = apply(
             store,
             None,
-            Op::CreateTicket { title: title.into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![], status: Status::Ready, model: None, effort: None },
+            Op::CreateTicket { title: title.into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![], status: Status::Ready, model: None, effort: None, auto_merge: false },
         )
         .unwrap();
         TicketId(applied.created_ids[0].clone())
@@ -907,7 +925,7 @@ mod tests {
     /// Create an epic and return its id — the three cascade tests below all start here.
     fn create_epic_id(store: &Store, title: &str) -> EpicId {
         let applied =
-            apply(store, None, Op::CreateEpic { title: title.into(), color: None, body: String::new(), status: Status::Ready }).unwrap();
+            apply(store, None, Op::CreateEpic { title: title.into(), color: None, body: String::new(), status: Status::Ready, auto_merge: false }).unwrap();
         EpicId(applied.created_ids[0].clone())
     }
 
@@ -1028,6 +1046,7 @@ mod tests {
             epic: None,
             model: None,
             effort: None,
+            auto_merge: false,
         };
         let applied = apply(
             &store,
@@ -1081,7 +1100,7 @@ mod tests {
                 target: RefineTarget::Ticket(ready),
                 title: None,
                 body: "x".into(),
-                split_tickets: vec![NewTicketSpec { title: "t".into(), body: String::new(), labels: vec![], depends_on: vec!["new:9".into()], epic: None, model: None, effort: None }],
+                split_tickets: vec![NewTicketSpec { title: "t".into(), body: String::new(), labels: vec![], depends_on: vec!["new:9".into()], epic: None, model: None, effort: None, auto_merge: false }],
                 split_epics: vec![],
             },
         )
@@ -1093,7 +1112,7 @@ mod tests {
     #[test]
     fn refine_split_tickets_inherit_the_targets_epic() {
         let (_dir, store) = scratch();
-        let epic = apply(&store, None, Op::CreateEpic { title: "auth".into(), color: None, body: String::new(), status: Status::Ready }).unwrap();
+        let epic = apply(&store, None, Op::CreateEpic { title: "auth".into(), color: None, body: String::new(), status: Status::Ready, auto_merge: false }).unwrap();
         let epic_id = EpicId(epic.created_ids[0].clone());
         let target = create(&store, "stub in epic");
         apply(&store, None, Op::UpdateTicket { id: target.clone(), patch: TicketPatch { epic: Some(Some(epic_id.clone())), ..TicketPatch::default() } }).unwrap();
@@ -1106,7 +1125,7 @@ mod tests {
                 target: RefineTarget::Ticket(target),
                 title: None,
                 body: "refined".into(),
-                split_tickets: vec![NewTicketSpec { title: "child".into(), body: String::new(), labels: vec![], depends_on: vec![], epic: None, model: None, effort: None }],
+                split_tickets: vec![NewTicketSpec { title: "child".into(), body: String::new(), labels: vec![], depends_on: vec![], epic: None, model: None, effort: None, auto_merge: false }],
                 split_epics: vec![],
             },
         )
@@ -1157,7 +1176,7 @@ mod tests {
         let mut colours = std::collections::HashSet::new();
         (0..3).for_each(|i| {
             let applied =
-                apply(&store, None, Op::CreateEpic { title: format!("e{i}"), color: None, body: String::new(), status: Status::Draft }).unwrap();
+                apply(&store, None, Op::CreateEpic { title: format!("e{i}"), color: None, body: String::new(), status: Status::Draft, auto_merge: false }).unwrap();
             let board = store.read_board().unwrap();
             colours.insert(board.epics.last().unwrap().color.clone());
             assert_eq!(applied.created_ids[0], format!("EP-{}", i + 1));

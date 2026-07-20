@@ -69,7 +69,7 @@ fn seed_ticket(store: &Store, title: &str) -> String {
     ops::apply(
         store,
         None,
-        Op::CreateTicket { title: title.into(), body: "# Spec".into(), epic: None, labels: vec!["ui".into()], depends_on: vec![], status: Status::Ready, model: None, effort: None },
+        Op::CreateTicket { title: title.into(), body: "# Spec".into(), epic: None, labels: vec!["ui".into()], depends_on: vec![], status: Status::Ready, model: None, effort: None, auto_merge: false },
     )
     .unwrap()
     .created_ids[0]
@@ -107,7 +107,7 @@ async fn filters_hide_cards_and_disable_dragging() {
     ops::apply(
         &store,
         None,
-        Op::CreateTicket { title: "Unlabelled".into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![], status: Status::Draft, model: None, effort: None },
+        Op::CreateTicket { title: "Unlabelled".into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![], status: Status::Draft, model: None, effort: None, auto_merge: false },
     )
     .unwrap();
     let html = body_text(router.oneshot(get("/ui/board?q=label:ui")).await.unwrap()).await;
@@ -129,6 +129,7 @@ fn seed_full(store: &Store, title: &str, body: &str, labels: &[&str]) -> String 
             status: Status::Ready,
             model: None,
             effort: None,
+            auto_merge: false,
         },
     )
     .unwrap()
@@ -302,7 +303,7 @@ async fn mutations_flow_create_move_status_delete() {
 /// Seed an epic and file `titles` under it, returning the epic's id.
 fn seed_epic(store: &Store, title: &str, titles: &[&str]) -> EpicId {
     let created =
-        ops::apply(store, None, Op::CreateEpic { title: title.into(), color: None, body: String::new(), status: Status::Ready }).unwrap();
+        ops::apply(store, None, Op::CreateEpic { title: title.into(), color: None, body: String::new(), status: Status::Ready, auto_merge: false }).unwrap();
     let epic = EpicId(created.created_ids[0].clone());
     let file_under = |title: &&str| {
         let id = TicketId(seed_ticket(store, title));
@@ -602,7 +603,7 @@ async fn discard_closes_the_ticket_and_keeps_dependents_blocked_on_the_board() {
     ops::apply(
         &store,
         None,
-        Op::CreateTicket { title: "Blocked follow-up".into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![TicketId("K-1".into())], status: Status::Ready, model: None, effort: None },
+        Op::CreateTicket { title: "Blocked follow-up".into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![TicketId("K-1".into())], status: Status::Ready, model: None, effort: None, auto_merge: false },
     )
     .unwrap();
     to_review_with_branch(&store, "K-1", "k-1/doomed");

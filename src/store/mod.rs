@@ -370,6 +370,7 @@ mod tests {
             labels: vec![],
             model: None,
             effort: None,
+            auto_merge: false,
             depends_on: vec![],
             notes: vec![],
             external: None,

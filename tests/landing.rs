@@ -47,7 +47,7 @@ fn scratch() -> Scratch {
         ops::apply(
             &store,
             None,
-            Op::CreateTicket { title: title.into(), body: String::new(), epic: None, labels: vec![], depends_on: deps, status: Status::Ready, model: None, effort: None },
+            Op::CreateTicket { title: title.into(), body: String::new(), epic: None, labels: vec![], depends_on: deps, status: Status::Ready, model: None, effort: None, auto_merge: false },
         )
         .unwrap();
     };

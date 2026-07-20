@@ -135,6 +135,7 @@ mod tests {
             labels: vec![],
             model: None,
             effort: None,
+            auto_merge: false,
             depends_on: deps.iter().map(|d| TicketId((*d).into())).collect(),
             notes: vec![],
             external: None,
@@ -206,7 +207,7 @@ mod tests {
     #[test]
     fn a_valid_epic_reference_passes() {
         let mut board = board_with(vec![ticket("K-1", &[])]);
-        board.epics.push(Epic { id: EpicId("EP-1".into()), title: "e".into(), color: "#fff".into(), status: Status::Ready, body: String::new() });
+        board.epics.push(Epic { id: EpicId("EP-1".into()), title: "e".into(), color: "#fff".into(), status: Status::Ready, body: String::new(), auto_merge: false });
         board.tickets[0].epic = Some(EpicId("EP-1".into()));
         assert!(validate(&board).is_ok());
     }

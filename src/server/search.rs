@@ -253,6 +253,7 @@ mod tests {
             labels: vec![],
             model: None,
             effort: None,
+            auto_merge: false,
             depends_on: vec![],
             notes: vec![],
             external: None,
@@ -262,7 +263,7 @@ mod tests {
     }
 
     fn view(t: Ticket) -> TicketView {
-        TicketView { ticket: t, blocked: false, claim: None }
+        TicketView { ticket: t, blocked: false, auto_merge_effective: false, claim: None }
     }
 
     fn done(discarded: bool) -> Column {
@@ -271,7 +272,7 @@ mod tests {
 
     fn epic_view(id: &str, title: &str) -> EpicView {
         EpicView {
-            epic: Epic { id: EpicId(id.into()), title: title.into(), color: "#fff".into(), status: Status::Ready, body: "the plan".into() },
+            epic: Epic { id: EpicId(id.into()), title: title.into(), color: "#fff".into(), status: Status::Ready, body: "the plan".into(), auto_merge: false },
             column: ColumnId::Todo,
             tickets: vec![],
         }

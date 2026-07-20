@@ -252,6 +252,12 @@ pub struct Ticket {
     /// The reasoning effort this ticket's work deserves, honoured the same advisory way as `model`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<Effort>,
+    /// Let this ticket's branch land in main without a human looking at the merge. Advisory, like `model` and `effort`:
+    /// this binary merges nothing — it is `/kanban:work` that reads the flag and does the rebase-and-land. The effective
+    /// answer also takes in the ticket's epic (see [`crate::store::derive::auto_merge`]); this field is only the ticket's
+    /// own say, never the inherited one.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub auto_merge: bool,
     /// Until every ticket named here is `done`, this ticket is *blocked*: visible in `todo`, skipped by `kanban_next`.
     /// Must form a DAG with the other tickets; checked on load.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -396,6 +402,12 @@ pub struct Epic {
     /// Markdown body. Rendered client-side; stored raw.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub body: String,
+    /// Let every ticket in this epic land without a human looking at the merge — one dial for a whole work stream.
+    /// Inheritance is a read-side derivation ([`crate::store::derive::auto_merge`]) and nothing more: the flag is never
+    /// written onto the epic's tickets, so clearing it here takes the permission back from all of them at once. As on a
+    /// ticket, the board itself merges nothing.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub auto_merge: bool,
 }
 
 /// Upgrade an older board in memory. Returns whether anything changed (the caller's next write persists it); a schema
@@ -756,6 +768,7 @@ mod tests {
             labels: vec![],
             model: None,
             effort: None,
+            auto_merge: false,
             depends_on: vec![],
             notes: vec![],
             external: None,
@@ -818,6 +831,7 @@ mod tests {
                 color: "#7c9cf5".into(),
                 status: Status::Ready,
                 body: String::new(),
+                auto_merge: false,
             }],
             ..Board::empty()
         })

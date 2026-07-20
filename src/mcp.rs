@@ -45,6 +45,8 @@ discovered mid-flight can be added, dropped or rewired instead of living only in
 read the ticket first and send the set you want. Mutating tools need expected_version from your latest kanban_board \
 read (kanban_next also returns one — use it, its landing sweep may have advanced the board); on a version conflict, \
 re-read and retry. \
+`auto_merge` makes `/kanban:work` rebase and land the ticket's branch into main when it reaches review, without a human \
+seeing the merge. Never set it on tickets you create unless the user explicitly asked for it. \
 kanban_board omits done tickets by default and returns a `done` summary of their ids instead — their specs and progress \
 logs are the bulk of the board and finished work is not input to your next decision; pass include_done=true, or \
 column=\"done\", when you actually need to read them.";
@@ -141,6 +143,10 @@ pub struct CreateTicketParams {
     /// Reasoning effort for this ticket's work: "low", "medium", "high", "xhigh", or "max". Omit to inherit.
     #[serde(default)]
     pub effort: Option<String>,
+    /// Let this ticket's branch land in main unattended once it reaches review. Defaults to false, and you never set it
+    /// unless the user explicitly asked for it.
+    #[serde(default)]
+    pub auto_merge: Option<bool>,
     /// Ticket ids this one depends on; it stays blocked until they are all done.
     #[serde(default)]
     pub depends_on: Option<Vec<String>>,
@@ -193,6 +199,10 @@ pub struct UpdateTicketParams {
     /// alone.
     #[serde(default, deserialize_with = "present_or_null")]
     pub effort: Option<Option<String>>,
+    /// Whether this ticket's branch may land in main unattended. `false` is the off state, so there is no `null` here —
+    /// omit to leave it alone. Only ever set it to true at the user's explicit request.
+    #[serde(default)]
+    pub auto_merge: Option<bool>,
     /// The board version from your latest `kanban_board` read.
     pub expected_version: u64,
 }
@@ -210,6 +220,10 @@ pub struct CreateEpicParams {
     /// "draft", "stub", "review", or "ready". Defaults to "review".
     #[serde(default)]
     pub status: Option<String>,
+    /// Let every ticket in this epic land in main unattended — one dial for the whole work stream. Defaults to false,
+    /// and you never set it unless the user explicitly asked for it.
+    #[serde(default)]
+    pub auto_merge: Option<bool>,
     /// The board version from your latest `kanban_board` read.
     pub expected_version: u64,
 }
@@ -243,6 +257,9 @@ pub struct NewTicketParam {
     /// Reasoning effort for this subtask: "low", "medium", "high", "xhigh", or "max". Omit to inherit.
     #[serde(default)]
     pub effort: Option<String>,
+    /// Whether this subtask may land unattended. Defaults to false; only propose true if the user asked for it.
+    #[serde(default)]
+    pub auto_merge: Option<bool>,
     /// Existing ticket ids, or "new:<i>" naming the i-th entry of `split_tickets` (0-based).
     #[serde(default)]
     pub depends_on: Option<Vec<String>>,
@@ -368,6 +385,10 @@ impl KanbanServer {
     /// plus the action, or explains that nothing is eligible. First auto-lands any review tickets whose branches have
     /// provably reached the local main branch (offline git, no network), so use the `version` this tool returns for
     /// your next mutation — the sweep may have advanced it.
+    ///
+    /// `auto_merge` is the *effective* answer — the ticket's own flag or its epic's — and is the field `/kanban:work`
+    /// reads to decide whether to land the branch itself. Read it here, not off the ticket: the ticket carries only its
+    /// own say, so an epic-level grant is invisible there.
     #[tool]
     async fn kanban_next(&self) -> Result<CallToolResult, ErrorData> {
         self.read(|store| {
@@ -381,7 +402,8 @@ impl KanbanServer {
             Ok(match derive::next_ticket(&board, &claims) {
                 Some(t) => {
                     let action = if t.status == Status::Stub { "refine" } else { "implement" };
-                    serde_json::json!({ "version": board.version, "ticket": t, "action": action })
+                    serde_json::json!({ "version": board.version, "ticket": t, "action": action,
+                        "auto_merge": derive::auto_merge(t, &board) })
                 }
                 None => serde_json::json!({ "version": board.version, "ticket": null,
                     "reason": "no eligible ticket: nothing in todo is ready or stub, unblocked, unclaimed, and non-external" }),
@@ -429,6 +451,7 @@ impl KanbanServer {
             labels: p.labels.unwrap_or_default(),
             model: p.model,
             effort: parse_effort(p.effort.as_deref())?,
+            auto_merge: p.auto_merge.unwrap_or(false),
             depends_on: p.depends_on.unwrap_or_default().into_iter().map(TicketId).collect(),
             status,
         };
@@ -452,6 +475,7 @@ impl KanbanServer {
             epic: p.epic.map(|e| e.map(EpicId)),
             model: p.model,
             effort: p.effort.map(|e| parse_effort(e.as_deref())).transpose()?,
+            auto_merge: p.auto_merge,
         };
         let id = TicketId(p.ticket);
         self.apply_unless_draft(p.expected_version, id.clone(), Op::UpdateTicket { id, patch }).await
@@ -461,7 +485,8 @@ impl KanbanServer {
     #[tool]
     async fn kanban_create_epic(&self, Parameters(p): Parameters<CreateEpicParams>) -> Result<CallToolResult, ErrorData> {
         let status = parse_status_or(p.status.as_deref(), Status::Review)?;
-        let op = Op::CreateEpic { title: p.title, color: p.color, body: p.body.unwrap_or_default(), status };
+        let op =
+            Op::CreateEpic { title: p.title, color: p.color, body: p.body.unwrap_or_default(), status, auto_merge: p.auto_merge.unwrap_or(false) };
         self.apply(Some(p.expected_version), op).await
     }
 
@@ -695,6 +720,7 @@ fn new_ticket_spec(p: NewTicketParam) -> Result<NewTicketSpec, ErrorData> {
         labels: p.labels.unwrap_or_default(),
         model: p.model,
         effort: parse_effort(p.effort.as_deref())?,
+        auto_merge: p.auto_merge.unwrap_or(false),
         depends_on: p.depends_on.unwrap_or_default(),
         epic: p.epic.map(EpicId),
     })
@@ -738,6 +764,7 @@ mod tests {
             labels: vec![],
             model: None,
             effort: None,
+            auto_merge: false,
             depends_on: vec![],
             notes: vec![],
             external: None,
@@ -751,7 +778,7 @@ mod tests {
     }
 
     fn epic(id: &str) -> Epic {
-        Epic { id: EpicId(id.into()), title: id.into(), color: "#fff".into(), status: Status::Ready, body: String::new() }
+        Epic { id: EpicId(id.into()), title: id.into(), color: "#fff".into(), status: Status::Ready, body: String::new(), auto_merge: false }
     }
 
     /// Tickets in all four columns, one of the done ones discarded. EP-1 spans the board (derived column `doing`);

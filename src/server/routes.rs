@@ -272,6 +272,7 @@ pub async fn create_ticket(
         status: parse_status(&form.status)?,
         model: parse_model(&form.model),
         effort: parse_effort(&form.effort)?,
+        auto_merge: false,
     };
     mutate(&app, &headers, op).await
 }
@@ -309,6 +310,8 @@ pub async fn update_ticket(
         epic: Some(opt(form.epic).map(EpicId)),
         model: Some(parse_model(&form.model)),
         effort: Some(parse_effort(&form.effort)?),
+        // No control on the edit form yet, and this is the one field an omission must not clear.
+        auto_merge: None,
     };
     mutate_then_detail(&app, &headers, Op::UpdateTicket { id: id.clone(), patch }, id).await
 }
@@ -459,7 +462,8 @@ pub struct CreateEpicForm {
 }
 
 pub async fn create_epic(State(app): State<AppState>, headers: HeaderMap, Form(form): Form<CreateEpicForm>) -> Result<StatusCode, AppError> {
-    let op = Op::CreateEpic { title: form.title, color: opt(form.color), body: form.body, status: parse_status(&form.status)? };
+    let op =
+        Op::CreateEpic { title: form.title, color: opt(form.color), body: form.body, status: parse_status(&form.status)?, auto_merge: false };
     mutate(&app, &headers, op).await
 }
 
@@ -479,7 +483,7 @@ pub async fn update_epic(
     Form(form): Form<UpdateEpicForm>,
 ) -> Result<Html<String>, AppError> {
     let id = EpicId(id);
-    let patch = crate::ops::EpicPatch { title: Some(form.title), color: opt(form.color), body: Some(form.body) };
+    let patch = crate::ops::EpicPatch { title: Some(form.title), color: opt(form.color), body: Some(form.body), auto_merge: None };
     let op = Op::UpdateEpic { id: id.clone(), patch };
     let version = client_version(&headers)?;
     blocking(&app, move |store| {
