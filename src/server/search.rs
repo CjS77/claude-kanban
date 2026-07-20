@@ -39,6 +39,8 @@ enum Term {
     Landed(bool),
     Discarded(bool),
     Blocked(bool),
+    /// Auto-merge as the board applies it — the ticket's own flag or the epic's it inherits from.
+    AutoMerge(bool),
 }
 
 impl Query {
@@ -117,6 +119,7 @@ fn keyed(key: &str, value: &str) -> Option<Term> {
         "landed" => boolean(value).map(Term::Landed),
         "discarded" => boolean(value).map(Term::Discarded),
         "blocked" => boolean(value).map(Term::Blocked),
+        "auto-merge" | "automerge" | "auto_merge" => boolean(value).map(Term::AutoMerge),
         _ => None,
     }
 }
@@ -190,6 +193,7 @@ fn admits_ticket(term: &Term, t: &TicketView, epics: &[EpicView]) -> bool {
         Term::Landed(want) => matches!(ticket.column, Column::Done { discarded: false, .. }) == *want,
         Term::Discarded(want) => matches!(ticket.column, Column::Done { discarded: true, .. }) == *want,
         Term::Blocked(want) => t.blocked == *want,
+        Term::AutoMerge(want) => t.auto_merge_effective == *want,
     }
 }
 
@@ -420,7 +424,7 @@ mod tests {
 
         let ticket_only = [
             "label: ux", "col: todo", "landed: false", "discarded:no", "blocked:false", "id: EP-1", "note: anything", "model: opus",
-            "effort: max",
+            "effort: max", "auto-merge:false",
         ];
         let leaked: Vec<&str> = ticket_only.into_iter().filter(|q| Query::parse(q).matches_epic(&e)).collect();
         assert!(leaked.is_empty(), "a ticket-only term cannot be satisfied by an epic, so it must hide the card: {leaked:?}");
@@ -484,6 +488,27 @@ mod tests {
         let v = view(t);
         assert!(!Query::parse("epic: none").matches(&v, &epics), "none is reserved, not a title lookup");
         assert!(Query::parse("epic: ep-9").matches(&v, &epics), "its id still reaches it");
+    }
+
+    /// The derived flag, never the stored one: a ticket inheriting auto-merge from its epic reads `true` here even though
+    /// its own field is false, which is exactly the case the filter exists to surface.
+    #[test]
+    fn auto_merge_matches_the_effective_flag_under_every_spelling() {
+        let flagged = TicketView { auto_merge_effective: true, ..view(ticket("K-1", "Merges itself")) };
+        let plain = view(ticket("K-2", "Waits for a human"));
+
+        let spellings = ["auto-merge:true", "automerge: YES", "auto_merge:on", "AUTO-MERGE: 1"];
+        let wrong: Vec<&str> = spellings
+            .into_iter()
+            .filter(|q| !Query::parse(q).matches(&flagged, &[]) || Query::parse(q).matches(&plain, &[]))
+            .collect();
+        assert!(wrong.is_empty(), "every spelling must admit only the auto-merging ticket: {wrong:?}");
+
+        // False is the inverse, not a no-op, and a value that isn't a boolean degrades like any other.
+        assert_eq!(Query::parse("auto-merge:false").terms, vec![Term::AutoMerge(false)]);
+        assert!(Query::parse("auto-merge: no").matches(&plain, &[]));
+        assert!(!Query::parse("auto-merge: no").matches(&flagged, &[]));
+        assert_eq!(Query::parse("auto-merge:maybe").terms, vec![Term::Text("auto-merge:maybe".into())]);
     }
 
     #[test]
