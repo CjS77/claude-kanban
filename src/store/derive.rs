@@ -265,6 +265,60 @@ mod tests {
         assert_eq!(next_ticket(&b, &[]).unwrap().id.0, "K-9", "top of the column wins, not lowest id");
     }
 
+    /// Either flag grants it, and neither is required — the full truth table, since this decides whether main moves
+    /// without a human seeing it.
+    #[test]
+    fn auto_merge_is_the_ticket_flag_or_its_epics() {
+        let cases = [(false, false, false), (true, false, true), (false, true, true), (true, true, true)];
+        let got: Vec<bool> = cases
+            .iter()
+            .map(|&(on_ticket, on_epic, _)| {
+                let mut b = board(vec![ticket("K-1", Column::Todo)]);
+                b.tickets[0].auto_merge = on_ticket;
+                b.epics[0].auto_merge = on_epic;
+                auto_merge(&b.tickets[0], &b)
+            })
+            .collect();
+        assert_eq!(got, cases.iter().map(|&(_, _, want)| want).collect::<Vec<_>>(), "ticket OR epic, and nothing else");
+    }
+
+    #[test]
+    fn auto_merge_without_an_epic_is_the_tickets_own_answer() {
+        let mut b = board(vec![ticket("K-1", Column::Todo)]);
+        b.tickets[0].epic = None;
+        b.epics[0].auto_merge = true; // an epic the ticket does not belong to grants it nothing
+        assert!(!auto_merge(&b.tickets[0], &b));
+        b.tickets[0].auto_merge = true;
+        assert!(auto_merge(&b.tickets[0], &b));
+    }
+
+    /// The inheritance is a read, never a write. If the epic's flag were copied onto its tickets, clearing it would
+    /// leave every ticket still armed — the failure mode this test exists to prevent.
+    #[test]
+    fn an_epics_flag_is_never_written_onto_its_tickets() {
+        let mut b = board(vec![ticket("K-1", Column::Todo)]);
+        b.epics[0].auto_merge = true;
+        let id = TicketId("K-1".into());
+
+        assert!(auto_merge(b.ticket(&id).unwrap(), &b), "the effective answer follows the epic");
+        assert!(!b.ticket(&id).unwrap().auto_merge, "but the stored flag is untouched");
+        assert!(board_view(&b, &[]).tickets[0].auto_merge_effective, "and the view carries the derived value");
+
+        b.epics[0].auto_merge = false;
+        assert!(!auto_merge(b.ticket(&id).unwrap(), &b), "so clearing the epic takes the permission back from the ticket");
+    }
+
+    /// `TicketView.ticket` is flattened, so the derived field has to be named apart from the stored one or the object
+    /// carries `auto_merge` twice — with whichever value serde happens to emit last.
+    #[test]
+    fn the_derived_flag_does_not_collide_with_the_flattened_stored_one() {
+        let mut b = board(vec![ticket("K-1", Column::Todo)]);
+        b.tickets[0].auto_merge = true;
+        let json = serde_json::to_value(board_view(&b, &[])).unwrap();
+        assert_eq!(json["tickets"][0]["auto_merge"], true, "the stored flag flattens up as itself");
+        assert_eq!(json["tickets"][0]["auto_merge_effective"], true, "and the derived one sits beside it under its own name");
+    }
+
     #[test]
     fn board_view_joins_claims_and_flags_missing_worktrees() {
         let b = board(vec![ticket("K-1", doing())]);

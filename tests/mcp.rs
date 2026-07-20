@@ -280,6 +280,60 @@ fn kanban_next_lands_merged_review_work_and_the_move_records_companion_branches(
     assert!(store.read_claims().unwrap().is_empty(), "entering review drops the claim");
 }
 
+/// `kanban_next` serializes a bare `Ticket`, which carries only the ticket's *own* `auto_merge` — an epic-level grant is
+/// invisible there. `/kanban:work` reads this one field to decide whether to move main without a human seeing the merge,
+/// so the tool has to report the derived answer beside the ticket, not let the caller read it off the ticket.
+#[test]
+fn kanban_next_reports_auto_merge_inherited_from_the_epic() {
+    use claude_kanban::{
+        ops::{self, Op},
+        store::model::{EpicId, Status},
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let store_dir = dir.path().join(".kanban");
+    let store = claude_kanban::store::Store::at(&store_dir);
+    store.init().unwrap();
+
+    // The epic carries the flag; the ticket does not.
+    ops::apply(&store, None, Op::CreateEpic { title: "auth".into(), color: None, body: String::new(), status: Status::Ready, auto_merge: true })
+        .unwrap();
+    ops::apply(
+        &store,
+        None,
+        Op::CreateTicket {
+            title: "inherits the epic's dial".into(),
+            body: String::new(),
+            epic: Some(EpicId("EP-1".into())),
+            labels: vec![],
+            depends_on: vec![],
+            status: Status::Ready,
+            model: None,
+            effort: None,
+            auto_merge: false,
+        },
+    )
+    .unwrap();
+
+    let mut mcp = McpSession::start(&store_dir);
+    let next = mcp.call_tool(2, "kanban_next", &json!({}))["structuredContent"].clone();
+
+    assert_eq!(next["ticket"]["id"], "K-1", "{next}");
+    assert!(next["ticket"].get("auto_merge").is_none(), "the ticket's own flag is off, so it is absent from its JSON: {next}");
+    assert_eq!(next["auto_merge"], true, "yet the tool must still report the inherited grant — reading it off the ticket would miss it");
+
+    // And the board read carries the same answer under its own name, without the flattened ticket shadowing it.
+    let board = mcp.call_tool(3, "kanban_board", &json!({}))["structuredContent"].clone();
+    assert_eq!(board["tickets"][0]["auto_merge_effective"], true, "{board}");
+    assert!(board["tickets"][0].get("auto_merge").is_none(), "the stored flag is still absent — the derived one did not overwrite it");
+
+    // The negative twin: clear the epic and the permission is gone from the ticket too, with nothing to un-write.
+    ops::apply(&store, None, Op::UpdateEpic { id: EpicId("EP-1".into()), patch: ops::EpicPatch { auto_merge: Some(false), ..Default::default() } })
+        .unwrap();
+    let next = mcp.call_tool(4, "kanban_next", &json!({}))["structuredContent"].clone();
+    assert_eq!(next["auto_merge"], false, "clearing the epic takes the grant back from every ticket at once: {next}");
+}
+
 /// Dependencies were write-once over MCP until `kanban_update_ticket`: creation could set them, nothing could change them.
 /// This drives the whole edit lifecycle over the wire — add, rewire, clear — plus the guards that keep the tool from being
 /// a way around the board's rules: no cycles, no dangling ids, no touching drafts.

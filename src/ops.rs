@@ -778,6 +778,74 @@ mod tests {
         assert_eq!(read(), (None, None));
     }
 
+    /// A plain `Option<bool>` rather than the nested option `model`/`effort` use — `false` *is* the cleared state — but
+    /// the same three cases still have to be distinguishable, on tickets and on epics.
+    #[test]
+    fn patching_auto_merge_distinguishes_untouched_from_set_and_cleared() {
+        let (_dir, store) = scratch();
+        let id = create(&store, "lands itself");
+        let epic_id = create_epic_id(&store, "whole stream");
+        let patch = |p| apply(&store, None, Op::UpdateTicket { id: id.clone(), patch: p }).unwrap();
+        let read = || {
+            let b = store.read_board().unwrap();
+            (b.ticket(&id).unwrap().auto_merge, b.epic(&epic_id).unwrap().auto_merge)
+        };
+        assert_eq!(read(), (false, false), "created off — the flag is never granted by accident");
+
+        patch(TicketPatch { auto_merge: Some(true), ..TicketPatch::default() });
+        assert!(read().0);
+
+        patch(TicketPatch { title: Some("retitled".into()), ..TicketPatch::default() });
+        assert!(read().0, "an unrelated edit must not disarm it");
+
+        patch(TicketPatch { auto_merge: Some(false), ..TicketPatch::default() });
+        assert!(!read().0, "and false is how it is taken back");
+
+        let epic_patch = |p| apply(&store, None, Op::UpdateEpic { id: epic_id.clone(), patch: p }).unwrap();
+        epic_patch(EpicPatch { auto_merge: Some(true), ..EpicPatch::default() });
+        assert!(read().1);
+        epic_patch(EpicPatch { title: Some("renamed".into()), ..EpicPatch::default() });
+        assert!(read().1, "same on an epic, where it covers every ticket at once");
+        assert!(!read().0, "and granting the epic never writes the flag onto the ticket");
+    }
+
+    /// A refine proposes the flag like any other field: it lands in review with the ticket, for the human to vet.
+    #[test]
+    fn a_refine_split_can_carry_auto_merge() {
+        let (_dir, store) = scratch();
+        let target = create(&store, "big vague thing");
+        apply(&store, None, Op::SetTicketStatus { id: target.clone(), status: Status::Stub }).unwrap();
+
+        let spec = |title: &str, auto_merge: bool| NewTicketSpec {
+            title: title.into(),
+            body: String::new(),
+            labels: vec![],
+            depends_on: vec![],
+            epic: None,
+            model: None,
+            effort: None,
+            auto_merge,
+        };
+        apply(
+            &store,
+            None,
+            Op::Refine {
+                target: RefineTarget::Ticket(target),
+                title: None,
+                body: "refined".into(),
+                split_tickets: vec![spec("routine", false), spec("lands itself", true)],
+                split_epics: vec![],
+            },
+        )
+        .unwrap();
+
+        let board = store.read_board().unwrap();
+        let flags: Vec<(String, bool)> =
+            ["K-2", "K-3"].iter().map(|id| (id.to_string(), board.ticket(&TicketId((*id).into())).unwrap().auto_merge)).collect();
+        assert_eq!(flags, vec![("K-2".to_string(), false), ("K-3".to_string(), true)], "the flag rides with the split that asked for it");
+        assert_eq!(board.ticket(&TicketId("K-3".into())).unwrap().status, Status::Review, "and still lands in review for the human");
+    }
+
     #[test]
     fn create_claim_move_to_done_is_the_happy_path() {
         let (_dir, store) = scratch();

@@ -729,6 +729,58 @@ mod tests {
         assert_eq!(serde_json::from_value::<Ticket>(v).unwrap(), set);
     }
 
+    /// The dangerous flag must be invisible until someone asks for it: off is the absence of the key, on both a ticket
+    /// and an epic, so no existing board grows the field by being read and rewritten.
+    #[test]
+    fn auto_merge_stays_off_the_wire_when_false() {
+        let bare = r#"{ "id": "K-1", "title": "x", "status": "ready", "column": { "id": "todo" } }"#;
+        let t: Ticket = serde_json::from_str(bare).unwrap();
+        assert!(!t.auto_merge, "absent means off — nothing lands unattended by default");
+
+        let v = serde_json::to_value(&t).unwrap();
+        assert!(v.get("auto_merge").is_none(), "false stays off the wire");
+
+        let armed = Ticket { auto_merge: true, ..t };
+        let v = serde_json::to_value(&armed).unwrap();
+        assert_eq!(v["auto_merge"], true);
+        assert_eq!(serde_json::from_value::<Ticket>(v).unwrap(), armed);
+
+        let e = Epic { id: EpicId("EP-1".into()), title: "e".into(), color: "#fff".into(), status: Status::Ready, body: String::new(), auto_merge: false };
+        assert!(serde_json::to_value(&e).unwrap().get("auto_merge").is_none(), "and the same on an epic");
+        let armed = Epic { auto_merge: true, ..e };
+        let v = serde_json::to_value(&armed).unwrap();
+        assert_eq!(v["auto_merge"], true);
+        assert_eq!(serde_json::from_value::<Epic>(v).unwrap(), armed);
+    }
+
+    /// A board written before the field existed: it parses, reads off, and costs no migration — the same additive-field
+    /// story as `model`/`effort` and the id counters, which is why `CURRENT_SCHEMA` does not move.
+    #[test]
+    fn a_pre_auto_merge_board_reads_off_and_needs_no_migration() {
+        let raw = serde_json::to_value(&Board {
+            tickets: vec![bare_ticket("K-1")],
+            epics: vec![Epic {
+                id: EpicId("EP-1".into()),
+                title: "auth".into(),
+                color: "#7c9cf5".into(),
+                status: Status::Ready,
+                body: String::new(),
+                auto_merge: false,
+            }],
+            ..Board::empty()
+        })
+        .unwrap();
+        assert!(
+            raw["tickets"][0].get("auto_merge").is_none() && raw["epics"][0].get("auto_merge").is_none(),
+            "the fixture really is a pre-field board: {raw}"
+        );
+
+        let mut board: Board = serde_json::from_value(raw).expect("a board without the field still parses");
+        assert!(!board.tickets[0].auto_merge && !board.epics[0].auto_merge);
+        assert!(!migrate(&mut board).unwrap(), "an additive default is not a schema change to persist");
+        assert_eq!(board.schema, CURRENT_SCHEMA, "and the schema did not have to move for it");
+    }
+
     #[test]
     fn pr_state_open_stays_off_the_wire() {
         let pr = PrRef { number: 7, url: "https://example.invalid/pull/7".into(), state: PrState::Open, merged_commit: None };
