@@ -289,7 +289,7 @@ struct NewTicket {
 
 fn create_ticket(board: &mut Board, new: NewTicket) -> OpOutput {
     let NewTicket { title, body, epic, labels, depends_on, status, model, effort } = new;
-    let id = board.next_ticket_id();
+    let id = board.mint_ticket_id();
     board.tickets.push(Ticket {
         id: id.clone(),
         title,
@@ -309,7 +309,7 @@ fn create_ticket(board: &mut Board, new: NewTicket) -> OpOutput {
 }
 
 fn create_epic(board: &mut Board, title: String, color: Option<String>, body: String, status: Status) -> OpOutput {
-    let id = board.next_epic_id();
+    let id = board.mint_epic_id();
     let color = color.unwrap_or_else(|| EPIC_PALETTE[board.epics.len() % EPIC_PALETTE.len()].to_owned());
     board.epics.push(Epic { id: id.clone(), title, color, status, body });
     OpOutput::created(vec![id.to_string()], json!({ "id": id }))
@@ -585,7 +585,7 @@ fn refine(
     let nested: Vec<(NewTicketSpec, EpicId)> = split_epics
         .into_iter()
         .flat_map(|spec| {
-            let epic_id = board.next_epic_id();
+            let epic_id = board.mint_epic_id();
             let color = spec.color.unwrap_or_else(|| EPIC_PALETTE[board.epics.len() % EPIC_PALETTE.len()].to_owned());
             board.epics.push(Epic { id: epic_id.clone(), title: spec.title, color, status: Status::Review, body: spec.body });
             created.push(epic_id.to_string());
@@ -594,8 +594,8 @@ fn refine(
         .collect();
 
     // Mint every new ticket id up front so `new:<i>` placeholders (which index split_tickets) can point forward.
-    let nested_ids: Vec<TicketId> = mint_ticket_ids(board, nested.len());
-    let split_ids: Vec<TicketId> = mint_ticket_ids_from(board, &nested_ids, split_tickets.len());
+    let nested_ids: Vec<TicketId> = board.mint_ticket_ids(nested.len());
+    let split_ids: Vec<TicketId> = board.mint_ticket_ids(split_tickets.len());
 
     let nested_tickets = nested
         .into_iter()
@@ -654,18 +654,6 @@ fn retitle_target(board: &mut Board, target: &RefineTarget, title: Option<String
             Ok(Some(id.clone()))
         }
     }
-}
-
-/// Mint `count` fresh ticket ids in sequence (the board hasn't received the tickets yet, so walk the numbering by hand).
-fn mint_ticket_ids(board: &Board, count: usize) -> Vec<TicketId> {
-    let first: u64 = board.next_ticket_id().0.strip_prefix("K-").and_then(|n| n.parse().ok()).unwrap_or(1);
-    (first..first + count as u64).map(|n| TicketId(format!("K-{n}"))).collect()
-}
-
-/// Continue minting after `already`, for the top-level split tickets.
-fn mint_ticket_ids_from(board: &Board, already: &[TicketId], count: usize) -> Vec<TicketId> {
-    let mut all = mint_ticket_ids(board, already.len() + count);
-    all.split_off(already.len())
 }
 
 /// Turn a [`NewTicketSpec`] into a real ticket in `todo` with status `review`, resolving `new:<i>` dependency placeholders

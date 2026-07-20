@@ -40,6 +40,16 @@ pub struct Board {
     pub schema: u32,
     /// Optimistic-concurrency counter: bumped on every write; a write whose expected version no longer matches is rejected.
     pub version: u64,
+    /// The number the next ticket id takes: `K-<next_ticket_seq>`. Monotonic — it climbs as ids are minted and never
+    /// falls back when a ticket is deleted, so a number is issued exactly once in a board's life. That matters because a
+    /// deleted ticket outlives its card: its `k-<n>/<slug>` branch, its worktree and any PR opened from it all still name
+    /// the number, and the landing sweep matches review tickets by branch. Absent means "derive it from the tickets" — see
+    /// [`Board::reconcile_id_seqs`], which also floors it above every id in use.
+    #[serde(default)]
+    pub next_ticket_seq: u64,
+    /// The number the next epic id takes: `EP-<next_epic_seq>`, monotonic by the same rule.
+    #[serde(default)]
+    pub next_epic_seq: u64,
     /// Column metadata only (title etc.) — never membership lists, which could drift out of sync with the tickets.
     pub columns: Vec<ColumnMeta>,
     pub epics: Vec<Epic>,
@@ -395,6 +405,11 @@ pub fn migrate(board: &mut Board) -> Result<bool, u32> {
     if board.schema > CURRENT_SCHEMA {
         return Err(board.schema);
     }
+    // Independent of the schema, and deliberately not reported as a change: the id counters are additive fields that
+    // default to zero, so a board written before they existed just needs flooring above the ids already in use. Nothing
+    // has to be persisted eagerly — every mutation reads the board through here first, so the next write records the
+    // reconciled counters, and no id is at risk before then because minting takes the same floor.
+    board.reconcile_id_seqs();
     if board.schema == CURRENT_SCHEMA {
         return Ok(false);
     }
@@ -416,6 +431,8 @@ impl Board {
         Board {
             schema: CURRENT_SCHEMA,
             version: 0,
+            next_ticket_seq: 1,
+            next_epic_seq: 1,
             columns: vec![
                 ColumnMeta { id: ColumnId::Todo, title: "To do".into() },
                 ColumnMeta { id: ColumnId::Doing, title: "Doing".into() },
@@ -450,16 +467,55 @@ impl Board {
         self.tickets.iter().filter(move |t| t.column.id() == column)
     }
 
-    /// The next unused ticket id: `K-<n>` for the smallest `n` above every existing numeric suffix (min `K-1`).
-    #[must_use] 
+    /// The id the next ticket would get, `K-<n>`, without minting it.
+    #[must_use]
     pub fn next_ticket_id(&self) -> TicketId {
-        TicketId(format!("K-{}", next_numeric_suffix(self.tickets.iter().map(|t| t.id.0.as_str()), "K-")))
+        TicketId(format!("K-{}", self.ticket_seq()))
     }
 
-    /// The next unused epic id: `EP-<n>`, by the same rule as [`Board::next_ticket_id`].
-    #[must_use] 
+    /// The id the next epic would get, `EP-<n>`, without minting it.
+    #[must_use]
     pub fn next_epic_id(&self) -> EpicId {
-        EpicId(format!("EP-{}", next_numeric_suffix(self.epics.iter().map(|e| e.id.0.as_str()), "EP-")))
+        EpicId(format!("EP-{}", self.epic_seq()))
+    }
+
+    /// Take the next ticket id and advance the counter past it. Deleting the ticket afterwards never gives the number
+    /// back — see [`Board::next_ticket_seq`] for why reuse is unsafe.
+    pub fn mint_ticket_id(&mut self) -> TicketId {
+        let id = self.next_ticket_id();
+        self.next_ticket_seq = self.ticket_seq() + 1;
+        id
+    }
+
+    /// Take `count` consecutive ticket ids. The batch form exists for a refine split, whose tickets are built before any
+    /// of them reaches the board — the counter, not the board's contents, is what keeps them apart.
+    pub fn mint_ticket_ids(&mut self, count: usize) -> Vec<TicketId> {
+        (0..count).map(|_| self.mint_ticket_id()).collect()
+    }
+
+    /// Take the next epic id and advance the counter past it.
+    pub fn mint_epic_id(&mut self) -> EpicId {
+        let id = self.next_epic_id();
+        self.next_epic_seq = self.epic_seq() + 1;
+        id
+    }
+
+    /// Floor both counters above every id in use. Idempotent, and the only thing that ever moves a counter other than
+    /// minting — it exists so a board written before the counters existed (or hand-edited to carry a higher id than the
+    /// counter knows about) cannot hand out an id that is already taken.
+    pub fn reconcile_id_seqs(&mut self) {
+        self.next_ticket_seq = self.ticket_seq();
+        self.next_epic_seq = self.epic_seq();
+    }
+
+    /// The counter as minting sees it: the persisted value, never below one past the highest ticket id on the board.
+    fn ticket_seq(&self) -> u64 {
+        self.next_ticket_seq.max(next_numeric_suffix(self.tickets.iter().map(|t| t.id.0.as_str()), "K-"))
+    }
+
+    /// The epic counter, by the same rule.
+    fn epic_seq(&self) -> u64 {
+        self.next_epic_seq.max(next_numeric_suffix(self.epics.iter().map(|e| e.id.0.as_str()), "EP-"))
     }
 }
 
@@ -478,6 +534,8 @@ mod tests {
     const DESIGN_MD_BOARD: &str = r##"{
   "schema": 2,
   "version": 12,
+  "next_ticket_seq": 5,
+  "next_epic_seq": 2,
   "columns": [
     { "id": "todo", "title": "To do" },
     { "id": "doing", "title": "Doing" },

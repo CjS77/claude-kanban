@@ -86,6 +86,8 @@ The board is one file, `.kanban/board.json`, committed to your repo:
 {
   "schema": 2,
   "version": 12,
+  "next_ticket_seq": 5,
+  "next_epic_seq": 2,
   "columns": [
     { "id": "todo", "title": "To do" },
     { "id": "doing", "title": "Doing" },
@@ -131,7 +133,7 @@ The board is one file, `.kanban/board.json`, committed to your repo:
 }
 ```
 
-Seven properties of this shape are load-bearing:
+Eight properties of this shape are load-bearing:
 
 - **A ticket's `column` is a tagged object, not a bare string.** The `id` names the workflow state and that state's data nests inside it:
   `doing` carries `owner` and `branch`, `review` carries `branch`, `done` carries `branch`, `completed_at`, and (only when true)
@@ -155,6 +157,13 @@ Seven properties of this shape are load-bearing:
   ever once — an existing one is never overwritten — so `board.json` is replaced only after the escape hatch is safely on disk. A corrupt,
   invalid, or newer-than-supported board is left exactly as it was; a schema newer than the binary refuses to load with "update the plugin"
   rather than misreading. (A v1 *binary* reading a v2 board still dies at the parse, which is why v2 shipped as 2.0.0.)
+- **Ids are never reused.** `next_ticket_seq` and `next_epic_seq` are monotonic counters: minting `K-<n>` advances the counter past `n`,
+  and deleting the ticket does *not* give the number back. Allocating from the highest id *present* would, and that is unsafe — a deleted
+  ticket outlives its card as a `k-<n>/<slug>` branch, a worktree, and possibly an open PR, all of which still name the number, and the
+  landing sweep matches review tickets by branch. A recycled id could therefore land the wrong card. The counters needed no schema bump:
+  they are additive and `#[serde(default)]`, and every load floors them above the highest id in use — so a board written before they
+  existed, or hand-edited to add a higher id, cannot hand out an id that is already taken. The reconciled value persists on the board's
+  next write; nothing is upgraded on disk for it.
 
 Two optional fields look outward: `external` binds a ticket to a work item in another system — `{provider, kind, number}`, e.g. the GitHub
 issue a minesweeper daemon is chewing on — and `pr` binds it to the GitHub PR carrying its branch — `{number, url, state, merged_commit}`,
