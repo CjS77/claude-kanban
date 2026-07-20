@@ -1,6 +1,6 @@
 [package]
 name = "claude-kanban"
-version = "2.0.1"
+version = "2.1.0"
 edition = "2024"
 rust-version = "1.88"
 description = "A Claude Code plugin providing a local-only Kanban board for planning and tracking work with Claude"

@@ -8,7 +8,7 @@
       "name": "kanban",
       "source": "./",
       "description": "Local Kanban board — three columns, live UI, typed MCP tools, one worktree per ticket.",
-      "version": "2.0.1",
+      "version": "2.1.0",
       "category": "productivity"
     }
   ]
