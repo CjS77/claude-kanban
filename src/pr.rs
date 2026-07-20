@@ -167,6 +167,8 @@ mod tests {
             status: Status::Ready,
             body: body.into(),
             labels: vec![],
+            model: None,
+            effort: None,
             depends_on: vec![],
             notes,
             external: None,

@@ -80,12 +80,15 @@
                                 <code class="font-mono">note:</code><span class="opacity-70">progress notes — kept out of bare text</span>
                                 <code class="font-mono">status:</code><span class="opacity-70">draft / stub / review / ready</span>
                                 <code class="font-mono">col: column:</code><span class="opacity-70">todo / doing / review / done</span>
+                                <code class="font-mono">model:</code><span class="opacity-70">the model the ticket asks to be worked with</span>
+                                <code class="font-mono">effort:</code><span class="opacity-70">low / medium / high / xhigh / max</span>
                                 <code class="font-mono">landed:</code><span class="opacity-70">done and not discarded</span>
                                 <code class="font-mono">discarded:</code><span class="opacity-70">abandoned rather than shipped</span>
                                 <code class="font-mono">blocked:</code><span class="opacity-70">waiting on a dependency</span>
                             </div>
-                            <p class="opacity-70">Values match as substrings; <code class="font-mono">status:</code> takes any
-                               prefix, so <code class="font-mono">status:re</code> is review. Booleans read
+                            <p class="opacity-70">Values match as substrings; <code class="font-mono">status:</code> and
+                               <code class="font-mono">effort:</code> take any prefix, so <code class="font-mono">status:re</code>
+                               is review and <code class="font-mono">effort:x</code> is xhigh. Booleans read
                                <code class="font-mono">true/yes/y/1/on</code> and their negatives.</p>
                             <p class="opacity-70">Quote a value to keep a comma inside it
                                (<code class="font-mono">label:"foo, bar"</code>); quoting a whole term forces it to plain text.
@@ -152,6 +155,21 @@
                 </div>
                 <input name="labels" placeholder="labels, comma-separated" class="input w-full">
                 <input name="depends_on" placeholder="depends on, comma-separated ticket ids (e.g. K-1, K-4)" class="input w-full">
+                {#- What /kanban:work should run this ticket at. Both blank means "inherit the worker session's". -#}
+                <div class="grid grid-cols-2 gap-3">
+                    <label class="flex flex-col gap-1 text-sm">Model <span class="opacity-60">(blank = inherit)</span>
+                        <input name="model" list="model-suggestions-new" class="input w-full" placeholder="opus">
+                        <datalist id="model-suggestions-new">
+                            {% for model in models %}<option value="{{ model }}">{% endfor %}
+                        </datalist>
+                    </label>
+                    <label class="flex flex-col gap-1 text-sm">Effort <span class="opacity-60">(blank = inherit)</span>
+                        <select name="effort" class="select w-full">
+                            <option value="" selected>inherit</option>
+                            {% for effort in efforts %}<option value="{{ effort.name }}">{{ effort.name }}</option>{% endfor %}
+                        </select>
+                    </label>
+                </div>
                 <div class="modal-action mt-1">
                     <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">Cancel</button>
                     <button type="submit" class="btn btn-primary">Create</button>

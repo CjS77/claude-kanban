@@ -43,7 +43,7 @@ Several projects can serve at once: an explicit port (`--port`, `KANBAN_PORT`, o
 The workflow:
 
 1. **Write tickets** on the board — or drop one-line ideas as `stub`s for Claude to flesh out into specs.
-2. **Prioritise by dragging.** Column is workflow state (`todo` / `doing` / `review` / `done`); position in the column is priority. A ticket's `status` says how well-defined it is: `draft` (yours, untouchable) → `stub` (flesh me out) → `review` (vet the spec) → `ready` (implementable). Promoting to `ready` is your call, made on the card.
+2. **Prioritise by dragging.** Column is workflow state (`todo` / `doing` / `review` / `done`); position in the column is priority. A ticket's `status` says how well-defined it is: `draft` (yours, untouchable) → `stub` (flesh me out) → `review` (vet the spec) → `ready` (implementable). Promoting to `ready` is your call, made on the card. A card can also name the **model** and **effort** its work deserves; leave them blank and it inherits whatever the worker session is running.
 3. **Run `/kanban:work`** in Claude Code. Claude claims the top eligible ticket, works it in its own worktree on its own branch, notes progress on the card, and moves it to `review` — code-complete, waiting to land — then takes the next. When the board runs dry the loop doesn't exit: it sleeps and polls again, so you can keep dropping tickets while it runs — interrupt it to stop. Your checkout is never touched; integrating the branch is your explicit step — merge it locally, or click **Create PR** on the review ticket's detail pane to push the branch and open a GitHub PR via `gh`.
 4. **Done happens by itself.** Done means *landed in your local main branch*: the board watches review tickets and moves each to `done` the moment its branch — or its PR's merge commit, once you pull — reaches local main, with a note saying why. A PR merged only on GitHub shows "PR merged — pull main" until the merge arrives locally. Work that will never land is retired with the card's **Discard** button; a discarded ticket closes but keeps its dependents blocked. `.kanban/config.json` tunes everything (editable from the board's ⚙ settings pane): `"main_branch"` anchors landing, `"poll_interval"` sets the PR-poll cadence in seconds (0 turns it off), `"max_workers"` fans `/kanban:work` out to N tickets at once, `"idle_time"` sets the dry-board sleep. `init` seeds every key at its default and never overwrites your edits; `"port"` seeds as `null` on purpose — no port means `serve` tries 4747 and hunts for a free one, whereas naming a port makes a busy port a hard failure.
 5. **Or `/kanban:delegate`** a ticket to an external worker: it's mirrored to a GitHub issue and the board tracks it as worked elsewhere; once its PR opens, move the card to `review` with the PR's head branch and the board lands it like any other.
@@ -56,14 +56,15 @@ Dependencies (`depends_on`) block a ticket until they're all done — and since 
 
 - Four-column board: create, edit, drag, and delete tickets and epics; one search box narrows it — `landed: true, label: ux, realtime
   results` is three ANDed terms. Bare text matches anywhere in a ticket (id, title, body, labels, branch, external binding, PR); the keys
-  are `text:` `label:` `epic:` `id:` `note:` `status:` `col:` `landed:` `discarded:` `blocked:`. `epic:none` (or `epic:null`) finds the
-  tickets filed under no epic at all. Quote a value to keep a comma inside it
+  are `text:` `label:` `epic:` `id:` `note:` `status:` `col:` `model:` `effort:` `landed:` `discarded:` `blocked:`. `epic:none` (or
+  `epic:null`) finds the tickets filed under no epic at all. Quote a value to keep a comma inside it
   (`label:"foo, bar"`); anything the grammar doesn't recognise is searched as plain text. The `?` beside the box opens the same
   reference in the app
 - Live updates over SSE — cards move the moment Claude moves them
 - **Done means landed**: review tickets move to done automatically when their branch or PR provably reaches local main (ancestry, or patch-equivalence for rebase-then-delete flows) — never on guesswork; ambiguous cards get flagged for you
 - PR tracking: the Create PR button binds the PR to the ticket, a config-gated `gh` poll follows it to the merge, and daemon- or skill-created PRs are discovered by branch
 - Claimed cards show who's working, the branch, and the worktree; blocked tickets wear a badge
+- Per-ticket **model and effort**: a ticket can say what its work is worth running at — `opus` and `xhigh` for the hairy refactor, nothing at all for the one-liner — and `/kanban:work` dispatches it that way instead of using whatever your session happens to be on. Set both on the card; leave them blank to inherit
 - Typed MCP tools for Claude (`kanban_board`, `kanban_next`, `kanban_claim`, `kanban_move`, `kanban_refine`, …) — every write goes through the same validated operations as the UI, guarded by an advisory lock and an optimistic version counter. `kanban_board` omits done tickets by default, summarizing their ids instead, so a work loop can poll cheaply; `include_done=true` or `column="done"` reads them in full, and your browser board is unaffected
 - One ticket, one git worktree, one branch (`k-7/rate-limit-login`) — parallel sessions can't trample each other or your checkout
 - A settings pane (⚙) editing `.kanban/config.json` from the board
@@ -104,6 +105,7 @@ GitHub Release. Binaries live only in Releases, never in git.
 .claude-plugin/plugin.json   plugin manifest
 .mcp.json                    registers the `kanban` MCP server with Claude Code
 commands/                    the plugin skills: /kanban:init, /kanban:open, /kanban:work, /kanban:delegate
+agents/                      one ticket-worker per effort level, the only place effort is settable
 src/
   store/                     model, atomic IO, advisory lock, validation, derived read model
   ops.rs                     the single typed-mutation funnel both faces share

@@ -368,6 +368,8 @@ mod tests {
             status: Status::Ready,
             body: String::new(),
             labels: vec![],
+            model: None,
+            effort: None,
             depends_on: vec![],
             notes: vec![],
             external: None,

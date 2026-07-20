@@ -22,7 +22,7 @@ use serde::Deserialize;
 use crate::{
     config::Config,
     ops::{self, Applied, NewEpicSpec, NewTicketSpec, Op, OpError, RefineTarget},
-    store::{Store, derive, derive::BoardView, model::{Column, ColumnId, EpicId, Status, TicketId}},
+    store::{Store, derive, derive::BoardView, model::{Column, ColumnId, Effort, EpicId, Status, TicketId}},
 };
 
 /// What Claude is called on the board when a tool doesn't say otherwise.
@@ -131,6 +131,13 @@ pub struct CreateTicketParams {
     pub epic: Option<String>,
     #[serde(default)]
     pub labels: Option<Vec<String>>,
+    /// The model this ticket's work should run on — an alias like "opus"/"sonnet"/"haiku", or a full id like
+    /// "claude-opus-4-8". Omit to inherit whatever the worker session is already running.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Reasoning effort for this ticket's work: "low", "medium", "high", "xhigh", or "max". Omit to inherit.
+    #[serde(default)]
+    pub effort: Option<String>,
     /// Ticket ids this one depends on; it stays blocked until they are all done.
     #[serde(default)]
     pub depends_on: Option<Vec<String>>,
@@ -182,6 +189,12 @@ pub struct NewTicketParam {
     pub body: Option<String>,
     #[serde(default)]
     pub labels: Option<Vec<String>>,
+    /// Model for this subtask's work — an alias like "opus", or a full id. Omit to inherit; set it on the hard split.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Reasoning effort for this subtask: "low", "medium", "high", "xhigh", or "max". Omit to inherit.
+    #[serde(default)]
+    pub effort: Option<String>,
     /// Existing ticket ids, or "new:<i>" naming the i-th entry of `split_tickets` (0-based).
     #[serde(default)]
     pub depends_on: Option<Vec<String>>,
@@ -366,6 +379,8 @@ impl KanbanServer {
             body: p.body.unwrap_or_default(),
             epic: p.epic.map(EpicId),
             labels: p.labels.unwrap_or_default(),
+            model: p.model,
+            effort: parse_effort(p.effort.as_deref())?,
             depends_on: p.depends_on.unwrap_or_default().into_iter().map(TicketId).collect(),
             status,
         };
@@ -443,8 +458,8 @@ impl KanbanServer {
             target,
             title: p.title,
             body: p.body,
-            split_tickets: p.split_tickets.unwrap_or_default().into_iter().map(new_ticket_spec).collect(),
-            split_epics: p.split_epics.unwrap_or_default().into_iter().map(new_epic_spec).collect(),
+            split_tickets: p.split_tickets.unwrap_or_default().into_iter().map(new_ticket_spec).collect::<Result<_, _>>()?,
+            split_epics: p.split_epics.unwrap_or_default().into_iter().map(new_epic_spec).collect::<Result<_, _>>()?,
         };
         self.apply(Some(p.expected_version), op).await
     }
@@ -567,23 +582,30 @@ fn parse_status_or(s: Option<&str>, default: Status) -> Result<Status, ErrorData
     }
 }
 
-fn new_ticket_spec(p: NewTicketParam) -> NewTicketSpec {
-    NewTicketSpec {
+/// An absent effort is "inherit"; a present one must name a level, so a typo is refused rather than silently dropped.
+fn parse_effort(s: Option<&str>) -> Result<Option<Effort>, ErrorData> {
+    s.map(|s| s.parse().map_err(|e: String| ErrorData::invalid_params(e, None))).transpose()
+}
+
+fn new_ticket_spec(p: NewTicketParam) -> Result<NewTicketSpec, ErrorData> {
+    Ok(NewTicketSpec {
         title: p.title,
         body: p.body.unwrap_or_default(),
         labels: p.labels.unwrap_or_default(),
+        model: p.model,
+        effort: parse_effort(p.effort.as_deref())?,
         depends_on: p.depends_on.unwrap_or_default(),
         epic: p.epic.map(EpicId),
-    }
+    })
 }
 
-fn new_epic_spec(p: NewEpicParam) -> NewEpicSpec {
-    NewEpicSpec {
+fn new_epic_spec(p: NewEpicParam) -> Result<NewEpicSpec, ErrorData> {
+    Ok(NewEpicSpec {
         title: p.title,
         color: p.color,
         body: p.body.unwrap_or_default(),
-        tickets: p.tickets.unwrap_or_default().into_iter().map(new_ticket_spec).collect(),
-    }
+        tickets: p.tickets.unwrap_or_default().into_iter().map(new_ticket_spec).collect::<Result<_, _>>()?,
+    })
 }
 
 #[tool_handler]
@@ -613,6 +635,8 @@ mod tests {
             status: Status::Ready,
             body: String::new(),
             labels: vec![],
+            model: None,
+            effort: None,
             depends_on: vec![],
             notes: vec![],
             external: None,

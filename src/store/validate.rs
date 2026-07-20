@@ -133,6 +133,8 @@ mod tests {
             status: Status::Ready,
             body: String::new(),
             labels: vec![],
+            model: None,
+            effort: None,
             depends_on: deps.iter().map(|d| TicketId((*d).into())).collect(),
             notes: vec![],
             external: None,

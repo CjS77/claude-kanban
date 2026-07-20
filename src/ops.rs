@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 
 use crate::store::{
     Claim, Store, StoreError, find_claim,
-    model::{Board, Column, ColumnId, Epic, EpicId, Note, Status, Ticket, TicketId},
+    model::{Board, Column, ColumnId, Effort, Epic, EpicId, Note, Status, Ticket, TicketId},
     remove_claim, upsert_claim,
 };
 
@@ -24,7 +24,16 @@ const EPIC_PALETTE: [&str; 8] = ["#7c9cf5", "#5cb8a7", "#d4a45c", "#c98bc9", "#e
 #[derive(Debug, Clone)]
 pub enum Op {
     /// Create a ticket at the bottom of `todo`.
-    CreateTicket { title: String, body: String, epic: Option<EpicId>, labels: Vec<String>, depends_on: Vec<TicketId>, status: Status },
+    CreateTicket {
+        title: String,
+        body: String,
+        epic: Option<EpicId>,
+        labels: Vec<String>,
+        depends_on: Vec<TicketId>,
+        status: Status,
+        model: Option<String>,
+        effort: Option<Effort>,
+    },
     /// Create an epic. `color: None` picks the next palette colour.
     CreateEpic { title: String, color: Option<String>, body: String, status: Status },
     /// Patch a ticket's descriptive fields. Column and status move via their own ops.
@@ -91,6 +100,9 @@ pub struct TicketPatch {
     pub labels: Option<Vec<String>>,
     pub depends_on: Option<Vec<TicketId>>,
     pub epic: Option<Option<EpicId>>,
+    /// Nested like `epic`: `Some(None)` clears the preference, `None` leaves it alone.
+    pub model: Option<Option<String>>,
+    pub effort: Option<Option<Effort>>,
 }
 
 /// Descriptive fields of an epic that `UpdateEpic` may change.
@@ -111,6 +123,9 @@ pub struct NewTicketSpec {
     pub depends_on: Vec<String>,
     /// `None` inherits the refine target's epic (the target itself, when refining an epic).
     pub epic: Option<EpicId>,
+    /// A split can mark the hard subtask: which model and effort its work deserves.
+    pub model: Option<String>,
+    pub effort: Option<Effort>,
 }
 
 /// An epic created by `Refine`, with its own tickets — nested so a brand-new ticket can belong to a brand-new epic whose id
@@ -225,7 +240,9 @@ impl OpOutput {
 /// whole-board invariants (dangling refs, cycles) are enforced by `Store::mutate` after this returns.
 fn transition(op: Op, board: &mut Board, claims: &mut Vec<Claim>) -> Result<OpOutput, OpError> {
     match op {
-        Op::CreateTicket { title, body, epic, labels, depends_on, status } => Ok(create_ticket(board, title, body, epic, labels, depends_on, status)),
+        Op::CreateTicket { title, body, epic, labels, depends_on, status, model, effort } => {
+            Ok(create_ticket(board, NewTicket { title, body, epic, labels, depends_on, status, model, effort }))
+        }
         Op::CreateEpic { title, color, body, status } => Ok(create_epic(board, title, color, body, status)),
         Op::UpdateTicket { id, patch } => update_ticket(board, &id, patch),
         Op::UpdateEpic { id, patch } => update_epic(board, &id, patch),
@@ -255,17 +272,36 @@ fn epic_mut<'a>(board: &'a mut Board, id: &EpicId) -> Result<&'a mut Epic, OpErr
     board.epic_mut(id).ok_or_else(|| OpError::NotFound(id.to_string()))
 }
 
-fn create_ticket(
-    board: &mut Board,
+/// `Op::CreateTicket`'s payload, bundled so the helper takes one argument instead of eight.
+struct NewTicket {
     title: String,
     body: String,
     epic: Option<EpicId>,
     labels: Vec<String>,
     depends_on: Vec<TicketId>,
     status: Status,
-) -> OpOutput {
+    model: Option<String>,
+    effort: Option<Effort>,
+}
+
+fn create_ticket(board: &mut Board, new: NewTicket) -> OpOutput {
+    let NewTicket { title, body, epic, labels, depends_on, status, model, effort } = new;
     let id = board.next_ticket_id();
-    board.tickets.push(Ticket { id: id.clone(), title, epic, status, body, labels, depends_on, notes: vec![], external: None, pr: None, column: Column::Todo });
+    board.tickets.push(Ticket {
+        id: id.clone(),
+        title,
+        epic,
+        status,
+        body,
+        labels,
+        model,
+        effort,
+        depends_on,
+        notes: vec![],
+        external: None,
+        pr: None,
+        column: Column::Todo,
+    });
     OpOutput::created(vec![id.to_string()], json!({ "id": id }))
 }
 
@@ -278,7 +314,7 @@ fn create_epic(board: &mut Board, title: String, color: Option<String>, body: St
 
 fn update_ticket(board: &mut Board, id: &TicketId, patch: TicketPatch) -> Result<OpOutput, OpError> {
     let ticket = ticket_mut(board, id)?;
-    let TicketPatch { title, body, labels, depends_on, epic } = patch;
+    let TicketPatch { title, body, labels, depends_on, epic, model, effort } = patch;
     if let Some(title) = title {
         ticket.title = title;
     }
@@ -293,6 +329,12 @@ fn update_ticket(board: &mut Board, id: &TicketId, patch: TicketPatch) -> Result
     }
     if let Some(epic) = epic {
         ticket.epic = epic;
+    }
+    if let Some(model) = model {
+        ticket.model = model;
+    }
+    if let Some(effort) = effort {
+        ticket.effort = effort;
     }
     Ok(OpOutput::plain(json!({ "id": id })))
 }
@@ -637,6 +679,8 @@ fn build_refined_ticket(spec: NewTicketSpec, id: TicketId, default_epic: Option<
         status: Status::Review,
         body: spec.body,
         labels: spec.labels,
+        model: spec.model,
+        effort: spec.effort,
         depends_on,
         notes: vec![],
         external: None,
@@ -685,10 +729,36 @@ mod tests {
         let applied = apply(
             store,
             None,
-            Op::CreateTicket { title: title.into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![], status: Status::Ready },
+            Op::CreateTicket { title: title.into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![], status: Status::Ready, model: None, effort: None },
         )
         .unwrap();
         TicketId(applied.created_ids[0].clone())
+    }
+
+    /// The nested option, exercised on both new fields: `None` leaves a preference alone, `Some(None)` clears it. Getting
+    /// this backwards would make every ordinary edit-form save wipe the ticket's model.
+    #[test]
+    fn patching_model_and_effort_distinguishes_untouched_from_cleared() {
+        let (_dir, store) = scratch();
+        let id = create(&store, "hard one");
+        let patch = |p| apply(&store, None, Op::UpdateTicket { id: id.clone(), patch: p }).unwrap();
+        let read = || {
+            let b = store.read_board().unwrap();
+            let t = b.ticket(&id).unwrap();
+            (t.model.clone(), t.effort)
+        };
+
+        patch(TicketPatch { model: Some(Some("opus".into())), effort: Some(Some(Effort::Xhigh)), ..TicketPatch::default() });
+        assert_eq!(read(), (Some("opus".into()), Some(Effort::Xhigh)));
+
+        patch(TicketPatch { title: Some("retitled".into()), ..TicketPatch::default() });
+        assert_eq!(read(), (Some("opus".into()), Some(Effort::Xhigh)), "a patch that doesn't mention them leaves them alone");
+
+        patch(TicketPatch { model: Some(None), ..TicketPatch::default() });
+        assert_eq!(read(), (None, Some(Effort::Xhigh)), "clearing one leaves the other standing");
+
+        patch(TicketPatch { effort: Some(None), ..TicketPatch::default() });
+        assert_eq!(read(), (None, None));
     }
 
     #[test]
@@ -874,6 +944,8 @@ mod tests {
             labels: vec![],
             depends_on: deps.into_iter().map(String::from).collect(),
             epic: None,
+            model: None,
+            effort: None,
         };
         let applied = apply(
             &store,
@@ -927,7 +999,7 @@ mod tests {
                 target: RefineTarget::Ticket(ready),
                 title: None,
                 body: "x".into(),
-                split_tickets: vec![NewTicketSpec { title: "t".into(), body: String::new(), labels: vec![], depends_on: vec!["new:9".into()], epic: None }],
+                split_tickets: vec![NewTicketSpec { title: "t".into(), body: String::new(), labels: vec![], depends_on: vec!["new:9".into()], epic: None, model: None, effort: None }],
                 split_epics: vec![],
             },
         )
@@ -952,7 +1024,7 @@ mod tests {
                 target: RefineTarget::Ticket(target),
                 title: None,
                 body: "refined".into(),
-                split_tickets: vec![NewTicketSpec { title: "child".into(), body: String::new(), labels: vec![], depends_on: vec![], epic: None }],
+                split_tickets: vec![NewTicketSpec { title: "child".into(), body: String::new(), labels: vec![], depends_on: vec![], epic: None, model: None, effort: None }],
                 split_epics: vec![],
             },
         )

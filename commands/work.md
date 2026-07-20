@@ -23,6 +23,9 @@ Your first `kanban_board` read carries `max_workers` and `idle_time` (both from 
 - `max_workers` = N > 1 → **The parallel loop** below: up to N tickets in flight at once, each worked by a subagent.
 - A ticket-id argument or `--one` caps useful parallelism at 1: use the sequential loop regardless of config.
 
+Orthogonally, a ticket may name the `model` and `effort` its work deserves — see **Model and effort** below. That
+decides *how* a ticket is dispatched, not which loop you are in.
+
 ## The loop
 
 Repeat until the user stops you (or you've done the one requested ticket — a ticket-id argument or `--one` ends the
@@ -34,6 +37,9 @@ loop after it):
    tickets whose branches have reached local main, so **use the `version` it returns** for the claim — the sweep may
    have advanced the board.
 2. **Claim** — `kanban_claim` the ticket. A pure board mutation; git is untouched.
+   **Then check `model` and `effort` on the ticket.** If either is set, you cannot honour it yourself — you can't change
+   your own model or effort mid-session — so hand the ticket to a subagent instead of working steps 3–7: see **Model and
+   effort** below, then close it out at step 8 as usual. If both are absent (the common case), carry straight on.
 3. **Start** — `kanban_worktree_start`. Supply a `slug` yourself: a short kebab-case digest of the title
    (2–3 words, e.g. "Add authorization based on OAuth from Google" → `google-oauth`) beats the mechanical default.
 4. **Work** — `cd` into the reported worktree path and stay there for the ticket's lifetime. Read the ticket's `body` as
@@ -69,7 +75,8 @@ tickets in flight; a refinement counts as one worker, an implementation counts a
    sequential loop. Never let subagents race `kanban_next`: claim first, then delegate. (Claims are CAS-guarded by
    `expected_version` and refused when already claimed, so even a race only costs a re-read and retry.)
 2. **Delegate** — launch one subagent per claimed ticket via the Agent tool, passing the ticket id, its full `body`
-   as the spec, and the action. Launch independent subagents in a single message so they run concurrently. Every
+   as the spec, and the action. Pick the subagent type and model from the ticket's `effort` and `model` — see **Model
+   and effort** below. Launch independent subagents in a single message so they run concurrently. Every
    subagent starts in the **main checkout** — never inside another ticket's worktree.
    - `implement` → the subagent runs `kanban_worktree_start` (tell it to supply a short kebab-case `slug`), `cd`s into
      the reported worktree and stays there, works the spec, commits logical chunks, `kanban_note`s progress, runs
@@ -99,6 +106,34 @@ tickets in flight; a refinement counts as one worker, an implementation counts a
 
 The store is safe under concurrency (advisory lock, version CAS, one worktree per ticket, per-ticket branches) —
 what needs discipline is the policy above: one claimer, one board-writer, subagents in their own worktrees.
+
+## Model and effort
+
+A ticket can name what its work is worth running at: `model` (an alias like `opus`, or a full id like
+`claude-opus-4-8`) and `effort` (`low` / `medium` / `high` / `xhigh` / `max`). Both are optional and usually absent —
+absent means "inherit", i.e. exactly today's behaviour.
+
+You cannot change your own model or effort mid-session, so the only way to honour either is to dispatch the ticket to a
+subagent. Read both fields off the ticket and pick:
+
+| `effort` | `model` | Dispatch |
+|----------|---------|----------|
+| absent | absent | Work it yourself (sequential loop), or the default subagent (parallel loop). Nothing changes. |
+| absent | set | Agent tool with `model: <the ticket's>`. |
+| set | absent | Agent tool with `subagent_type: "kanban-effort-<level>"`. |
+| set | set | Agent tool with `subagent_type: "kanban-effort-<level>"` **and** `model: <the ticket's>`. |
+
+The `kanban-effort-*` agents ship with this plugin, one per level, each carrying its `effort:` in frontmatter — that
+frontmatter is the only place effort can be set, since the Agent tool takes no effort parameter. They declare
+`model: inherit` so your per-call `model` override wins; passing no `model` leaves the subagent on the session's.
+
+Everything else about delegating is unchanged from the parallel loop: pass the ticket id, its full `body` as the spec,
+and the action; the subagent runs `kanban_worktree_start`, works in its own worktree, commits, notes progress, verifies,
+and calls `kanban_worktree_finish`; **you** close the card out.
+
+**Never silently ignore either field.** If you dispatch a ticket at anything other than what it asked for — a level your
+harness rejects, a model that isn't available, a fallback you chose — `kanban_note` what was requested versus what
+actually ran, and say so in the end-of-loop summary. A dial that lies about being applied is worse than no dial.
 
 ## Idling
 
@@ -143,6 +178,9 @@ A stub is a spec to write, not code to build. When `kanban_next` says `action: "
 
 - Only `ready` (implement) or `stub` (refine), unblocked, unclaimed, non-external tickets. Never touch `draft`
   tickets at all.
+- A ticket's `model`/`effort` is the human's instruction, not a suggestion to weigh. Honour it or report that you
+  couldn't — never substitute your own judgement about what a ticket deserves, and never set these fields on tickets
+  you create unless the user asked for them.
 - Every mutating kanban tool needs `expected_version` from your latest `kanban_board` read (or the `version`
   `kanban_next` returns — its landing sweep may have advanced the board). On a version conflict, re-read the board
   and retry the operation against the new state.

@@ -10,7 +10,7 @@
 
 use crate::store::{
     derive::{EpicView, TicketView},
-    model::{Column, ColumnId, Status, Ticket},
+    model::{Column, ColumnId, Effort, Status, Ticket},
 };
 
 /// A parsed search query: a conjunction of terms. Parsing is infallible — anything the grammar does not recognise
@@ -32,6 +32,9 @@ enum Term {
     Note(String),
     Status(Status),
     Column(ColumnId),
+    /// The ticket's model preference, matched as a substring so `model:opus` also finds `claude-opus-4-8`.
+    Model(String),
+    Effort(Effort),
     /// Done and not discarded — `landed:`.
     Landed(bool),
     Discarded(bool),
@@ -109,6 +112,8 @@ fn keyed(key: &str, value: &str) -> Option<Term> {
         "note" => needle(value).map(Term::Note),
         "status" => status(value).map(Term::Status),
         "col" | "column" => needle(value)?.parse().ok().map(Term::Column),
+        "model" => needle(value).map(Term::Model),
+        "effort" => effort(value).map(Term::Effort),
         "landed" => boolean(value).map(Term::Landed),
         "discarded" => boolean(value).map(Term::Discarded),
         "blocked" => boolean(value).map(Term::Blocked),
@@ -138,6 +143,14 @@ fn needle(s: &str) -> Option<String> {
 fn status(value: &str) -> Option<Status> {
     let v = needle(value)?;
     [Status::Draft, Status::Stub, Status::Review, Status::Ready].into_iter().find(|s| s.as_str().starts_with(&v))
+}
+
+/// An effort level by name, or by any prefix of one (`effort:x` → xhigh), resolving in [`Effort::ALL`] order like
+/// [`status`] does. `effort:m` is therefore medium, not max — the ambiguity is the price of prefixes, and spelling the
+/// level out always wins.
+fn effort(value: &str) -> Option<Effort> {
+    let v = needle(value)?;
+    Effort::ALL.into_iter().find(|e| e.as_str().starts_with(&v))
 }
 
 /// An epic to match by id or title, or the two spellings of "no epic at all". `none` and `null` are reserved words here,
@@ -172,6 +185,8 @@ fn admits_ticket(term: &Term, t: &TicketView, epics: &[EpicView]) -> bool {
         Term::Note(p) => ticket.notes.iter().any(|n| contains(&n.text, p)),
         Term::Status(s) => ticket.status == *s,
         Term::Column(c) => ticket.column.id() == *c,
+        Term::Model(p) => ticket.model.as_deref().is_some_and(|m| contains(m, p)),
+        Term::Effort(e) => ticket.effort == Some(*e),
         Term::Landed(want) => matches!(ticket.column, Column::Done { discarded: false, .. }) == *want,
         Term::Discarded(want) => matches!(ticket.column, Column::Done { discarded: true, .. }) == *want,
         Term::Blocked(want) => t.blocked == *want,
@@ -236,6 +251,8 @@ mod tests {
             status: Status::Ready,
             body: String::new(),
             labels: vec![],
+            model: None,
+            effort: None,
             depends_on: vec![],
             notes: vec![],
             external: None,
@@ -364,6 +381,35 @@ mod tests {
     }
 
     #[test]
+    fn effort_accepts_a_prefix_resolving_in_level_order() {
+        assert_eq!(Query::parse("effort:x").terms, vec![Term::Effort(Effort::Xhigh)]);
+        assert_eq!(Query::parse("effort: MAX").terms, vec![Term::Effort(Effort::Max)]);
+        assert_eq!(Query::parse("effort:h").terms, vec![Term::Effort(Effort::High)]);
+        // `m` fits both medium and max; ALL order decides, and spelling it out always wins.
+        assert_eq!(Query::parse("effort:m").terms, vec![Term::Effort(Effort::Medium)]);
+        assert_eq!(Query::parse("effort:nonsense").terms, vec![Term::Text("effort:nonsense".into())]);
+    }
+
+    #[test]
+    fn model_matches_as_a_substring_and_effort_exactly() {
+        let mut t = ticket("K-9", "Hard one");
+        t.model = Some("claude-opus-4-8".into());
+        t.effort = Some(Effort::Xhigh);
+        let v = view(t);
+
+        assert!(Query::parse("model:opus").matches(&v, &[]), "an alias finds the full id it names");
+        assert!(Query::parse("model: OPUS").matches(&v, &[]));
+        assert!(!Query::parse("model:sonnet").matches(&v, &[]));
+        assert!(Query::parse("effort:xhigh").matches(&v, &[]));
+        assert!(!Query::parse("effort:high").matches(&v, &[]), "xhigh is not high — the enum compares exactly");
+
+        // A ticket expressing no preference is matched by neither term, rather than by every one.
+        let plain = view(ticket("K-10", "Ordinary"));
+        assert!(!Query::parse("model:opus").matches(&plain, &[]));
+        assert!(!Query::parse("effort:low").matches(&plain, &[]));
+    }
+
+    #[test]
     fn ticket_only_terms_hide_epic_cards() {
         let e = epic_view("EP-1", "Board UI");
         assert!(Query::parse("board").matches_epic(&e), "free text searches the epic's own words");
@@ -371,10 +417,11 @@ mod tests {
         assert!(Query::parse("epic: ep-1").matches_epic(&e));
         assert!(Query::parse("status: ready").matches_epic(&e));
 
-        let leaked: Vec<&str> = ["label: ux", "col: todo", "landed: false", "discarded:no", "blocked:false", "id: EP-1", "note: anything"]
-            .into_iter()
-            .filter(|q| Query::parse(q).matches_epic(&e))
-            .collect();
+        let ticket_only = [
+            "label: ux", "col: todo", "landed: false", "discarded:no", "blocked:false", "id: EP-1", "note: anything", "model: opus",
+            "effort: max",
+        ];
+        let leaked: Vec<&str> = ticket_only.into_iter().filter(|q| Query::parse(q).matches_epic(&e)).collect();
         assert!(leaked.is_empty(), "a ticket-only term cannot be satisfied by an epic, so it must hide the card: {leaked:?}");
     }
 

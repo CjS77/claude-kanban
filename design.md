@@ -162,6 +162,13 @@ with no extra step). `state` and `merged_commit` are the poll's durable answers,
 offline and survives restarts. The bindings are addresses and facts for other tools to act on; see
 [interop](#interop-minesweeper-and-friends) below, and [landing](#landing-how-review-becomes-done) for the one sanctioned poll.
 
+Two more optional fields look *inward*, at the harness rather than at another system: `model` and `effort` say what a ticket's work is worth
+running at — `"model": "opus"` (an alias or a full id, free text because `--model` takes either) and `"effort": "xhigh"` (one of
+low/medium/high/xhigh/max). Absent means "inherit whatever the worker session is running", which is the overwhelming majority of tickets.
+Both are advisory *data*: this binary launches nothing, so honouring them is `/kanban:work`'s job — see
+[dispatch](#dispatch-model-and-effort). Adding them needed no schema bump; `#[serde(default, skip_serializing_if)]` keeps an
+unset pair off the wire entirely, so a board that expresses no preference is byte-identical to a 2.0 one.
+
 Two things deliberately do *not* live in this file. The live claim: `.kanban/claims.json` — gitignored, like the lock and pid files — holds
 `{ticket, agent, since, path}` for work in flight, because a worktree path on your machine means nothing on a collaborator's, and nobody
 wants a phantom "Claude is working on this" ghosting across the team's boards. And the landing sweep's branch-tip observations:
@@ -317,6 +324,37 @@ of another. Three choices keep that door open:
 - **`branch` is data, not a format.** Tickets worked by this plugin get `{id}/{slug}` branches; an external ticket's `branch`, if recorded
   at all, is whatever the delegate created (minesweeper's `myrepo-issue0042`). Nothing in the board assumes it can parse a branch name.
 
+## Dispatch: model and effort
+
+A ticket can say what its work is worth running at — `model` and `effort` on the card. The binary's role stays exactly
+what it was: it stores the preference, renders it, and hands it back with everything else (`kanban_next` serializes the
+whole ticket, so the fields ride along for free). **Honouring it is the skill's job**, because the board never launches
+anything.
+
+The two dials have different ceilings, and the design follows the harness rather than pretending they're symmetric:
+
+- **`model` is free text** — an alias (`opus`) or a full id (`claude-opus-4-8`) — because `--model` accepts either. A
+  closed enum would have made pinning a specific model impossible and put every new alias behind a plugin release. The
+  UI offers a `<datalist>` of aliases over a plain input, so it suggests without constraining.
+- **`effort` is a closed enum** of the five levels the harness defines, because that vocabulary *is* fixed and a typo
+  should be a 422 rather than a silently ignored preference.
+
+The asymmetry that shapes the implementation: the Agent tool takes a per-call `model` override but **no** effort
+parameter. Effort is settable only in an agent definition's frontmatter. So the plugin ships five one-per-level agents
+in `agents/` (`kanban-effort-low` … `kanban-effort-max`), each pinning its `effort:` and declaring `model: inherit` so
+the orchestrator's per-call model override still wins. `/kanban:work` reads the pair off the ticket and picks a
+`subagent_type` from the effort, a `model` from the model, and delegates. (Plugin-shipped agents keep `model` and
+`effort`; only `hooks`, `mcpServers` and `permissionMode` are stripped for security, which is why they can live in the
+plugin rather than being generated into the user's `.claude/agents/`.)
+
+One consequence worth stating plainly: a ticket that names either field is **always** worked by a subagent, even at
+`max_workers: 1`, because a session cannot change its own model or effort mid-run. That is the whole reason the fields
+are dispatch instructions rather than session settings. Tickets naming neither — the overwhelming majority — are worked
+exactly as before, in-session, and the sequential loop keeps its live visibility.
+
+The skill is told never to silently ignore either field: dispatching at anything other than what was asked for has to
+land in a `kanban_note` and in the end-of-loop summary. A dial that lies about being applied is worse than no dial.
+
 ## Distribution: one MCP command, three launchers
 
 `.mcp.json` names a single command on every platform — `${CLAUDE_PLUGIN_ROOT}/bin/kanban-mcp` — because the plugin manifest offers no
@@ -433,6 +471,9 @@ The implementation checklist, kept as the record of scope.
   one out to a subagent in its own worktree, keeping at most N in flight; `kanban_board` reports the effective value.
 - [x] `/kanban:delegate` — mirror a `ready`, unblocked ticket to a GitHub issue, apply the eligibility label, record the `external` binding,
   and claim it into `doing` on the daemon's behalf; the skill owns the `gh` calls
+- [x] `agents/kanban-effort-{low,medium,high,xhigh,max}` — one agent definition per effort level, the only place effort
+  can be set; `/kanban:work` picks among them from the ticket's `effort` and passes its `model` per call (see
+  [dispatch](#dispatch-model-and-effort))
 
 ## Open design questions
 

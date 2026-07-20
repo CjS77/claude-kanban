@@ -161,6 +161,8 @@ fn seed_a_fat_done_ticket(dir: &std::path::Path) -> std::path::PathBuf {
         labels: vec![],
         depends_on: vec![],
         status: Status::Ready,
+        model: None,
+        effort: None,
     };
     ops::apply(&store, None, create("landed work", "## Refined spec\n".to_owned() + &"every decision, recorded. ".repeat(600))).unwrap();
     let k1 = TicketId("K-1".into());
@@ -245,7 +247,7 @@ fn kanban_next_lands_merged_review_work_and_the_move_records_companion_branches(
         ops::apply(
             &store,
             None,
-            Op::CreateTicket { title: title.into(), body: String::new(), epic: None, labels: vec![], depends_on: deps, status: Status::Ready },
+            Op::CreateTicket { title: title.into(), body: String::new(), epic: None, labels: vec![], depends_on: deps, status: Status::Ready, model: None, effort: None },
         )
         .unwrap();
     };

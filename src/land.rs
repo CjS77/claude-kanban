@@ -299,7 +299,7 @@ mod tests {
         ops::apply(
             &store,
             None,
-            Op::CreateTicket { title: "the work".into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![], status: Status::Ready },
+            Op::CreateTicket { title: "the work".into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![], status: Status::Ready, model: None, effort: None },
         )
         .unwrap();
         let id = TicketId("K-1".into());
@@ -331,7 +331,7 @@ mod tests {
         ops::apply(
             &s.store,
             None,
-            Op::CreateTicket { title: "dependent".into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![TicketId("K-1".into())], status: Status::Ready },
+            Op::CreateTicket { title: "dependent".into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![TicketId("K-1".into())], status: Status::Ready, model: None, effort: None },
         )
         .unwrap();
         git(&s.repo, &["merge", "-q", "--ff-only", "k-1/work"]).unwrap();
@@ -464,7 +464,7 @@ mod tests {
         ops::apply(
             &s.store,
             None,
-            Op::CreateTicket { title: "dependent".into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![TicketId("K-1".into())], status: Status::Ready },
+            Op::CreateTicket { title: "dependent".into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![TicketId("K-1".into())], status: Status::Ready, model: None, effort: None },
         )
         .unwrap();
         ops::apply(&s.store, None, Op::DiscardTicket { id: TicketId("K-1".into()), reason: "abandoned".into() }).unwrap();

@@ -14,12 +14,27 @@ use crate::{
     store::{
         Claim,
         derive::{self, BoardView, ClaimView, EpicView, TicketView},
-        model::{Board, ColumnId, Status},
+        model::{Board, ColumnId, Effort, Status},
     },
 };
 
 /// The four statuses in workflow order, for the status button groups.
 const STATUSES: [Status; 4] = [Status::Draft, Status::Stub, Status::Review, Status::Ready];
+
+/// The model aliases the `<datalist>` suggests. Only suggestions — the field is free text, because `--model` takes a
+/// full id (`claude-opus-4-8`) just as happily as an alias.
+pub const MODEL_SUGGESTIONS: [&str; 4] = ["opus", "sonnet", "haiku", "fable"];
+
+/// A ticket's model/effort preference as one badge: `opus · xhigh`, or whichever half is set. `None` when neither is —
+/// the overwhelming majority of tickets, which should stay visually quiet.
+fn run_badge(ticket: &crate::store::model::Ticket) -> Option<String> {
+    match (ticket.model.as_deref(), ticket.effort) {
+        (None, None) => None,
+        (Some(m), None) => Some(m.to_owned()),
+        (None, Some(e)) => Some(e.to_string()),
+        (Some(m), Some(e)) => Some(format!("{m} · {e}")),
+    }
+}
 
 /// The board's active filters, straight from the query string. Empty strings mean "no filter" (that's what empty form
 /// fields submit). The epic dropdown stays its own parameter — it is a *discovery* affordance for ids and titles nobody
@@ -61,6 +76,10 @@ pub struct PageTpl {
     /// The plugin's repo, behind the header's GitHub mark. Also manifest-sourced (`[package] repository`).
     pub repo_url: &'static str,
     pub epics: Vec<EpicOptionCtx>,
+    /// Model aliases the create form's `<datalist>` suggests; the field itself stays free text.
+    pub models: [&'static str; 4],
+    /// Effort levels for the create form's select, all unselected — a new ticket inherits by default.
+    pub efforts: Vec<EffortOptCtx>,
     pub filter_oob: bool,
 }
 
@@ -79,6 +98,8 @@ pub fn page(title: String, board: &Board) -> PageTpl {
         version: env!("CARGO_PKG_VERSION"),
         repo_url: env!("CARGO_PKG_REPOSITORY"),
         epics: epic_options(board, None),
+        models: MODEL_SUGGESTIONS,
+        efforts: effort_options(None),
         filter_oob: false,
     }
 }
@@ -132,6 +153,8 @@ pub struct CardCtx {
     /// A review ticket whose recorded branch no longer exists locally and nothing proves it landed — the human's call.
     pub branch_gone: bool,
     pub labels: Vec<String>,
+    /// The model/effort preference, pre-rendered as one badge — the point is spotting the expensive tickets at a glance.
+    pub run: Option<String>,
     pub external: Option<String>,
     pub claim: Option<ClaimCtx>,
     pub branch: Option<String>,
@@ -246,6 +269,7 @@ fn card(t: &TicketView, view: &BoardView, heads: Option<&HashSet<String>>) -> Ca
             && t.ticket.external.is_none()
             && t.ticket.column.branch().is_some_and(|b| heads.is_some_and(|h| !h.contains(b))),
         labels: t.ticket.labels.clone(),
+        run: run_badge(&t.ticket),
         external: t.ticket.external.as_ref().map(|e| format!("{} {}#{}", e.provider, e.kind, e.number)),
         claim: t.claim.as_ref().map(claim_ctx),
         branch: t.ticket.column.branch().map(str::to_owned),
@@ -302,6 +326,8 @@ pub struct TicketCtx {
     pub external: Option<String>,
     pub epic: Option<EpicRefCtx>,
     pub labels: Vec<String>,
+    /// The model/effort preference as one badge, same as on the card.
+    pub run: Option<String>,
     pub claim: Option<ClaimCtx>,
     pub branch: Option<String>,
     pub completed_at: Option<String>,
@@ -368,6 +394,7 @@ pub fn detail(board: &Board, claims: &[Claim], id: &crate::store::model::TicketI
                 color: e.color.clone(),
             }),
             labels: t.labels.clone(),
+            run: run_badge(t),
             claim,
             branch: t.column.branch().map(str::to_owned),
             completed_at,
@@ -400,6 +427,8 @@ pub fn detail(board: &Board, claims: &[Claim], id: &crate::store::model::TicketI
 pub struct DetailEditTpl {
     pub ticket: EditCtx,
     pub epics: Vec<EpicOptionCtx>,
+    pub models: [&'static str; 4],
+    pub efforts: Vec<EffortOptCtx>,
 }
 
 #[derive(Debug)]
@@ -409,6 +438,21 @@ pub struct EditCtx {
     pub body: String,
     pub labels_csv: String,
     pub deps_csv: String,
+    /// Free text: an alias or a full model id. Empty means "inherit the session's".
+    pub model: String,
+}
+
+/// One `<option>` of the effort select.
+#[derive(Debug)]
+pub struct EffortOptCtx {
+    pub name: &'static str,
+    pub selected: bool,
+}
+
+/// The effort options, with the ticket's own level pre-selected. Mirrors `epic_options`: an empty leading option is the
+/// "inherit" case and lives in the template.
+fn effort_options(current: Option<Effort>) -> Vec<EffortOptCtx> {
+    Effort::ALL.map(|e| EffortOptCtx { name: e.as_str(), selected: Some(e) == current }).into()
 }
 
 pub fn detail_edit(board: &Board, id: &crate::store::model::TicketId) -> Option<DetailEditTpl> {
@@ -420,8 +464,11 @@ pub fn detail_edit(board: &Board, id: &crate::store::model::TicketId) -> Option<
             body: t.body.clone(),
             labels_csv: t.labels.join(", "),
             deps_csv: t.depends_on.iter().map(ToString::to_string).collect::<Vec<_>>().join(", "),
+            model: t.model.clone().unwrap_or_default(),
         },
         epics: epic_options(board, t.epic.as_ref().map(|e| e.0.as_str())),
+        models: MODEL_SUGGESTIONS,
+        efforts: effort_options(t.effort),
     })
 }
 

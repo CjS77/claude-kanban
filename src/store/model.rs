@@ -170,6 +170,56 @@ impl std::str::FromStr for Status {
     }
 }
 
+/// How much reasoning effort a ticket's work deserves. The five levels the harness accepts; which of them a given model
+/// actually supports is the harness's business, not the board's — this is a preference, not a promise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Effort {
+    Low,
+    Medium,
+    High,
+    Xhigh,
+    Max,
+}
+
+impl Effort {
+    /// Every level, highest-intent last — the order the UI offers them in.
+    pub const ALL: [Effort; 5] = [Effort::Low, Effort::Medium, Effort::High, Effort::Xhigh, Effort::Max];
+
+    /// The wire name (`low` / `medium` / `high` / `xhigh` / `max`).
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Effort::Low => "low",
+            Effort::Medium => "medium",
+            Effort::High => "high",
+            Effort::Xhigh => "xhigh",
+            Effort::Max => "max",
+        }
+    }
+}
+
+impl fmt::Display for Effort {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for Effort {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Effort, String> {
+        match s {
+            "low" => Ok(Effort::Low),
+            "medium" => Ok(Effort::Medium),
+            "high" => Ok(Effort::High),
+            "xhigh" => Ok(Effort::Xhigh),
+            "max" => Ok(Effort::Max),
+            other => Err(format!("'{other}' is not an effort level (low/medium/high/xhigh/max)")),
+        }
+    }
+}
+
 /// A unit of work.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Ticket {
@@ -184,6 +234,14 @@ pub struct Ticket {
     pub body: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
+    /// The model this ticket's work should run on — an alias (`opus`) or a full id (`claude-opus-4-8`), whatever the
+    /// harness's `--model` accepts. Advisory: this binary launches nothing, so it is `/kanban:work` that reads this and
+    /// decides how to dispatch. Absent means "whatever the session is already running".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// The reasoning effort this ticket's work deserves, honoured the same advisory way as `model`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<Effort>,
     /// Until every ticket named here is `done`, this ticket is *blocked*: visible in `todo`, skipped by `kanban_next`.
     /// Must form a DAG with the other tickets; checked on load.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -566,6 +624,42 @@ mod tests {
     }
 
     #[test]
+    fn effort_round_trips_every_level_and_names_them_all_when_refusing() {
+        let round_tripped: Vec<Effort> = Effort::ALL
+            .into_iter()
+            .map(|e| {
+                let v = serde_json::to_value(e).unwrap();
+                assert_eq!(v, serde_json::json!(e.as_str()), "the wire name is the display name");
+                assert_eq!(e.as_str().parse::<Effort>().unwrap(), e, "FromStr inverts as_str");
+                serde_json::from_value(v).unwrap()
+            })
+            .collect();
+        assert_eq!(round_tripped, Effort::ALL);
+
+        let err = "ludicrous".parse::<Effort>().unwrap_err();
+        assert!(err.contains("ludicrous"), "the error quotes what was given: {err}");
+        assert!(Effort::ALL.iter().all(|e| err.contains(e.as_str())), "and lists every level: {err}");
+    }
+
+    /// A ticket expressing no preference must serialize exactly as it did before the fields existed — that is the whole
+    /// of the compatibility story, in both directions, with no schema bump.
+    #[test]
+    fn model_and_effort_stay_off_the_wire_when_unset() {
+        let bare = r#"{ "id": "K-1", "title": "x", "status": "ready", "column": { "id": "todo" } }"#;
+        let t: Ticket = serde_json::from_str(bare).unwrap();
+        assert!(t.model.is_none() && t.effort.is_none(), "absent means inherit, not a default level");
+
+        let v = serde_json::to_value(&t).unwrap();
+        assert!(v.get("model").is_none() && v.get("effort").is_none());
+
+        let set = Ticket { model: Some("claude-opus-4-8".into()), effort: Some(Effort::Xhigh), ..t };
+        let v = serde_json::to_value(&set).unwrap();
+        assert_eq!(v["model"], "claude-opus-4-8");
+        assert_eq!(v["effort"], "xhigh");
+        assert_eq!(serde_json::from_value::<Ticket>(v).unwrap(), set);
+    }
+
+    #[test]
     fn pr_state_open_stays_off_the_wire() {
         let pr = PrRef { number: 7, url: "https://example.invalid/pull/7".into(), state: PrState::Open, merged_commit: None };
         let v = serde_json::to_value(&pr).unwrap();
@@ -608,6 +702,8 @@ mod tests {
                 status: Status::Ready,
                 body: String::new(),
                 labels: vec![],
+                model: None,
+                effort: None,
                 depends_on: vec![],
                 notes: vec![],
                 external: None,

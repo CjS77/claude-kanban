@@ -46,6 +46,8 @@ fn scratch() -> Scratch {
             labels: vec![],
             depends_on: vec![],
             status: Status::Ready,
+            model: None,
+            effort: None,
         },
     )
     .unwrap();
@@ -169,7 +171,7 @@ fn unclaimed_and_external_tickets_are_refused() {
     ops::apply(
         &s.store,
         None,
-        Op::CreateTicket { title: "not claimed".into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![], status: Status::Ready },
+        Op::CreateTicket { title: "not claimed".into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![], status: Status::Ready, model: None, effort: None },
     )
     .unwrap();
     let err = worktree::start(&s.store, &TicketId("K-2".into()), &opts(&s)).unwrap_err();

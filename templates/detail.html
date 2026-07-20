@@ -19,6 +19,8 @@
           hx-get="/ui/epic/{{ epic.id }}" hx-target="#detail" hx-swap="innerHTML">{{ epic.title }}</span>
     {% endif %}
     {% for label in ticket.labels %}<span class="badge badge-ghost">{{ label }}</span>{% endfor %}
+    {% if let Some(run) = ticket.run %}<span class="badge badge-ghost font-mono"
+          title="/kanban:work dispatches this ticket at this model and effort instead of the session's own">⚙ {{ run }}</span>{% endif %}
 </div>
 
 {% if let Some(claim) = ticket.claim %}

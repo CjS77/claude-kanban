@@ -21,7 +21,7 @@ use crate::{
     store::{
         Store, StoreError,
         derive,
-        model::{ColumnId, EpicId, Status, TicketId},
+        model::{ColumnId, Effort, EpicId, Status, TicketId},
     },
 };
 
@@ -116,6 +116,19 @@ fn parse_status(s: &str) -> Result<Status, AppError> {
 
 fn parse_column(s: &str) -> Result<ColumnId, AppError> {
     s.parse().map_err(AppError::bad_request)
+}
+
+/// An empty effort `<select>` means "inherit the session's"; anything else must name a level.
+fn parse_effort(s: &str) -> Result<Option<Effort>, AppError> {
+    match s.trim() {
+        "" => Ok(None),
+        s => s.parse().map(Some).map_err(AppError::bad_request),
+    }
+}
+
+/// The model box is free text (an alias or a full id), so it only gets trimmed — blank means "inherit".
+fn parse_model(s: &str) -> Option<String> {
+    opt(s.trim().to_owned())
 }
 
 /// Split a comma-separated form field into trimmed, non-empty entries.
@@ -235,6 +248,10 @@ pub struct CreateTicketForm {
     depends_on: String,
     #[serde(default = "default_create_status")]
     status: String,
+    #[serde(default)]
+    model: String,
+    #[serde(default)]
+    effort: String,
 }
 
 fn default_create_status() -> String {
@@ -253,6 +270,8 @@ pub async fn create_ticket(
         labels: csv(&form.labels),
         depends_on: csv(&form.depends_on).into_iter().map(TicketId).collect(),
         status: parse_status(&form.status)?,
+        model: parse_model(&form.model),
+        effort: parse_effort(&form.effort)?,
     };
     mutate(&app, &headers, op).await
 }
@@ -268,6 +287,10 @@ pub struct UpdateTicketForm {
     labels: String,
     #[serde(default)]
     depends_on: String,
+    #[serde(default)]
+    model: String,
+    #[serde(default)]
+    effort: String,
 }
 
 /// The edit form posts every field, so the patch sets every descriptive field — an emptied input really does clear it.
@@ -284,6 +307,8 @@ pub async fn update_ticket(
         labels: Some(csv(&form.labels)),
         depends_on: Some(csv(&form.depends_on).into_iter().map(TicketId).collect()),
         epic: Some(opt(form.epic).map(EpicId)),
+        model: Some(parse_model(&form.model)),
+        effort: Some(parse_effort(&form.effort)?),
     };
     mutate_then_detail(&app, &headers, Op::UpdateTicket { id: id.clone(), patch }, id).await
 }

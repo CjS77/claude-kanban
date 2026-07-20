@@ -70,6 +70,8 @@ fn create_pr_pushes_once_dedupes_and_names_a_missing_gh() {
             labels: vec![],
             depends_on: vec![],
             status: Status::Ready,
+            model: None,
+            effort: None,
         },
     )
     .unwrap();

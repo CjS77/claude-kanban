@@ -50,7 +50,7 @@ fn seed_review_ticket(store: &Store, title: &str, branch: &str) -> TicketId {
     let applied = ops::apply(
         store,
         None,
-        Op::CreateTicket { title: title.into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![], status: Status::Ready },
+        Op::CreateTicket { title: title.into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![], status: Status::Ready, model: None, effort: None },
     )
     .unwrap();
     let id = TicketId(applied.created_ids[0].clone());

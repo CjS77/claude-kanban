@@ -15,7 +15,7 @@ use claude_kanban::{
     server::{App, router},
     store::{
         Store,
-        model::{ColumnId, External, PrRef, PrState, Status, TicketId},
+        model::{ColumnId, Effort, External, PrRef, PrState, Status, TicketId},
     },
 };
 use http_body_util::BodyExt;
@@ -69,7 +69,7 @@ fn seed_ticket(store: &Store, title: &str) -> String {
     ops::apply(
         store,
         None,
-        Op::CreateTicket { title: title.into(), body: "# Spec".into(), epic: None, labels: vec!["ui".into()], depends_on: vec![], status: Status::Ready },
+        Op::CreateTicket { title: title.into(), body: "# Spec".into(), epic: None, labels: vec!["ui".into()], depends_on: vec![], status: Status::Ready, model: None, effort: None },
     )
     .unwrap()
     .created_ids[0]
@@ -107,7 +107,7 @@ async fn filters_hide_cards_and_disable_dragging() {
     ops::apply(
         &store,
         None,
-        Op::CreateTicket { title: "Unlabelled".into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![], status: Status::Draft },
+        Op::CreateTicket { title: "Unlabelled".into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![], status: Status::Draft, model: None, effort: None },
     )
     .unwrap();
     let html = body_text(router.oneshot(get("/ui/board?q=label:ui")).await.unwrap()).await;
@@ -127,6 +127,8 @@ fn seed_full(store: &Store, title: &str, body: &str, labels: &[&str]) -> String 
             labels: labels.iter().map(|l| (*l).to_owned()).collect(),
             depends_on: vec![],
             status: Status::Ready,
+            model: None,
+            effort: None,
         },
     )
     .unwrap()
@@ -295,6 +297,32 @@ async fn mutations_flow_create_move_status_delete() {
     let res = router.clone().oneshot(post("/ui/ticket/K-1/delete", 3, "")).await.unwrap();
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
     assert!(store.read_board().unwrap().tickets.is_empty());
+}
+
+/// The edit form posts every field, so a save that omits nothing must still be able to *clear* the pair — and a bad
+/// effort has to be refused rather than silently dropped, which is the one way a dial like this quietly stops working.
+#[tokio::test]
+async fn the_edit_form_round_trips_model_and_effort_and_refuses_a_bad_level() {
+    let (_dir, router, store) = test_app();
+    seed_ticket(&store, "hard one");
+    let model_of = || store.read_board().unwrap().tickets[0].model.clone();
+    let effort_of = || store.read_board().unwrap().tickets[0].effort;
+
+    let form = "title=hard+one&body=&epic=&labels=&depends_on=&model=+claude-opus-4-8+&effort=xhigh";
+    let res = router.clone().oneshot(post("/ui/ticket/K-1", 1, form)).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(model_of().as_deref(), Some("claude-opus-4-8"), "free text, but trimmed");
+    assert_eq!(effort_of(), Some(Effort::Xhigh));
+
+    // An emptied model box and an "inherit" effort really do clear them.
+    let form = "title=hard+one&body=&epic=&labels=&depends_on=&model=&effort=";
+    let res = router.clone().oneshot(post("/ui/ticket/K-1", 2, form)).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!((model_of(), effort_of()), (None, None));
+
+    let form = "title=hard+one&body=&epic=&labels=&depends_on=&model=&effort=ludicrous";
+    let res = router.clone().oneshot(post("/ui/ticket/K-1", 3, form)).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY, "a level that doesn't exist is a 422 toast, not a shrug");
 }
 
 #[tokio::test]
@@ -525,7 +553,7 @@ async fn discard_closes_the_ticket_and_keeps_dependents_blocked_on_the_board() {
     ops::apply(
         &store,
         None,
-        Op::CreateTicket { title: "Blocked follow-up".into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![TicketId("K-1".into())], status: Status::Ready },
+        Op::CreateTicket { title: "Blocked follow-up".into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![TicketId("K-1".into())], status: Status::Ready, model: None, effort: None },
     )
     .unwrap();
     to_review_with_branch(&store, "K-1", "k-1/doomed");
