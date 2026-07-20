@@ -316,6 +316,28 @@ The **Discard button** is the one path to `done` that isn't a landing: `discarde
 retired work never satisfies a dependency, because the code it promised does not exist. The sweep never discards; ambiguity always
 escalates to the human rather than resolving itself.
 
+### Auto-merge: evidence for the sweep, not a bypass of it
+
+A ticket (or its epic — the value is derived, `epic.auto_merge || ticket.auto_merge`) can carry `auto_merge`, and then `/kanban:work`
+rebases its branch onto main and fast-forwards main into it when the ticket reaches review. **This adds no path to `done`.** The card still
+lands the only way any card lands: `land::sweep` sees the branch tip is an ancestor of main and lands it by rule 1. Auto-merge simply
+*manufactures the evidence* the sweep was already waiting for, so `LandTicket` re-checks its facts under the store lock exactly as ever, and
+a card the human moved mid-merge is skipped harmlessly.
+
+That is why the procedure's ordering is load-bearing: **merge, let the ticket land, then delete the branch.** With the branch still present
+rule 1 needs nothing but the repo. Delete it first and rule 1 is gone — the sweep can only fall back to `.kanban/land-state.json`, whose
+entry exists only if an earlier sweep had already observed a live branch on a review ticket. Merged and deleted before any sweep ticks, a
+ticket has no proof at all and parks in review wearing "branch gone" — `a_vanished_branch_without_proof_stays_in_review`, precisely.
+
+**The merge lives in `commands/work.md`, not in the binary**, and that is a deliberate boundary rather than an omission. `land.rs` only asks
+questions of git (`is_ancestor`, `cherry`) and writes the board; the sole path that writes to the integration branch
+(`worktree::finish(merge: true)`) is guarded and documented as needing explicit human approval; `pr.rs` states its own mechanics are
+"deliberately dumb: no LLM". Resolving a rebase conflict is judgement work, and a store operation is structurally the wrong place for it.
+So `auto_merge` is the same contract as `model`/`effort` from **Dispatch** below: the binary stores the preference, derives it, and hands it
+back on `kanban_next` beside `action`; the skill honours it. The honest consequence is that auto-merge only happens inside a running
+`/kanban:work` loop — a card a human drags to review in the browser will not merge itself. That is the intended reading of the flag: *the
+agent that finishes this may land it*, not *the board lands this behind your back*.
+
 ## Interop: minesweeper and friends
 
 The board is designed to feed more than one kind of worker. A Claude Code session driving `/kanban:work` is one

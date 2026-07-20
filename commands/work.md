@@ -163,8 +163,12 @@ checkout** — never inside a worktree, and never in parallel with another auto-
    `review`, so an unqualified `git status` is dirty essentially every time you reach this step. Checking out over it
    is safe — worktrees are sparse-excluded from `.kanban/`, so no ticket branch ever carries a commit touching it, and
    the modification simply carries across the checkouts.
-3. **Rebase** — `git checkout <branch>`, then `git rebase <main>`. Resolve conflicts **only** where the intent is
-   unambiguous. Anything you would have to guess at is a failure, not a judgement call.
+3. **Rebase** — `git checkout <branch>`, then `git rebase --autostash <main>`. Resolve conflicts **only** where the
+   intent is unambiguous. Anything you would have to guess at is a failure, not a judgement call.
+   `--autostash` is not optional here, and it is the other half of step 2's exclusion: `git checkout` tolerates a dirty
+   `board.json` but `git rebase` flatly refuses to start with *any* unstaged change, so without it the rebase dies on
+   the board write you just made. The stash pops cleanly because no ticket branch commits anything under `.kanban/`,
+   and `git rebase --abort` restores it too — so the failure path leaves the board file exactly as it found it.
 4. **Fast-forward** — `git checkout <main>`, then `git merge --ff-only <branch>`. Never `--no-ff`, never `--force`.
 5. **Let the board land it, and only then delete the branch** — call `kanban_next` (its landing sweep runs first),
    confirm the ticket reached `done`, and *after* that `git branch -d <branch>`. This ordering is load-bearing; the

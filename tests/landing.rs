@@ -113,6 +113,61 @@ fn a_dependent_unblocks_only_when_the_code_lands_and_then_its_worktree_contains_
     assert!(report.path.join("foundation.txt").exists(), "the dependent's worktree must contain the predecessor's landed code");
 }
 
+/// The auto-merge close-out of `/kanban:work`, in the order the command file insists on: rebase, fast-forward, and
+/// leave the branch alone until the sweep has landed the card. The live ref is what makes rule 1 — plain ancestry —
+/// available, so the landing needs no earlier observation and no `land-state.json` entry at all.
+#[test]
+fn auto_merge_lands_by_ancestry_while_the_branch_is_still_alive() {
+    let s = scratch();
+    let branch = work_k1_to_review(&s);
+
+    // Mainline moves under the ticket, so the rebase genuinely rewrites its shas.
+    fs::write(s.repo.join("drift.txt"), "mainline moved\n").unwrap();
+    sh(&s.repo, "git", &["add", "drift.txt"]);
+    sh(&s.repo, "git", &["commit", "-qm", "chore: mainline moves on"]);
+
+    // Steps 3-4 of the procedure. Step 5's `git branch -d` deliberately does NOT run yet.
+    sh(&s.repo, "git", &["checkout", "-q", &branch]);
+    sh(&s.repo, "git", &["rebase", "-q", "--autostash", "main"]);
+    sh(&s.repo, "git", &["checkout", "-q", "main"]);
+    sh(&s.repo, "git", &["merge", "-q", "--ff-only", &branch]);
+
+    // No prior sweep ever ran, so there is no observed tip to fall back on — ancestry alone carries this.
+    assert!(s.store.read_land_state().unwrap().is_empty(), "nothing observed: the landing must rest on the live ref");
+    assert_eq!(land::sweep(&s.store).unwrap(), 1);
+
+    let board = s.store.read_board().unwrap();
+    let k1 = board.ticket(&TicketId("K-1".into())).unwrap();
+    assert!(matches!(k1.column, Column::Done { discarded: false, .. }));
+    assert!(k1.notes.last().unwrap().text.contains("merged into main"), "{:?}", k1.notes);
+    assert!(!derive::blocked(board.ticket(&TicketId("K-2".into())).unwrap(), &board));
+    assert_eq!(derive::next_ticket(&board, &[]).unwrap().id.0, "K-2", "the dependent unblocked");
+}
+
+/// The negative twin, and the whole reason step 5 deletes the branch last: delete before any sweep has ticked and the
+/// merge leaves no proof behind. Ancestry is unavailable (the ref is gone) and the observed-tip fallback was never
+/// populated, so the card sits in review wearing "branch gone" and waits for a human.
+#[test]
+fn auto_merge_that_deletes_the_branch_too_early_strands_the_ticket_in_review() {
+    let s = scratch();
+    let branch = work_k1_to_review(&s);
+
+    fs::write(s.repo.join("drift.txt"), "mainline moved\n").unwrap();
+    sh(&s.repo, "git", &["add", "drift.txt"]);
+    sh(&s.repo, "git", &["commit", "-qm", "chore: mainline moves on"]);
+
+    sh(&s.repo, "git", &["checkout", "-q", &branch]);
+    sh(&s.repo, "git", &["rebase", "-q", "--autostash", "main"]);
+    sh(&s.repo, "git", &["checkout", "-q", "main"]);
+    sh(&s.repo, "git", &["merge", "-q", "--ff-only", &branch]);
+    sh(&s.repo, "git", &["branch", "-q", "-d", &branch]); // out of order: the sweep never got to see the ref
+
+    assert_eq!(land::sweep(&s.store).unwrap(), 0, "the code is in main, but nothing left in the repo proves it");
+    let board = s.store.read_board().unwrap();
+    assert!(matches!(board.ticket(&TicketId("K-1".into())).unwrap().column, Column::Review { .. }));
+    assert!(derive::blocked(board.ticket(&TicketId("K-2".into())).unwrap(), &board), "the dependent stays blocked");
+}
+
 #[test]
 fn a_discarded_predecessor_keeps_its_dependent_blocked_for_good() {
     let s = scratch();
