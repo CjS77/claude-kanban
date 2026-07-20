@@ -65,7 +65,8 @@ surfaces "Claude is working on this right now" on the card face.
 developed "on" one. An epic doesn't even store a column — its place on the board is derived from its tickets: `done` only when every one
 of them is done, `review` when every one is at least code-complete (review or done) but not all landed, `doing` once any ticket has
 started, `todo` otherwise. Tickets move independently; the epic follows. On the board an epic renders as a simple checklist, one line per
-ticket, ticked when done, each linking to the ticket's card.
+ticket, ticked when done, each linking to the ticket's card. Deleting an epic deletes its tickets with it — done ones included — and clears
+other tickets' dependencies on them; the confirm dialog counts the cost, because there is no undo.
 
 Every ticket and epic also carries a **`status`** field saying how well-defined it is. This is orthogonal to the column: the column is where
 the work sits in the workflow, `status` is whether the work is defined enough to do at all.

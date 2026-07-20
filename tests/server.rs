@@ -304,11 +304,12 @@ fn seed_epic(store: &Store, title: &str, titles: &[&str]) -> EpicId {
     let created =
         ops::apply(store, None, Op::CreateEpic { title: title.into(), color: None, body: String::new(), status: Status::Ready }).unwrap();
     let epic = EpicId(created.created_ids[0].clone());
-    titles.iter().for_each(|t| {
-        let id = TicketId(seed_ticket(store, t));
+    let file_under = |title: &&str| {
+        let id = TicketId(seed_ticket(store, title));
         let patch = ops::TicketPatch { epic: Some(Some(epic.clone())), ..ops::TicketPatch::default() };
         ops::apply(store, None, Op::UpdateTicket { id, patch }).unwrap();
-    });
+    };
+    titles.iter().for_each(file_under);
     epic
 }
 

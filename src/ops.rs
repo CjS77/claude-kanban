@@ -364,9 +364,7 @@ fn update_epic(board: &mut Board, id: &EpicId, patch: EpicPatch) -> Result<OpOut
 fn remove_tickets(board: &mut Board, claims: &mut Vec<Claim>, doomed: &HashSet<TicketId>) {
     board.tickets.retain(|t| !doomed.contains(&t.id));
     board.tickets.iter_mut().for_each(|t| t.depends_on.retain(|dep| !doomed.contains(dep)));
-    doomed.iter().for_each(|id| {
-        remove_claim(claims, id);
-    });
+    claims.retain(|c| !doomed.contains(&c.ticket));
 }
 
 fn delete_ticket(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId) -> Result<OpOutput, OpError> {
