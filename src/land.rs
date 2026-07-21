@@ -24,9 +24,16 @@
 //! [`Op::LandTicket`], which re-checks its evidence under the lock and refuses harmlessly when the board moved.
 //!
 //! The **observations sidecar** (`.kanban/land-state.json`, gitignored, machine-local like claims) records each live
-//! review branch's tip per sweep. It is what makes the `merge.sh` flow land automatically: rebase onto main,
-//! fast-forward, delete the branch — afterwards nothing named the branch exists, but the observed pre-rebase tip still
-//! proves the landing by patch-id. No observation (another machine, gc'd objects) degrades to the human's call.
+//! review branch's tip. It is what makes the `merge.sh` flow land automatically: rebase onto main, fast-forward, delete
+//! the branch — afterwards nothing named the branch exists, but the observed pre-rebase tip still proves the landing by
+//! patch-id. No observation (another machine, gc'd objects) degrades to the human's call.
+//!
+//! Which is why [`observe`] exists beside the sweep. Taking the observation only *per sweep* made the proof depend on
+//! timing nobody controls: the sidecar held what some earlier sweep happened to see, and both triggers can be absent —
+//! a session with no server has no poller, and `/kanban:work` calls `kanban_next` at the top of each iteration, so the
+//! last ticket of a run enters review and the loop ends with its branch never observed. `merge.sh` then disarms every
+//! rule at once. So both faces call [`observe_entering_review`] as a ticket enters review, making the observation part
+//! of the move rather than a race against the next tick.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -41,7 +48,7 @@ use crate::{
     pr,
     store::{
         Store,
-        model::{Column, PrRef, PrState, Ticket},
+        model::{Column, ColumnId, PrRef, PrState, Ticket},
     },
     worktree,
 };
@@ -78,6 +85,38 @@ pub fn sweep(store: &Store) -> anyhow::Result<usize> {
 
     refresh_observations(store, &repo, &heads, observations)?;
     Ok(landed)
+}
+
+/// Record every live review branch's tip now, without sweeping.
+///
+/// A landing after the branch is gone is proved by what was observed while it still existed (rules 2 and 3), so the
+/// observation has to be taken before anything can delete the ref — not whenever the next sweep happens to run.
+///
+/// Unlike [`sweep`] this needs no main branch: a tip is worth recording even where nothing could be landed into yet.
+pub fn observe(store: &Store) -> anyhow::Result<()> {
+    let Ok(repo) = worktree::repo_root(store) else {
+        return Ok(()); // no repo: nothing to observe, and nothing that could ever land
+    };
+    let Some(heads) = git::local_heads(&repo) else {
+        return Ok(()); // git can't list branches: recording nothing beats recording a guess
+    };
+    let observations = store.read_land_state()?;
+    refresh_observations(store, &repo, &heads, observations)
+}
+
+/// The hook both faces call after a move has been applied: a ticket that just entered `review` gets its branch tip
+/// observed while the branch is certainly still there. Best effort by design — observing is how a landing is *proved*
+/// later, never a reason to fail a move the board has already accepted.
+///
+/// Call it once [`ops::apply`] has returned, never from inside an op: [`Store::write_land_state`] takes the store lock,
+/// the op holds it for the whole transition, and the lock is per open file description — nesting would block forever.
+pub fn observe_entering_review(store: &Store, to: ColumnId) {
+    if to != ColumnId::Review {
+        return;
+    }
+    if let Err(e) = observe(store) {
+        tracing::warn!(error = %e, "could not observe the branch tip entering review — landing it may need a human");
+    }
 }
 
 /// The proof rules, in order. `Some(reason)` means "land, and say why on the card".
@@ -128,7 +167,8 @@ fn land(store: &Store, t: &Ticket, reason: &str) -> bool {
 }
 
 /// Record the current tip of every live, non-external review branch and drop observations for branches no ticket in
-/// review references any more. Reads the board *after* the landings so a landed ticket's observation retires with it.
+/// review references any more. Reads the board itself, which is what lets [`sweep`] call it *after* its landings so a
+/// landed ticket's observation retires with it.
 fn refresh_observations(store: &Store, repo: &Path, heads: &HashSet<String>, mut observations: HashMap<String, String>) -> anyhow::Result<()> {
     let board = store.read_board()?;
     let review_branches: HashSet<String> = board
@@ -368,6 +408,43 @@ mod tests {
         assert!(matches!(k1.column, Column::Done { discarded: false, .. }));
         assert!(k1.notes.last().unwrap().text.contains("rebased into main"), "{:?}", k1.notes);
         assert!(s.store.read_land_state().unwrap().is_empty(), "the landed ticket's observation retires with it");
+    }
+
+    /// The gymbuddy shape: the last ticket of a `/kanban:work` run enters review, the loop ends, and no server is
+    /// polling — so no sweep ever ticks while the branch is alive. `merge.sh` then rebases, fast-forwards and deletes,
+    /// which disarms rule 1 (no ref) and rules 2-3 at once (nothing observed). Observing at the move is the whole
+    /// difference between this landing and `a_vanished_branch_without_proof_stays_in_review` below.
+    #[test]
+    fn observing_at_close_out_lands_a_flow_no_sweep_ever_saw() {
+        let s = scratch();
+        assert!(s.store.read_land_state().unwrap().is_empty(), "nothing has swept yet");
+        observe(&s.store).unwrap(); // what both faces now do as the ticket enters review
+        assert_eq!(s.store.read_land_state().unwrap().get("k-1/work"), Some(&git(&s.repo, &["rev-parse", "k-1/work"]).unwrap()));
+
+        std::fs::write(s.repo.join("drift"), "x").unwrap();
+        git(&s.repo, &["add", "drift"]).unwrap();
+        commit(&s.repo, "mainline moves"); // forces the rebase to rewrite shas
+        git(&s.repo, &["checkout", "-q", "k-1/work"]).unwrap();
+        git(&s.repo, &["-c", "user.name=t", "-c", "user.email=t@example.com", "rebase", "-q", "main"]).unwrap();
+        git(&s.repo, &["checkout", "-q", "main"]).unwrap();
+        git(&s.repo, &["merge", "-q", "--ff-only", "k-1/work"]).unwrap();
+        git(&s.repo, &["branch", "-q", "-d", "k-1/work"]).unwrap();
+
+        assert_eq!(sweep(&s.store).unwrap(), 1, "the first sweep of the session lands it");
+        assert!(matches!(column_of(&s.store, "K-1"), Column::Done { discarded: false, .. }));
+    }
+
+    #[test]
+    fn observe_entering_review_only_fires_for_review() {
+        // The hook sits on every move, so it has to be inert for the other three columns — a claim back out of review
+        // must not re-record the branch it just stopped being evidence for.
+        let s = scratch();
+        for to in [ColumnId::Todo, ColumnId::Doing, ColumnId::Done] {
+            observe_entering_review(&s.store, to);
+            assert!(s.store.read_land_state().unwrap().is_empty(), "{to} must not observe");
+        }
+        observe_entering_review(&s.store, ColumnId::Review);
+        assert!(s.store.read_land_state().unwrap().contains_key("k-1/work"));
     }
 
     #[test]

@@ -143,9 +143,25 @@ fn opt(s: String) -> Option<String> {
 
 /// Apply an op with the client's board version and answer 204 — the watcher-driven SSE refresh renders the outcome.
 async fn mutate(app: &AppState, headers: &HeaderMap, op: Op) -> Result<StatusCode, AppError> {
+    mutate_then(app, headers, op, |_| {}).await
+}
+
+/// [`mutate`], plus a hook run against the store once the op has been applied — the seam the drop-into-review path needs
+/// to observe a branch tip while the branch is still alive. It runs in the same blocking task, after `ops::apply` has
+/// released the store lock, so the hook is free to take it again.
+async fn mutate_then(
+    app: &AppState,
+    headers: &HeaderMap,
+    op: Op,
+    after: impl FnOnce(&Store) + Send + 'static,
+) -> Result<StatusCode, AppError> {
     let version = client_version(headers)?;
-    blocking(app, move |store| ops::apply(store, Some(version), op).map_err(AppError::from)).await?;
-    Ok(StatusCode::NO_CONTENT)
+    blocking(app, move |store| {
+        ops::apply(store, Some(version), op)?;
+        after(store);
+        Ok(StatusCode::NO_CONTENT)
+    })
+    .await
 }
 
 /// Apply an op, then answer with the refreshed detail pane for `id` — for actions taken *inside* the pane (status, notes,
@@ -331,14 +347,11 @@ pub async fn move_ticket(
     headers: HeaderMap,
     Form(form): Form<MoveForm>,
 ) -> Result<StatusCode, AppError> {
-    let op = Op::MoveTicket {
-        id: TicketId(id),
-        to: parse_column(&form.to)?,
-        position: form.position,
-        owner: Some(app.ui_owner.clone()),
-        branch: None,
-    };
-    mutate(&app, &headers, op).await
+    let to = parse_column(&form.to)?;
+    let op = Op::MoveTicket { id: TicketId(id), to, position: form.position, owner: Some(app.ui_owner.clone()), branch: None };
+    // A drag into review arms the landing proof exactly as the MCP close-out does, and the branch it names can be gone
+    // before the next poller tick — so observe the tip here (see `land::observe_entering_review`).
+    mutate_then(&app, &headers, op, move |store| crate::land::observe_entering_review(store, to)).await
 }
 
 #[derive(Debug, Deserialize)]

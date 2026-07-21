@@ -437,7 +437,9 @@ impl KanbanServer {
     async fn kanban_move(&self, Parameters(p): Parameters<MoveParams>) -> Result<CallToolResult, ErrorData> {
         let to = p.to.parse().map_err(|e: String| ErrorData::invalid_params(e, None))?;
         let op = Op::MoveTicket { id: TicketId(p.ticket), to, position: p.position, owner: None, branch: p.branch };
-        self.apply(Some(p.expected_version), op).await
+        // Entering review is what arms the landing proof, and the close-out that follows may delete the branch minutes
+        // later — so the tip is observed here, not whenever the next sweep happens to run.
+        self.apply_then(Some(p.expected_version), op, move |store| crate::land::observe_entering_review(store, to)).await
     }
 
     /// Create a ticket at the bottom of todo. Defaults to `status=review` — the human promotes it to ready.
@@ -580,10 +582,28 @@ impl KanbanServer {
 
     /// Mutating tools: one op through the shared funnel, with the caller's expected version.
     async fn apply(&self, expected_version: Option<u64>, op: Op) -> Result<CallToolResult, ErrorData> {
+        self.apply_then(expected_version, op, |_| {}).await
+    }
+
+    /// [`apply`](Self::apply), plus a hook run against the store once the op has succeeded — the seam
+    /// [`crate::land::observe_entering_review`] needs. It runs in the same blocking task, after `ops::apply` has
+    /// released the store lock, so the hook is free to take it again.
+    async fn apply_then(
+        &self,
+        expected_version: Option<u64>,
+        op: Op,
+        after: impl FnOnce(&Store) + Send + 'static,
+    ) -> Result<CallToolResult, ErrorData> {
         let store = self.store.clone();
-        let result = tokio::task::spawn_blocking(move || ops::apply(&store, expected_version, op))
-            .await
-            .map_err(|e| ErrorData::internal_error(format!("task failed: {e}"), None))?;
+        let result = tokio::task::spawn_blocking(move || {
+            let applied = ops::apply(&store, expected_version, op);
+            if applied.is_ok() {
+                after(&store);
+            }
+            applied
+        })
+        .await
+        .map_err(|e| ErrorData::internal_error(format!("task failed: {e}"), None))?;
         Ok(shape_applied(result))
     }
 
