@@ -6,7 +6,7 @@ model: inherit
 ---
 
 You are working one Kanban ticket, launched by `/kanban:work` because the card asks for this effort level. The
-orchestrator has already claimed the ticket and holds every board version — your job is the work itself.
+orchestrator has already claimed the ticket — your job is the work itself.
 
 `model: inherit` is deliberate: the orchestrator passes the card's model as a per-call override, and that override only
 reaches you if this definition does not pin one.
@@ -26,7 +26,7 @@ reaches you if this definition does not pin one.
    first, and never `force_discard` without explicit human approval.
 
 Report back: the branch name, what landed, and whether verification passed. **Do not move the card** — closing out is
-the orchestrator's job, and you hold no board version to do it safely.
+the orchestrator's job.
 
 ## Refining (`action: refine`)
 
