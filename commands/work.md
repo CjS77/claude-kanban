@@ -16,8 +16,8 @@ Arguments given: `$ARGUMENTS`
 
 ## Picking the mode
 
-Your first `kanban_board` read carries `max_workers` and `idle_time` (both from `.kanban/config.json`; absent means
-1 worker and a 300-second idle).
+Your first `kanban_board` read carries the effective `max_workers` and `idle_time`, already resolved from
+`.kanban/config.json` and its defaults — take both values from the read; never assume them.
 
 - `max_workers` = 1 → **The loop** below: one ticket at a time, worked by you.
 - `max_workers` = N > 1 → **The parallel loop** below: up to N tickets in flight at once, each worked by a subagent.
@@ -37,9 +37,9 @@ loop after it):
    tickets whose branches have reached local main, so **use the `version` it returns** for the claim — the sweep may
    have advanced the board.
 2. **Claim** — `kanban_claim` the ticket. A pure board mutation; git is untouched.
-   **Then check `model` and `effort` on the ticket.** If either is set, you cannot honour it yourself — you can't change
-   your own model or effort mid-session — so hand the ticket to a subagent instead of working steps 3–7: see **Model and
-   effort** below, then close it out at step 8 as usual. If both are absent (the common case), carry straight on.
+   **Then check `model` and `effort` on the ticket.** If either is set, hand the ticket to a subagent instead of working
+   steps 3–7 — see **Model and effort** below — then close it out at step 8 as usual. If both are absent (the common
+   case), carry straight on.
 3. **Start** — `kanban_worktree_start`. Supply a `slug` yourself: a short kebab-case digest of the title
    (2–3 words, e.g. "Add authorization based on OAuth from Google" → `google-oauth`) beats the mechanical default.
 4. **Work** — `cd` into the reported worktree path and stay there for the ticket's lifetime. Read the ticket's `body` as
@@ -85,7 +85,7 @@ tickets in flight; a refinement counts as one worker, an implementation counts a
      what landed, and whether verification passed. It does NOT move the card — closing out is yours.
    - `refine` → the subagent researches the codebase (no worktree, no commits, no board writes) and returns the
      fleshed-out spec text, a sharper title if it found one, and any splits. You call `kanban_refine` with what it
-     returned — subagents never hold board-version state.
+     returned — a refine subagent makes no board writes.
 3. **Close out as results arrive** — re-read `kanban_board` for a fresh version, then: reported success →
    `kanban_move` to `review` (with `--push`, push the branch and open the PR first; the board lands review tickets in
    done itself once the merge reaches local main); reported failure or an unusable result → `kanban_note` what
@@ -98,8 +98,8 @@ tickets in flight; a refinement counts as one worker, an implementation counts a
    completion: re-poll the board on a fixed 60-second cadence. Workers are active, so the human is likely at the
    board creating tickets — new work should start promptly, and a re-poll costs one cheap `kanban_board` +
    `kanban_next` read. Wait out each interval the same way **Idling** does (your harness's wait or scheduling
-   mechanism; plain Bash `sleep 60` as the fallback). `idle_time` (default 300 s) stays the empty-board cadence:
-   waiting with workers in flight is a different situation from a dry board.
+   mechanism; plain Bash `sleep 60` as the fallback). `idle_time` stays the empty-board cadence: waiting with workers
+   in flight is a different situation from a dry board.
    - Each re-poll is the normal pick step: fresh `kanban_board` (new version), `kanban_next`, claim and delegate
      up to the cap, exactly as steps 1–2. Nothing eligible → keep waiting for completions on the same cadence.
    - At capacity (in-flight = `max_workers`), don't re-poll — nothing could be claimed anyway. The next close-out
