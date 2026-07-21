@@ -12,13 +12,14 @@
 //!
 //! Three principles, settled with the user, bound everything here:
 //!
-//! 1. **Auto-landing requires positive proof.** A branch tip (or PR merge commit) that is an ancestor of local main, or
-//!    a deleted branch whose last-observed tip proves patch-equivalent (`git cherry` — rebase-then-fast-forward keeps
-//!    patch-ids). No proof → the ticket stays in review, flagged for the human.
+//! 1. **Auto-landing requires positive proof.** A branch tip (or PR merge commit) that is an ancestor of local main; a
+//!    last-observed tip that proves patch-equivalent (`git cherry` — rebase-then-fast-forward keeps patch-ids); or one
+//!    whose content main already contains outright (`git merge-tree`, which is the only rule a squash cannot hide
+//!    from). No proof → the ticket stays in review, flagged for the human.
 //! 2. **Discard is always a human action.** The sweep never marks work discarded; ambiguity never silently unblocks —
 //!    or blocks — anything.
 //! 3. **External tickets never land from local branch state.** Their `branch` is whatever the delegate created on the
-//!    far side and was never a local ref, so its absence proves nothing; only the PR route (rule 4) applies to them.
+//!    far side and was never a local ref, so its absence proves nothing; only the PR route (rule 5) applies to them.
 //!
 //! Detection runs *outside* the store lock — git and gh are slow — and every landing goes through
 //! [`Op::LandTicket`], which re-checks its evidence under the lock and refuses harmlessly when the board moved.
@@ -89,7 +90,7 @@ pub fn sweep(store: &Store) -> anyhow::Result<usize> {
 
 /// Record every live review branch's tip now, without sweeping.
 ///
-/// A landing after the branch is gone is proved by what was observed while it still existed (rules 2 and 3), so the
+/// A landing after the branch is gone is proved by what was observed while it still existed (rules 2 to 4), so the
 /// observation has to be taken before anything can delete the ref — not whenever the next sweep happens to run.
 ///
 /// Unlike [`sweep`] this needs no main branch: a tip is worth recording even where nothing could be landed into yet.
@@ -121,13 +122,17 @@ pub fn observe_entering_review(store: &Store, to: ColumnId) {
 
 /// The proof rules, in order. `Some(reason)` means "land, and say why on the card".
 fn verdict(t: &Ticket, repo: &Path, main: &str, heads: &HashSet<String>, observations: &HashMap<String, String>) -> Option<String> {
-    // Rules 2-3: local branch evidence — never for external tickets (their branch was never a local ref).
+    // Rules 1-4: local branch evidence — never for external tickets (their branch was never a local ref).
     if t.external.is_none()
         && let Some(branch) = t.column.branch()
     {
         if heads.contains(branch) {
             if git::is_ancestor(repo, branch, main) == Some(true) {
                 return Some(format!("branch {branch} merged into {main}"));
+            }
+            // A squash merge leaves the branch alive and no ancestor of anything: only its content proves the landing.
+            if git::contained_in(repo, main, branch) == Some(true) {
+                return Some(format!("branch {branch} squashed or rewritten into {main}"));
             }
         } else if let Some(tip) = observations.get(branch) {
             if git::is_ancestor(repo, tip, main) == Some(true) {
@@ -136,10 +141,13 @@ fn verdict(t: &Ticket, repo: &Path, main: &str, heads: &HashSet<String>, observa
             if git::cherry_equivalent(repo, main, tip) == Some(true) {
                 return Some(format!("branch {branch} rebased into {main} and deleted"));
             }
+            if git::contained_in(repo, main, tip) == Some(true) {
+                return Some(format!("branch {branch} squashed or rewritten into {main} and deleted"));
+            }
             // Observed but unproven: stays in review wearing the "branch gone" flag — the human decides.
         }
     }
-    // Rule 4: the PR route, external tickets included. The gh poll recorded the merge; landing still waits for the
+    // Rule 5: the PR route, external tickets included. The gh poll recorded the merge; landing still waits for the
     // merge commit to reach the *local* main branch — origin/main is not done.
     if let Some(PrRef { number, state: PrState::Merged, merged_commit: Some(oid), .. }) = &t.pr
         && git::is_ancestor(repo, oid, main) == Some(true)
@@ -412,7 +420,7 @@ mod tests {
 
     /// The gymbuddy shape: the last ticket of a `/kanban:work` run enters review, the loop ends, and no server is
     /// polling — so no sweep ever ticks while the branch is alive. `merge.sh` then rebases, fast-forwards and deletes,
-    /// which disarms rule 1 (no ref) and rules 2-3 at once (nothing observed). Observing at the move is the whole
+    /// which disarms rule 1 (no ref) and rules 2-4 at once (nothing observed). Observing at the move is the whole
     /// difference between this landing and `a_vanished_branch_without_proof_stays_in_review` below.
     #[test]
     fn observing_at_close_out_lands_a_flow_no_sweep_ever_saw() {
@@ -445,6 +453,58 @@ mod tests {
         }
         observe_entering_review(&s.store, ColumnId::Review);
         assert!(s.store.read_land_state().unwrap().contains_key("k-1/work"));
+    }
+
+    /// Put two file-touching commits on K-1's branch — `scratch`'s lone empty commit is invisible to a content rule —
+    /// and move main on, so a squash of the pair matches neither ancestry nor any patch-id.
+    fn with_two_real_commits(s: &Scratch) {
+        git(&s.repo, &["checkout", "-q", "k-1/work"]).unwrap();
+        for name in ["one", "two"] {
+            std::fs::write(s.repo.join(name), format!("{name}\n")).unwrap();
+            git(&s.repo, &["add", name]).unwrap();
+            commit(&s.repo, name);
+        }
+        git(&s.repo, &["checkout", "-q", "main"]).unwrap();
+        std::fs::write(s.repo.join("drift"), "x").unwrap();
+        git(&s.repo, &["add", "drift"]).unwrap();
+        commit(&s.repo, "mainline moves");
+    }
+
+    /// GitHub's squash button, and `merge.sh` variants that squash: the branch survives the merge, but its tip is no
+    /// ancestor of main and the one squashed commit shares no patch-id with the commits it replaced. Without
+    /// containment an MCP-only session — which has no gh poll to bind rule 5 — could never land this at all.
+    #[test]
+    fn a_squash_merged_branch_lands_by_containment_with_the_branch_still_alive() {
+        let s = scratch();
+        with_two_real_commits(&s);
+        assert_eq!(sweep(&s.store).unwrap(), 0, "unmerged: no rule fires, containment included");
+
+        git(&s.repo, &["merge", "-q", "--squash", "k-1/work"]).unwrap();
+        commit(&s.repo, "K-1: the work, squashed");
+
+        assert_eq!(sweep(&s.store).unwrap(), 1);
+        let board = s.store.read_board().unwrap();
+        let k1 = board.ticket(&TicketId("K-1".into())).unwrap();
+        assert!(matches!(k1.column, Column::Done { discarded: false, .. }));
+        assert!(k1.notes.last().unwrap().text.contains("squashed or rewritten into main"), "{:?}", k1.notes);
+    }
+
+    #[test]
+    fn a_squash_merged_branch_lands_by_containment_after_the_branch_is_deleted() {
+        // Same merge, then the cleanup that used to destroy every proof: the observation taken as the ticket entered
+        // review is the tip containment is asked about.
+        let s = scratch();
+        with_two_real_commits(&s);
+        observe(&s.store).unwrap();
+        git(&s.repo, &["merge", "-q", "--squash", "k-1/work"]).unwrap();
+        commit(&s.repo, "K-1: the work, squashed");
+        git(&s.repo, &["branch", "-q", "-D", "k-1/work"]).unwrap();
+
+        assert_eq!(sweep(&s.store).unwrap(), 1);
+        let board = s.store.read_board().unwrap();
+        let k1 = board.ticket(&TicketId("K-1".into())).unwrap();
+        assert!(matches!(k1.column, Column::Done { discarded: false, .. }));
+        assert!(k1.notes.last().unwrap().text.contains("squashed or rewritten into main and deleted"), "{:?}", k1.notes);
     }
 
     #[test]

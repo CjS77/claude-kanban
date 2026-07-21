@@ -297,7 +297,11 @@ state** (their `branch` was never a local ref, so its absence proves nothing —
 2. its branch is gone, but the last tip *observed* for it (in `.kanban/land-state.json`) is an ancestor of main — merged, then deleted;
 3. its branch is gone, but the observed tip proves patch-equivalent to main (`git cherry` all `-`) — the rebase-then-fast-forward-then-
    delete flow (`merge.sh`), where the landed commits carry new SHAs but the same patch-ids;
-4. its recorded PR is `merged` **and** the merge commit is an ancestor of local main — merged on GitHub *and pulled*. `origin/main` is
+4. main already *contains* the branch's content — merging it back would produce main's own tree (`git merge-tree --write-tree`), asked of
+   the live branch after rule 1 and of the observed tip after rule 3. This is the only rule a **squash** cannot hide from: one commit
+   replacing N carries a patch-id matching none of them, so rule 3 is structurally blind to GitHub's squash button. A branch that adds no
+   content at all is exempted rather than landed — containment is vacuously true of an empty branch, and no content is no proof;
+5. its recorded PR is `merged` **and** the merge commit is an ancestor of local main — merged on GitHub *and pulled*. `origin/main` is
    never enough: done means the code is where the next `worktree start` will base a branch.
 
 No proof → the card stays in review; a branch that vanished without evidence wears a "branch gone — land or discard?" flag and waits for

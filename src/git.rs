@@ -117,6 +117,42 @@ pub fn cherry_equivalent(repo: &Path, upstream: &str, tip: &str) -> Option<bool>
     git(repo, &["cherry", upstream, tip]).ok().map(|out| out.lines().all(|l| l.starts_with('-')))
 }
 
+/// Where `git merge-tree --write-tree` — the two-argument form used by [`contained_in`] — landed.
+const MERGE_TREE_GIT_FLOOR: (u32, u32) = (2, 38);
+
+/// Whether `upstream` already contains everything `tip` adds: merging `tip` into `upstream` would produce `upstream`'s
+/// own tree, unchanged. This is what proves a **squash** landing, which [`cherry_equivalent`] structurally cannot see —
+/// the one squashed commit carries a patch-id matching none of the commits it replaced.
+///
+/// `None` whenever git cannot answer, never a `false`: a merge that conflicts, an unknown rev, gc'd objects, or a git
+/// below [`MERGE_TREE_GIT_FLOOR`]. Note that a conflicting merge-tree still *prints* a tree oid before its conflict
+/// report, so the exit status is the only safe gate — which is exactly what [`git`] turning non-zero into `Err` gives.
+///
+/// A branch that adds *nothing* to `upstream` is `None` too, and that guard is what keeps this rule honest: containment
+/// is trivially true of a branch whose commits change no files, so answering `true` there would prove a landing out of
+/// an empty branch. No content, no proof.
+#[must_use]
+pub fn contained_in(repo: &Path, upstream: &str, tip: &str) -> Option<bool> {
+    if version()? < MERGE_TREE_GIT_FLOOR || adds_nothing(repo, upstream, tip)? {
+        return None;
+    }
+    let merged = git(repo, &["merge-tree", "--write-tree", upstream, tip]).ok()?;
+    let current = git(repo, &["rev-parse", &format!("{upstream}^{{tree}}")]).ok()?;
+    Some(merged == current)
+}
+
+/// Whether `tip` contributes no content at all: `git diff --quiet <upstream>...<tip>`, the three-dot form, which diffs
+/// the merge base against the tip and so asks only about the branch's own changes. `None` when git can't answer.
+fn adds_nothing(repo: &Path, upstream: &str, tip: &str) -> Option<bool> {
+    let range = format!("{upstream}...{tip}");
+    let out = Command::new("git").current_dir(repo).args(["diff", "--quiet", &range]).output().ok()?;
+    match out.status.code() {
+        Some(0) => Some(true),
+        Some(1) => Some(false),
+        _ => None, // 128: unknown rev, no repo — no answer, not a "no"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -249,6 +285,73 @@ mod tests {
 
         assert_eq!(cherry_equivalent(repo.path(), "main", &original_tip), Some(true), "patch-ids prove the landing");
         assert_eq!(cherry_equivalent(repo.path(), "main", "no-such-rev"), None);
+    }
+
+    #[test]
+    fn contained_in_proves_a_squash_landing_that_patch_ids_cannot_see() {
+        // Two commits collapsed into one: the squashed commit's patch-id matches neither original, so `git cherry`
+        // reports both as unlanded and ancestry says no. Only the content answers.
+        let repo = scratch_repo();
+        std::fs::write(repo.path().join("f"), "seed\n").unwrap();
+        git(repo.path(), &["add", "f"]).unwrap();
+        commit_in(repo.path(), "seed");
+
+        git(repo.path(), &["checkout", "-q", "-b", "k-5/work"]).unwrap();
+        for name in ["one", "two"] {
+            std::fs::write(repo.path().join(name), format!("{name}\n")).unwrap();
+            git(repo.path(), &["add", name]).unwrap();
+            commit_in(repo.path(), name);
+        }
+        let tip = git(repo.path(), &["rev-parse", "k-5/work"]).unwrap();
+
+        git(repo.path(), &["checkout", "-q", "main"]).unwrap();
+        std::fs::write(repo.path().join("other"), "other\n").unwrap();
+        git(repo.path(), &["add", "other"]).unwrap();
+        commit_in(repo.path(), "mainline moves");
+        assert_eq!(contained_in(repo.path(), "main", &tip), Some(false), "not landed yet");
+
+        git(repo.path(), &["merge", "-q", "--squash", "k-5/work"]).unwrap();
+        commit_in(repo.path(), "K-5: the work, squashed");
+        git(repo.path(), &["branch", "-q", "-D", "k-5/work"]).unwrap();
+
+        assert_eq!(is_ancestor(repo.path(), &tip, "main"), Some(false), "the squash rewrote everything");
+        assert_eq!(cherry_equivalent(repo.path(), "main", &tip), Some(false), "patch-ids are blind to a squash");
+        assert_eq!(contained_in(repo.path(), "main", &tip), Some(true), "the content is all there");
+    }
+
+    #[test]
+    fn contained_in_declines_to_answer_rather_than_guess() {
+        // A branch that conflicts with main is not a "no" — merge-tree exits non-zero (after printing a tree oid, which
+        // is why the exit status is the only safe gate). Nor is an unknown rev, nor a directory that is no repo.
+        let repo = scratch_repo();
+        std::fs::write(repo.path().join("f"), "seed\n").unwrap();
+        git(repo.path(), &["add", "f"]).unwrap();
+        commit_in(repo.path(), "seed");
+
+        git(repo.path(), &["checkout", "-q", "-b", "k-6/theirs"]).unwrap();
+        std::fs::write(repo.path().join("f"), "theirs\n").unwrap();
+        git(repo.path(), &["add", "f"]).unwrap();
+        commit_in(repo.path(), "theirs");
+        git(repo.path(), &["checkout", "-q", "main"]).unwrap();
+        std::fs::write(repo.path().join("f"), "ours\n").unwrap();
+        git(repo.path(), &["add", "f"]).unwrap();
+        commit_in(repo.path(), "ours");
+
+        assert_eq!(contained_in(repo.path(), "main", "k-6/theirs"), None, "a conflict is no answer, not a no");
+        assert_eq!(contained_in(repo.path(), "main", "no-such-rev"), None);
+        let plain = tempfile::tempdir().unwrap();
+        assert_eq!(contained_in(plain.path(), "main", "main"), None);
+
+        // The vacuous case: a branch whose commits change nothing is "contained" in anything, which would prove a
+        // landing out of thin air. No content, no answer.
+        git(repo.path(), &["checkout", "-q", "-b", "k-7/empty"]).unwrap();
+        commit_in(repo.path(), "no files touched");
+        git(repo.path(), &["checkout", "-q", "main"]).unwrap();
+        std::fs::write(repo.path().join("later"), "later\n").unwrap();
+        git(repo.path(), &["add", "later"]).unwrap();
+        commit_in(repo.path(), "main moves on");
+        assert_eq!(is_ancestor(repo.path(), "k-7/empty", "main"), Some(false), "genuinely unmerged");
+        assert_eq!(contained_in(repo.path(), "main", "k-7/empty"), None, "an empty branch proves nothing");
     }
 
     #[test]
