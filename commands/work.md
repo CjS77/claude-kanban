@@ -206,8 +206,14 @@ nothing here closes it. Say so in the end-of-loop report so the user knows a PR 
 Running dry doesn't end the loop: the human keeps feeding the board, so wait and look again. When nothing is
 eligible (and, in the parallel loop, nothing is in flight):
 
-1. **Report, briefly** — why the remaining todo tickets don't qualify (draft/review status? blocked? claimed?
-   external?) and that you're idling for `idle_time` seconds.
+1. **Report, briefly** — `kanban_next`'s answer carries `waiting` when it has no ticket for you: `waiting.todo` says
+   why each todo ticket doesn't qualify (draft/review status, blocked by which tickets, claimed, external) and
+   `waiting.review` says why each review ticket couldn't be proven landed. **Report what it says, don't invent it** —
+   and say you're idling for `idle_time` seconds. A `not_shown` count means the list was capped; say so too.
+   `waiting.review` is the one that needs the human's eye. A ticket whose branch is gone with nothing observed, or
+   whose PR was closed unmerged, will never land on its own — its dependents stay blocked until somebody deletes the
+   branch, drags the card to done, or discards it. An idling loop that stays quiet about that is the failure this
+   field exists to prevent, so name those tickets and what they're waiting for rather than reporting "nothing ready".
 2. **Wait `idle_time` seconds** — the value from your latest `kanban_board` read. Use whatever wait or scheduling
    mechanism your harness provides for sitting out a delay; a plain Bash `sleep <idle_time>` is the fallback when
    nothing better exists.

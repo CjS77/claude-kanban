@@ -288,6 +288,63 @@ fn kanban_next_lands_merged_review_work_and_the_move_records_companion_branches(
 /// `kanban_next` serializes a bare `Ticket`, which carries only the ticket's *own* `auto_merge` — an epic-level grant is
 /// invisible there. `/kanban:work` reads this one field to decide whether to move main without a human seeing the merge,
 /// so the tool has to report the derived answer beside the ticket, not let the caller read it off the ticket.
+/// The failure this whole line of work started from: a board whose review column holds code that already landed by a
+/// route nothing can prove, and a todo column blocked behind it. `kanban_next` used to answer that with the same
+/// sentence it gives an empty board, so a loop idled indefinitely on work that was already merged.
+#[test]
+fn kanban_next_explains_a_stalled_board_differently_from_an_empty_one() {
+    use claude_kanban::{
+        git::git,
+        ops::{self, Op},
+        store::model::{ColumnId, Status, TicketId},
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    git(repo, &["init", "-q", "-b", "main"]).unwrap();
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "seed"]).unwrap();
+    let store_dir = repo.join(".kanban");
+    let store = claude_kanban::store::Store::at(&store_dir);
+    store.init().unwrap();
+
+    // An empty board says so plainly, and carries no waiting entries to read.
+    let mut mcp = McpSession::start(&store_dir);
+    let empty = mcp.call_tool(2, "kanban_next", &json!({}));
+    let empty_reason = empty["structuredContent"]["reason"].as_str().unwrap().to_owned();
+    assert!(empty_reason.contains("nothing is waiting in todo"), "{empty_reason}");
+
+    // Now the stalled shape: K-1 in review on a branch that no longer exists and was never observed, K-2 behind it.
+    ops::apply(
+        &store,
+        None,
+        Op::CreateTicket { title: "merged elsewhere".into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![], status: Status::Ready, model: None, effort: None, auto_merge: false },
+    )
+    .unwrap();
+    ops::apply(&store, None, Op::Claim { id: TicketId("K-1".into()), agent: "claude".into() }).unwrap();
+    ops::apply(&store, None, Op::MoveTicket { id: TicketId("K-1".into()), to: ColumnId::Review, position: None, owner: None, branch: Some("k-1/vanished".into()) })
+        .unwrap();
+    ops::apply(
+        &store,
+        None,
+        Op::CreateTicket { title: "waiting on it".into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![TicketId("K-1".into())], status: Status::Ready, model: None, effort: None, auto_merge: false },
+    )
+    .unwrap();
+
+    let stuck = mcp.call_tool(3, "kanban_next", &json!({}));
+    let answer = &stuck["structuredContent"];
+    assert!(answer["ticket"].is_null(), "{answer}");
+    let reason = answer["reason"].as_str().unwrap();
+    assert_ne!(reason, empty_reason, "a stuck board must not answer like an empty one");
+    assert!(reason.contains("1 ticket in todo") && reason.contains("1 ticket in review"), "{reason}");
+
+    let review = &answer["waiting"]["review"]["tickets"];
+    assert_eq!(review[0]["ticket"], "K-1");
+    assert!(review[0]["reason"].as_str().unwrap().contains("k-1/vanished"), "{answer}");
+    let todo = &answer["waiting"]["todo"]["tickets"];
+    assert_eq!(todo[0]["ticket"], "K-2");
+    assert_eq!(todo[0]["reason"], "blocked by K-1");
+}
+
 #[test]
 fn kanban_next_reports_auto_merge_inherited_from_the_epic() {
     use claude_kanban::{

@@ -389,24 +389,31 @@ impl KanbanServer {
     /// `auto_merge` is the *effective* answer — the ticket's own flag or its epic's — and is the field `/kanban:work`
     /// reads to decide whether to land the branch itself. Read it here, not off the ticket: the ticket carries only its
     /// own say, so an epic-level grant is invisible there.
+    ///
+    /// When nothing is eligible the answer carries `waiting`: why each todo ticket does not qualify, and why each review
+    /// ticket could not be proven landed. An idle board and a stuck one are otherwise the same silence.
     #[tool]
     async fn kanban_next(&self) -> Result<CallToolResult, ErrorData> {
         self.read(|store| {
             // Land what has already reached local main before computing eligibility — dependents unblock even in an
             // MCP-only session with no serve process. A failing sweep only delays landings; never fail the read.
-            if let Err(e) = crate::land::sweep(store) {
-                tracing::warn!(error = %e, "landing sweep before kanban_next failed — answering from the board as-is");
-            }
+            let stalled = match crate::land::sweep_reporting(store) {
+                Ok(swept) => swept.stalled,
+                Err(e) => {
+                    tracing::warn!(error = %e, "landing sweep before kanban_next failed — answering from the board as-is");
+                    vec![]
+                }
+            };
             let board = store.read_board()?;
             let claims = store.read_claims()?;
-            Ok(match derive::next_ticket(&board, &claims) {
-                Some(t) => {
-                    let action = if t.status == Status::Stub { "refine" } else { "implement" };
-                    serde_json::json!({ "version": board.version, "ticket": t, "action": action,
-                        "auto_merge": derive::auto_merge(t, &board) })
-                }
-                None => serde_json::json!({ "version": board.version, "ticket": null,
-                    "reason": "no eligible ticket: nothing in todo is ready or stub, unblocked, unclaimed, and non-external" }),
+            Ok(if let Some(t) = derive::next_ticket(&board, &claims) {
+                let action = if t.status == Status::Stub { "refine" } else { "implement" };
+                serde_json::json!({ "version": board.version, "ticket": t, "action": action,
+                    "auto_merge": derive::auto_merge(t, &board) })
+            } else {
+                let todo = derive::ineligible(&board, &claims);
+                serde_json::json!({ "version": board.version, "ticket": null, "reason": nothing_eligible(&todo, &stalled),
+                    "waiting": { "todo": waiting_list(&todo), "review": waiting_list(&stalled) } })
             })
         })
         .await
@@ -619,6 +626,40 @@ impl KanbanServer {
         .await
         .map_err(|e| ErrorData::internal_error(format!("task failed: {e}"), None))?;
         Ok(shape_applied(result))
+    }
+}
+
+/// How many `waiting` entries either list carries before it is cut short. The answer is read on every idle poll of a
+/// loop that may run for hours; a board with two hundred blocked tickets needs to say so, not recite them.
+const WAITING_CAP: usize = 20;
+
+/// One `waiting` list for the wire, capped — and saying so when it was, because a silently truncated list reads exactly
+/// like a complete one.
+fn waiting_list(entries: &[(TicketId, String)]) -> serde_json::Value {
+    let shown: Vec<serde_json::Value> =
+        entries.iter().take(WAITING_CAP).map(|(id, why)| serde_json::json!({ "ticket": id, "reason": why })).collect();
+    match entries.len().checked_sub(WAITING_CAP) {
+        Some(more) if more > 0 => serde_json::json!({ "tickets": shown, "not_shown": more }),
+        _ => serde_json::json!({ "tickets": shown }),
+    }
+}
+
+/// The one-line answer to "why is nothing eligible?" — which has to distinguish a board with no work from a board whose
+/// work is all waiting on something, because a loop that cannot tell those apart idles forever on the second.
+fn nothing_eligible(todo: &[(TicketId, String)], stalled: &[(TicketId, String)]) -> String {
+    let tickets = |n: usize| if n == 1 { "1 ticket".to_owned() } else { format!("{n} tickets") };
+    match (todo.is_empty(), stalled.is_empty()) {
+        (true, true) => "no eligible ticket: nothing is waiting in todo".to_owned(),
+        (true, false) => format!(
+            "no eligible ticket: todo is empty, and {} in review cannot be proven landed — see waiting.review",
+            tickets(stalled.len())
+        ),
+        (false, true) => format!("no eligible ticket: {} in todo, none of them eligible — see waiting.todo", tickets(todo.len())),
+        (false, false) => format!(
+            "no eligible ticket: {} in todo, none of them eligible, and {} in review cannot be proven landed — see waiting",
+            tickets(todo.len()),
+            tickets(stalled.len())
+        ),
     }
 }
 

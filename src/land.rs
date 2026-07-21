@@ -49,7 +49,7 @@ use crate::{
     pr,
     store::{
         Store,
-        model::{Column, ColumnId, PrRef, PrState, Ticket},
+        model::{Column, ColumnId, PrRef, PrState, Ticket, TicketId},
     },
     worktree,
 };
@@ -66,26 +66,46 @@ fn context(store: &Store) -> Option<(PathBuf, String)> {
 /// tickets landed. Never touches the network; errors that mean "cannot answer" skip the ticket rather than failing the
 /// pass.
 pub fn sweep(store: &Store) -> anyhow::Result<usize> {
+    Ok(sweep_reporting(store)?.landed)
+}
+
+/// What one pass did **and what it could not do**: the landings, plus why every remaining review ticket stayed put.
+///
+/// The second half is the whole point. A board can go quiet because there is no work, or because its review column is
+/// full of code that landed by a route nothing here can prove — and those two look identical from `kanban_next` unless
+/// somebody carries the refusals out of the sweep that made them.
+#[derive(Debug, Default)]
+pub struct Sweep {
+    /// How many tickets moved to done this pass.
+    pub landed: usize,
+    /// Every review ticket still in review, and the missing proof, in words a human can act on.
+    pub stalled: Vec<(TicketId, String)>,
+}
+
+/// [`sweep`], answering with the refusals as well as the count.
+pub fn sweep_reporting(store: &Store) -> anyhow::Result<Sweep> {
     let Some((repo, main)) = context(store) else {
         tracing::debug!("landing sweep skipped — no repo or no main branch to land into");
-        return Ok(0);
+        return Ok(Sweep::default());
     };
     let board = store.read_board()?;
     let Some(heads) = git::local_heads(&repo) else {
-        return Ok(0); // git can't list branches: without ground truth, "branch gone" would be a guess
+        return Ok(Sweep::default()); // git can't list branches: without ground truth, "branch gone" would be a guess
     };
     let observations = store.read_land_state()?;
 
-    let landed = board
-        .tickets
-        .iter()
-        .filter(|t| matches!(t.column, Column::Review { .. }))
-        .filter_map(|t| verdict(t, &repo, &main, &heads, &observations).map(|reason| (t, reason)))
-        .filter(|(t, reason)| land(store, t, reason))
-        .count();
+    let mut swept = Sweep::default();
+    board.tickets.iter().filter(|t| matches!(t.column, Column::Review { .. })).for_each(|t| {
+        match verdict(t, &repo, &main, &heads, &observations) {
+            Verdict::Land(reason) if land(store, t, &reason) => swept.landed += 1,
+            // A refused landing is the CAS working, not a stall: the board moved, and the next pass reads it fresh.
+            Verdict::Land(_) => {}
+            Verdict::Wait(reason) => swept.stalled.push((t.id.clone(), reason)),
+        }
+    });
 
     refresh_observations(store, &repo, &heads, observations)?;
-    Ok(landed)
+    Ok(swept)
 }
 
 /// Record every live review branch's tip now, without sweeping.
@@ -120,9 +140,22 @@ pub fn observe_entering_review(store: &Store, to: ColumnId) {
     }
 }
 
-/// The proof rules, in order. `Some(reason)` means "land, and say why on the card".
-fn verdict(t: &Ticket, repo: &Path, main: &str, heads: &HashSet<String>, observations: &HashMap<String, String>) -> Option<String> {
-    // Rules 1-4: local branch evidence — never for external tickets (their branch was never a local ref).
+/// What the rules say about one review ticket: land it and why, or leave it and what is missing. The two arms are the
+/// same walk over the same evidence, so the explanation can never drift from the rule that produced it.
+enum Verdict {
+    Land(String),
+    Wait(String),
+}
+
+/// The proof rules, in order: local branch evidence, then the PR route, then — nothing proved it — the explanation.
+fn verdict(t: &Ticket, repo: &Path, main: &str, heads: &HashSet<String>, observations: &HashMap<String, String>) -> Verdict {
+    branch_proof(t, repo, main, heads, observations)
+        .or_else(|| pr_proof(t, repo, main))
+        .map_or_else(|| Verdict::Wait(waiting_on(t, main, heads, observations)), Verdict::Land)
+}
+
+/// Rules 1-4: local branch evidence — never for external tickets (their branch was never a local ref).
+fn branch_proof(t: &Ticket, repo: &Path, main: &str, heads: &HashSet<String>, observations: &HashMap<String, String>) -> Option<String> {
     if t.external.is_none()
         && let Some(branch) = t.column.branch()
     {
@@ -147,14 +180,42 @@ fn verdict(t: &Ticket, repo: &Path, main: &str, heads: &HashSet<String>, observa
             // Observed but unproven: stays in review wearing the "branch gone" flag — the human decides.
         }
     }
-    // Rule 5: the PR route, external tickets included. The gh poll recorded the merge; landing still waits for the
-    // merge commit to reach the *local* main branch — origin/main is not done.
-    if let Some(PrRef { number, state: PrState::Merged, merged_commit: Some(oid), .. }) = &t.pr
-        && git::is_ancestor(repo, oid, main) == Some(true)
-    {
-        return Some(format!("PR #{number} merged and pulled into {main}"));
-    }
     None
+}
+
+/// Rule 5: the PR route, external tickets included. The gh poll recorded the merge; landing still waits for the merge
+/// commit to reach the *local* main branch — origin/main is not done.
+fn pr_proof(t: &Ticket, repo: &Path, main: &str) -> Option<String> {
+    match &t.pr {
+        Some(PrRef { number, state: PrState::Merged, merged_commit: Some(oid), .. }) if git::is_ancestor(repo, oid, main) == Some(true) => {
+            Some(format!("PR #{number} merged and pulled into {main}"))
+        }
+        _ => None,
+    }
+}
+
+/// What this ticket is waiting for, once every rule has declined. Pure bookkeeping over facts already gathered — it asks
+/// git nothing, because git has just been asked and answered no.
+fn waiting_on(t: &Ticket, main: &str, heads: &HashSet<String>, observations: &HashMap<String, String>) -> String {
+    // A PR outranks the branch: it is the thing whose state the human is actually steering.
+    if let Some(PrRef { number, state, .. }) = &t.pr {
+        return match state {
+            PrState::Merged => format!("PR #{number} is merged but its commit has not reached local {main} — pull {main}"),
+            PrState::Open => format!("PR #{number} is open"),
+            PrState::Closed => format!("PR #{number} was closed without merging — rework the ticket, or discard it"),
+        };
+    }
+    if t.external.is_some() {
+        return "external ticket — only a merged PR can land it, and none is bound yet".to_owned();
+    }
+    match t.column.branch() {
+        None => "no branch recorded — nothing names the code to look for".to_owned(),
+        Some(b) if heads.contains(b) => format!("branch {b} exists but {main} does not contain its work yet"),
+        Some(b) if observations.contains_key(b) => {
+            format!("branch {b} is gone, and its last observed tip is neither in {main} nor contained by it")
+        }
+        Some(b) => format!("branch {b} is gone and no tip was ever observed — land it or discard it by hand"),
+    }
 }
 
 /// Apply one landing, tolerating the benign race: the board may have moved since the evidence was gathered, and
@@ -505,6 +566,43 @@ mod tests {
         let k1 = board.ticket(&TicketId("K-1".into())).unwrap();
         assert!(matches!(k1.column, Column::Done { discarded: false, .. }));
         assert!(k1.notes.last().unwrap().text.contains("squashed or rewritten into main and deleted"), "{:?}", k1.notes);
+    }
+
+    /// Every refusal the sweep makes has to come back out of it. This is what stops a board full of unprovable review
+    /// tickets reading as an empty one — the failure that started all of this went unnoticed for exactly that long.
+    #[test]
+    fn the_sweep_reports_what_each_review_ticket_is_waiting_for() {
+        let s = scratch();
+        let stalled = sweep_reporting(&s.store).unwrap().stalled;
+        assert_eq!(stalled.len(), 1);
+        assert_eq!(stalled[0].0.0, "K-1");
+        assert!(stalled[0].1.contains("k-1/work") && stalled[0].1.contains("does not contain"), "{stalled:?}");
+
+        // Force-deleted after that first sweep observed it: the tip is known and refutes the landing, which is a
+        // different sentence from knowing nothing at all.
+        git(&s.repo, &["branch", "-q", "-D", "k-1/work"]).unwrap();
+        let stalled = sweep_reporting(&s.store).unwrap().stalled;
+        assert!(stalled[0].1.contains("last observed tip is neither"), "{stalled:?}");
+
+        // Never observed at all — the one shape only a human can resolve, so it says which hand to use.
+        let fresh = scratch();
+        git(&fresh.repo, &["branch", "-q", "-D", "k-1/work"]).unwrap();
+        let stalled = sweep_reporting(&fresh.store).unwrap().stalled;
+        assert!(stalled[0].1.contains("no tip was ever observed"), "{stalled:?}");
+
+        // A PR outranks the branch: it is the thing whose state the human is steering.
+        let pr = PrRef { number: 12, url: "https://example.invalid/pull/12".into(), state: PrState::Open, merged_commit: None };
+        ops::apply(&s.store, None, Op::SetPr { id: TicketId("K-1".into()), pr: Some(pr) }).unwrap();
+        assert_eq!(sweep_reporting(&s.store).unwrap().stalled[0].1, "PR #12 is open");
+    }
+
+    #[test]
+    fn a_ticket_that_lands_is_absent_from_the_stall_report() {
+        let s = scratch();
+        git(&s.repo, &["merge", "-q", "--ff-only", "k-1/work"]).unwrap();
+        let swept = sweep_reporting(&s.store).unwrap();
+        assert_eq!(swept.landed, 1);
+        assert!(swept.stalled.is_empty(), "{:?}", swept.stalled);
     }
 
     #[test]

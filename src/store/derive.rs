@@ -81,6 +81,37 @@ pub fn next_ticket<'a>(board: &'a Board, claims: &[Claim]) -> Option<&'a Ticket>
         .find(|t| matches!(t.status, Status::Ready | Status::Stub) && t.external.is_none() && !blocked(t, board) && claims::find(claims, &t.id).is_none())
 }
 
+/// The complement of [`next_ticket`]: every todo ticket that is *not* eligible, and why. For when `next_ticket` answers
+/// `None` and somebody has to explain the silence — an empty todo and a todo full of blocked work are the same answer
+/// otherwise, and one of them means the board is stuck.
+#[must_use]
+pub fn ineligible(board: &Board, claims: &[Claim]) -> Vec<(TicketId, String)> {
+    board.tickets_in(ColumnId::Todo).filter_map(|t| ineligibility(t, board, claims).map(|why| (t.id.clone(), why))).collect()
+}
+
+/// Why this todo ticket is not the next thing to work on; `None` when it is eligible. The order mirrors
+/// [`next_ticket`]'s own filter, so the reason given is the first test the ticket actually failed.
+fn ineligibility(ticket: &Ticket, board: &Board, claims: &[Claim]) -> Option<String> {
+    match ticket.status {
+        Status::Draft => return Some("draft — the human's to shape, never an agent's".to_owned()),
+        Status::Review => return Some("status review — waiting to be promoted to ready".to_owned()),
+        Status::Ready | Status::Stub => {}
+    }
+    if ticket.external.is_some() {
+        return Some("external — worked by a delegate, not from here".to_owned());
+    }
+    if blocked(ticket, board) {
+        let unmet: Vec<&str> = ticket
+            .depends_on
+            .iter()
+            .filter(|dep| !matches!(board.ticket(dep).map(|t| &t.column), Some(Column::Done { discarded: false, .. })))
+            .map(|dep| dep.0.as_str())
+            .collect();
+        return Some(format!("blocked by {}", unmet.join(", ")));
+    }
+    claims::find(claims, &ticket.id).map(|c| format!("claimed by {}", c.agent))
+}
+
 /// The full read model: the board joined with its live claims and every derived fact, ready to serialize. Built fresh on
 /// every read — nothing here is ever stored.
 #[must_use] 
@@ -250,6 +281,43 @@ mod tests {
         b.tickets[3].external = Some(crate::store::model::External { provider: "github".into(), kind: "issue".into(), number: 1 });
         let claims = vec![Claim { ticket: TicketId("K-3".into()), agent: "claude".into(), since: Utc::now(), path: None }];
         assert_eq!(next_ticket(&b, &claims).unwrap().id.0, "K-5");
+    }
+
+    /// The same board `next_ticket` walks, asked the opposite question: not "what may I work?" but "why may I work
+    /// nothing?". Every skip it makes silently has to have a sentence here, or an idling loop can only guess.
+    #[test]
+    fn ineligible_names_the_first_test_each_todo_ticket_failed() {
+        let mut b = board(vec![
+            ticket("K-1", Column::Todo), // draft
+            ticket("K-2", Column::Todo), // blocked by K-1 and K-6
+            ticket("K-3", Column::Todo), // claimed
+            ticket("K-4", Column::Todo), // external
+            ticket("K-5", Column::Todo), // eligible
+            ticket("K-6", Column::Todo), // status review
+        ]);
+        b.tickets[0].status = Status::Draft;
+        b.tickets[1].depends_on = vec![TicketId("K-1".into()), TicketId("K-6".into())];
+        b.tickets[3].external = Some(crate::store::model::External { provider: "github".into(), kind: "issue".into(), number: 1 });
+        b.tickets[5].status = Status::Review;
+        let claims = vec![Claim { ticket: TicketId("K-3".into()), agent: "claude".into(), since: Utc::now(), path: None }];
+
+        let why: Vec<(String, String)> = ineligible(&b, &claims).into_iter().map(|(id, why)| (id.0, why)).collect();
+        assert_eq!(why.len(), 5, "only the eligible K-5 is absent: {why:?}");
+        assert!(why[0].1.starts_with("draft"), "{why:?}");
+        assert_eq!(why[1].1, "blocked by K-1, K-6", "both unmet dependencies, named");
+        assert!(why[2].1 == "claimed by claude", "{why:?}");
+        assert!(why[3].1.starts_with("external"), "{why:?}");
+        assert!(why[4].1.starts_with("status review"), "{why:?}");
+        assert!(!why.iter().any(|(id, _)| id == "K-5"));
+
+        // A ticket whose dependency landed drops out; one whose dependency was *discarded* does not — the code it was
+        // promised does not exist, and saying so is the only way anyone learns why the board stopped.
+        b.tickets[0].status = Status::Ready;
+        b.tickets[0].column = done();
+        b.tickets[5].status = Status::Ready;
+        b.tickets[5].column = Column::Done { branch: None, completed_at: Utc::now(), discarded: true };
+        let why = ineligible(&b, &claims);
+        assert_eq!(why.iter().find(|(id, _)| id.0 == "K-2").unwrap().1, "blocked by K-6");
     }
 
     #[test]
