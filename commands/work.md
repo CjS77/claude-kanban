@@ -179,11 +179,10 @@ checkout** — never inside a worktree, and never in parallel with another auto-
 
 **Why step 5 deletes the branch last.** While the branch still exists, `land::sweep` proves the landing by its
 strongest rule: the branch tip is an ancestor of main (`git merge-base --is-ancestor`), which needs nothing but the
-repo in front of it. Delete the branch first and that rule is simply unavailable — the sweep falls back to the tip it
-recorded in `.kanban/land-state.json`, and that entry only exists if some *earlier* sweep saw this ticket in `review`
-with a live branch. A ticket merged and deleted before any sweep ticked has no proof at all: it parks in `review`
-wearing "branch gone — land or discard?" forever, waiting for a human, which is the exact opposite of what the flag
-asked for. Auto-merge must never depend on that sidecar file.
+repo in front of it. Delete the branch first and that rule is simply unavailable — the sweep falls back to the tip
+recorded in `.kanban/land-state.json`, which the move into `review` takes for you, so the fallback is armed rather
+than hypothetical. It is still the weaker proof: machine-local, by patch-id, and losable to a gc. Auto-merge should
+never have to depend on that sidecar file when keeping the branch a few seconds longer makes rule 1 answer.
 
 **When it doesn't work.** Every failure ends the same way: **the ticket stays in `review`, `kanban_note` names the
 failure on the card, and the loop moves on to the next ticket.** Never discard it, never drag it to `done`, never

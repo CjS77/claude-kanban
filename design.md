@@ -294,7 +294,7 @@ state** (their `branch` was never a local ref, so its absence proves nothing —
 **The offline sweep** is pure git, and lands a review ticket when any of these holds:
 
 1. its branch tip is an ancestor of the local main branch (`git merge-base --is-ancestor`);
-2. its branch is gone, but the last tip the sweep *observed* (in `.kanban/land-state.json`) is an ancestor of main — merged, then deleted;
+2. its branch is gone, but the last tip *observed* for it (in `.kanban/land-state.json`) is an ancestor of main — merged, then deleted;
 3. its branch is gone, but the observed tip proves patch-equivalent to main (`git cherry` all `-`) — the rebase-then-fast-forward-then-
    delete flow (`merge.sh`), where the landed commits carry new SHAs but the same patch-ids;
 4. its recorded PR is `merged` **and** the merge commit is an ancestor of local main — merged on GitHub *and pulled*. `origin/main` is
@@ -305,6 +305,13 @@ the human. Every landing goes through one op (`LandTicket`) that re-checks its e
 it — and appends a provenance note, so a card never jumps silently and a card that moved mid-check is simply skipped. The sweep runs in
 two places: the serve process's landing loop (below), and **inside `kanban_next`**, so an MCP-only session with no server still unblocks
 dependents the moment their predecessors land.
+
+Rules 2 and 3 stand on an observation taken while the branch was alive, so **the observation is part of the move into review**, not a
+race against the next sweep: both faces call `land::observe_entering_review` once the move has been applied — `kanban_move` and the
+browser's drop. Taking it per sweep instead made the proof depend on timing nobody controls; a run whose last ticket enters review just
+before the loop ends, with no server polling, left that branch unobserved, and `merge.sh` then disarmed every rule at once. Sweeps still
+refresh the observations at their tail, and it stays best-effort in both: a tip that cannot be read is a landing the human confirms, never
+a move that fails.
 
 **The gh poll** is the serve face's second sanctioned network egress (the Create PR click was the first), and it is read-only: every
 `poll_interval` seconds (config; seeded 60, `0` switches it off, editable live from the settings pane) the server refreshes each review
@@ -325,9 +332,9 @@ lands the only way any card lands: `land::sweep` sees the branch tip is an ances
 a card the human moved mid-merge is skipped harmlessly.
 
 That is why the procedure's ordering is load-bearing: **merge, let the ticket land, then delete the branch.** With the branch still present
-rule 1 needs nothing but the repo. Delete it first and rule 1 is gone — the sweep can only fall back to `.kanban/land-state.json`, whose
-entry exists only if an earlier sweep had already observed a live branch on a review ticket. Merged and deleted before any sweep ticks, a
-ticket has no proof at all and parks in review wearing "branch gone" — `a_vanished_branch_without_proof_stays_in_review`, precisely.
+rule 1 needs nothing but the repo. Delete it first and rule 1 is gone, leaving only the observed tip in `.kanban/land-state.json` — which
+the move into review now records, so the fallback is armed rather than hypothetical, but it is still a fallback: it proves the landing by
+patch-id, it is machine-local, and a repo whose objects have been gc'd can lose it. Keep to the strongest proof available.
 
 **The merge lives in `commands/work.md`, not in the binary**, and that is a deliberate boundary rather than an omission. `land.rs` only asks
 questions of git (`is_ancestor`, `cherry`) and writes the board; the sole path that writes to the integration branch

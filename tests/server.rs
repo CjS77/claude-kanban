@@ -736,6 +736,34 @@ async fn dragging_a_card_to_review_closes_it_out() {
     assert!(store.read_claims().unwrap().is_empty(), "entering review drops the claim");
 }
 
+/// The browser is the other way a ticket enters review, and a card dragged there by hand is *more* likely to be merged
+/// by hand straight afterwards — so the drop has to arm the landing proof exactly as the MCP close-out does.
+#[tokio::test]
+async fn dropping_a_card_into_review_observes_its_branch_tip() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    git(repo, &["init", "-q", "-b", "main"]).unwrap();
+    git(repo, &["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "seed"]).unwrap();
+    git(repo, &["branch", "k-1/dragged"]).unwrap();
+    let store = Store::at(repo.join(".kanban"));
+    store.init().unwrap();
+    let router = router_for(&store);
+
+    seed_ticket(&store, "Dragged to review");
+    ops::apply(&store, None, Op::Claim { id: TicketId("K-1".into()), agent: "claude".into() }).unwrap();
+    ops::apply(
+        &store,
+        None,
+        Op::StampWorktree { id: TicketId("K-1".into()), branch: "k-1/dragged".into(), path: "/tmp/unused".into() },
+    )
+    .unwrap();
+
+    let res = router.oneshot(post("/ui/ticket/K-1/move", 3, "to=review&position=0")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let tip = git(repo, &["rev-parse", "k-1/dragged"]).unwrap();
+    assert_eq!(store.read_land_state().unwrap().get("k-1/dragged"), Some(&tip));
+}
+
 #[tokio::test]
 async fn done_cards_carry_no_merged_badge() {
     // An external ticket's branch is whatever the delegate created on the far side and never existed locally — the

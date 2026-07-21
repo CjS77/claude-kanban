@@ -278,6 +278,11 @@ fn kanban_next_lands_merged_review_work_and_the_move_records_companion_branches(
     let board = store.read_board().unwrap();
     assert!(matches!(&board.ticket(&TicketId("K-2".into())).unwrap().column, Column::Review { branch: Some(b) } if b == "k-1/work"));
     assert!(store.read_claims().unwrap().is_empty(), "entering review drops the claim");
+
+    // …and the move itself observed the tip. Without this the proof would depend on another sweep running before
+    // whoever merges deletes the branch — and this session's next act may well be to end.
+    let tip = git(repo, &["rev-parse", "k-1/work"]).unwrap();
+    assert_eq!(store.read_land_state().unwrap().get("k-1/work"), Some(&tip), "the close-out arms the landing proof");
 }
 
 /// `kanban_next` serializes a bare `Ticket`, which carries only the ticket's *own* `auto_merge` — an epic-level grant is
