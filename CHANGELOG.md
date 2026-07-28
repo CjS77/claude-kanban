@@ -5,6 +5,24 @@ All notable changes to this project are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.0] - 2026-07-28
+
+### Added
+
+- Squash-landing detection by content containment: `git::contained_in` asks whether main already holds everything a
+  branch adds, so a GitHub squash-merge (which collapses N commits into one with a fresh patch-id) now lands instead of
+  parking forever in review. It declines an empty branch, so a no-op branch never manufactures a landing.
+- `kanban_next` explains a stalled board instead of going quiet: an empty answer now carries `waiting.todo` and
+  `waiting.review` with the reasons work is held back, capped by an explicit `not_shown`, so an idle board and a stuck
+  one no longer read alike.
+
+### Fixed
+
+- The branch tip is observed the moment a ticket enters review, via `observe_entering_review` on both the MCP close-out
+  and the browser drop. Previously the observations sidecar only held what a sweep happened to see, so the last ticket
+  of a `/kanban:work` run could enter review unobserved and, once rebased and its branch deleted, disarm every landing
+  proof at once — parking the card and blocking its dependents.
+
 ## [2.3.0] - 2026-07-21
 
 ### Added
@@ -105,6 +123,7 @@ First tagged release, covering the plugin's initial publication.
 - The create-ticket epic dropdown stays in sync with the board.
 - Markdown panes that arrive as top-level swap elements render.
 
+[2.4.0]: https://github.com/CjS77/claude-kanban/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/CjS77/claude-kanban/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/CjS77/claude-kanban/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/CjS77/claude-kanban/compare/v2.0.1...v2.1.0
