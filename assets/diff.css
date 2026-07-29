@@ -6,6 +6,8 @@
  * background is neutralised inside the table (below) so the red/green line tint shows through.
  */
 .diff {
+    display: flex;
+    align-items: flex-start;
     font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
     font-size: 12px;
     color: var(--diff-fg);
@@ -127,6 +129,94 @@ tr.dl-del .diff-ln { background: var(--diff-del-ln-bg); }
     padding: 24px;
     text-align: center;
     opacity: 0.7;
+}
+
+/* Layout: a sticky file-list TOC beside the scrolling diff body (see templates/diff.html). */
+.diff-toc {
+    flex: 0 0 auto;
+    width: 15rem;
+    align-self: flex-start;
+    position: sticky;
+    top: 0;
+    max-height: 80vh;
+    overflow: auto;
+    border-right: 1px solid var(--diff-border);
+    background: var(--diff-bg);
+}
+
+.diff-toc-head {
+    position: sticky;
+    top: 0;
+    padding: 10px 12px;
+    background: var(--diff-bg);
+    border-bottom: 1px solid var(--diff-border);
+    font-weight: 600;
+}
+
+.diff-toc-list {
+    list-style: none;
+    margin: 0;
+    padding: 4px;
+}
+
+.diff-toc-item {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    color: inherit;
+    text-decoration: none;
+}
+
+.diff-toc-item:hover {
+    background: var(--diff-header-bg);
+}
+
+/* Ellipsis the START of the path so the filename (the useful end) stays visible; the full path is in the title attr. */
+.diff-toc-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    direction: rtl;
+    text-align: left;
+}
+
+.diff-toc-counts {
+    flex: 0 0 auto;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.diff-body {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+/* Each file is a <details>; its <summary> header toggles the hunks and carries a caret that rotates when open. */
+.diff-file[id] {
+    scroll-margin-top: 3rem;
+}
+
+.diff-file > summary {
+    cursor: pointer;
+    list-style: none;
+}
+
+.diff-file > summary::-webkit-details-marker {
+    display: none;
+}
+
+.diff-file > summary::before {
+    content: "▸";
+    flex: 0 0 auto;
+    font-size: 10px;
+    opacity: 0.6;
+    transition: transform 0.15s;
+}
+
+.diff-file[open] > summary::before {
+    transform: rotate(90deg);
 }
 
 :root {

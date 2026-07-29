@@ -650,6 +650,10 @@ async fn the_view_diff_button_and_endpoint_work_without_a_remote() {
     assert_eq!(res.status(), StatusCode::OK);
     let diff = body_text(res).await;
     assert!(diff.contains("f.rs") && diff.contains("println!"), "the diff names the changed file and its hunk: {diff}");
+    // File TOC (K-44): a nav listing files, a per-file anchor id, and the collapsible <details> wrapper.
+    assert!(diff.contains("diff-toc"), "the diff has a file-list TOC: {diff}");
+    assert!(diff.contains("id=\"f0\"") && diff.contains("href=\"#f0\""), "each file has an anchor the TOC links to: {diff}");
+    assert!(diff.contains("<details"), "each file is a collapsible <details>: {diff}");
 
     // A todo ticket has no branch: no button, and the endpoint refuses with a toast rather than an empty modal.
     seed_ticket(&store, "Still todo");
