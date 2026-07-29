@@ -17,6 +17,7 @@
 
 pub mod cli;
 pub mod config;
+pub mod diff;
 pub mod git;
 pub mod land;
 pub mod mcp;

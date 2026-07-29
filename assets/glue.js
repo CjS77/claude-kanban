@@ -1,6 +1,6 @@
 /* claude-kanban glue — the only hand-written JavaScript in the project.
  *
- * Owns exactly seven jobs, none of which htmx attributes can express alone:
+ * Owns exactly eight jobs, none of which htmx attributes can express alone:
  *   1. Stamp the board version (X-Board-Version) onto every mutating request — the optimistic-concurrency token, and,
  *      being a custom header, the CSRF guard: cross-site forms can't send it, and cross-origin fetch would need a CORS
  *      preflight the server never grants.
@@ -9,9 +9,10 @@
  *   3. Drag & drop: a SortableJS instance per ticket list, re-created after every board swap; a drop POSTs the move.
  *   4. Error toasts: htmx refuses to swap non-2xx responses by default; whitelist the codes the server retargets at #toasts.
  *   5. Client-side markdown: [data-md-src] panes fetch raw markdown once and render it locally (marked + DOMPurify).
- *   6. Modal plumbing: open the detail dialog when content lands in it; close/reset forms marked for it on success.
+ *   6. Modal plumbing: open the detail (and diff) dialog when content lands in it; close/reset forms marked for it.
  *   7. Epic options sync: the create-ticket form sits in the static page shell, so its epic <select> would go stale
  *      as epics come and go — after every swap it re-mirrors the list from the OOB-refreshed filter dropdown.
+ *   8. Syntax highlighting: highlight.js over the diff pane's per-line code cells and the markdown panes' code blocks.
  */
 (() => {
     "use strict";
@@ -125,6 +126,16 @@
         }).observe(toasts, { childList: true });
     }
 
+    // --- 8. syntax highlighting (defined early: jobs 5 and 6 both call it) -----------------------------------------
+    // highlight.js over any <code> carrying a `language-*` class — the diff pane's per-line cells (the server stamps the
+    // file's language) and markdown fenced blocks. Code with no language is left plain, matching GitHub. Diff cells are
+    // highlighted independently, so a construct spanning a hunk boundary can miscolour — acceptable, and far cheaper than
+    // the diff engine that would track hljs state across lines. hljs stamps [data-highlighted], so re-swaps never re-run.
+    const highlightCode = (scope) => {
+        if (typeof hljs === "undefined") return;
+        scope.querySelectorAll("code[class*='language-']:not([data-highlighted])").forEach((el) => hljs.highlightElement(el));
+    };
+
     // --- 5. client-side markdown ------------------------------------------------------------------------------------
     const renderMarkdown = (scope) => {
         // htmx:load fires once per TOP-LEVEL element of a swapped-in fragment, so a pane can BE the scope itself
@@ -138,6 +149,7 @@
                 .then((res) => (res.ok ? res.text() : Promise.reject(res.status)))
                 .then((md) => {
                     el.innerHTML = DOMPurify.sanitize(marked.parse(md));
+                    highlightCode(el);
                 })
                 .catch(() => {
                     el.textContent = "failed to load body";
@@ -147,9 +159,17 @@
 
     // --- 6. modal plumbing ------------------------------------------------------------------------------------------
     document.body.addEventListener("htmx:afterSwap", (e) => {
-        if (e.detail.target.id === "detail" && e.detail.target.innerHTML.trim() !== "") {
+        const target = e.detail.target;
+        if (target.id === "detail" && target.innerHTML.trim() !== "") {
             const modal = document.getElementById("detail-modal");
             if (modal && !modal.open) modal.showModal();
+        }
+        // The diff lands in #diff-view (targeted from the detail pane's button): open its dialog over the detail modal
+        // and colour the code now that it is in the DOM.
+        if (target.id === "diff-view" && target.innerHTML.trim() !== "") {
+            const modal = document.getElementById("diff-modal");
+            if (modal && !modal.open) modal.showModal();
+            highlightCode(target);
         }
     });
 

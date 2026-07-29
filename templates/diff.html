@@ -1,0 +1,43 @@
+{#- The diff pane: a review branch's own changes against main, computed server-side (src/diff.rs) and highlighted in the
+    browser by highlight.js over each line's `language-*` class. Swapped into #diff-view by htmx; glue.js opens the modal
+    and runs the highlighter. Styling is assets/diff.css (GitHub palette, theme-aware via prefers-color-scheme). -#}
+{% if files.is_empty() %}
+<p class="diff-empty">No changes — <span class="font-mono">{{ branch }}</span> is even with <span class="font-mono">{{ main }}</span>.</p>
+{% else %}
+<div class="diff">
+    <div class="diff-summary">
+        <span class="font-mono">{{ branch }}</span> vs <span class="font-mono">{{ main }}</span> ·
+        {{ files_changed }} file{% if files_changed != 1 %}s{% endif %} changed
+        <span class="diff-add">+{{ added }}</span> <span class="diff-del">−{{ deleted }}</span>
+    </div>
+    {% for file in files %}
+    <div class="diff-file">
+        <div class="diff-file-header">
+            {% if let Some(old) = file.old_path %}<span class="diff-old">{{ old }}</span> <span>→</span> {% endif %}
+            <span class="diff-path">{{ file.path }}</span>
+            <span class="diff-status diff-status-{{ file.status }}">{{ file.status }}</span>
+            <span class="diff-counts"><span class="diff-add">+{{ file.added }}</span> <span class="diff-del">−{{ file.deleted }}</span></span>
+        </div>
+        {% if file.hunks.is_empty() %}
+        <div class="diff-nohunk">No line changes to show (binary or metadata-only).</div>
+        {% else %}
+        <table class="diff-table">
+            {% for hunk in file.hunks %}
+            <tr class="diff-hunk-header">
+                <td class="diff-ln"></td><td class="diff-ln"></td>
+                <td class="diff-code">{{ hunk.header }}</td>
+            </tr>
+            {% for line in hunk.lines %}
+            <tr class="{{ line.css }}">
+                <td class="diff-ln">{% if let Some(n) = line.old_no %}{{ n }}{% endif %}</td>
+                <td class="diff-ln">{% if let Some(n) = line.new_no %}{{ n }}{% endif %}</td>
+                <td class="diff-code"><code class="hl{% if let Some(l) = file.lang %} language-{{ l }}{% endif %}">{{ line.text }}</code></td>
+            </tr>
+            {% endfor %}
+            {% endfor %}
+        </table>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+{% endif %}

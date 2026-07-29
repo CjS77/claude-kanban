@@ -153,6 +153,14 @@ fn adds_nothing(repo: &Path, upstream: &str, tip: &str) -> Option<bool> {
     }
 }
 
+/// The branch's own changes as a unified diff against its merge base with `base` — the three-dot range (see
+/// [`adds_nothing`]), so shared history is excluded and the output matches what a PR would show. Rename-aware (`-M`) and
+/// never colourised, so [`crate::diff`] gets a stable patch to parse. `git diff` exits 0 whether or not it found changes
+/// (no `--exit-code`), so an empty branch yields an empty string, not an error.
+pub fn diff(repo: &Path, base: &str, branch: &str) -> Result<String, GitError> {
+    git(repo, &["diff", "-M", "--no-color", &format!("{base}...{branch}")])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,6 +260,34 @@ mod tests {
         assert_eq!(current_branch(repo.path()), None, "detached HEAD is no branch");
         let plain = tempfile::tempdir().unwrap();
         assert_eq!(local_heads(plain.path()), None);
+    }
+
+    #[test]
+    fn diff_shows_only_the_branch_changes_in_the_three_dot_range() {
+        let repo = scratch_repo();
+        std::fs::write(repo.path().join("f"), "one\ntwo\nthree\n").unwrap();
+        git(repo.path(), &["add", "f"]).unwrap();
+        commit_in(repo.path(), "seed");
+
+        // The branch changes a line…
+        git(repo.path(), &["checkout", "-q", "-b", "k-9/work"]).unwrap();
+        std::fs::write(repo.path().join("f"), "one\nTWO\nthree\n").unwrap();
+        git(repo.path(), &["add", "f"]).unwrap();
+        commit_in(repo.path(), "work");
+
+        // …while main moves on independently after the branch point.
+        git(repo.path(), &["checkout", "-q", "main"]).unwrap();
+        std::fs::write(repo.path().join("g"), "main-only\n").unwrap();
+        git(repo.path(), &["add", "g"]).unwrap();
+        commit_in(repo.path(), "main moves");
+
+        let out = diff(repo.path(), "main", "k-9/work").unwrap();
+        assert!(out.contains("+TWO") && out.contains("-two"), "the branch's own change is present:\n{out}");
+        assert!(!out.contains("main-only"), "the three-dot range must exclude main's later commits:\n{out}");
+
+        // A branch even with main diffs to nothing.
+        git(repo.path(), &["checkout", "-q", "-b", "k-10/even", "main"]).unwrap();
+        assert_eq!(diff(repo.path(), "main", "k-10/even").unwrap(), "");
     }
 
     #[test]

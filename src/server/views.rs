@@ -342,6 +342,8 @@ pub struct TicketCtx {
     /// Whether the pane shows the Create PR button — computed by the handlers via `pr::eligible` (it needs subprocesses,
     /// and views stay pure).
     pub can_pr: bool,
+    /// Whether the pane shows the View diff button — `diff::eligible`, which is `can_pr` without the remote requirement.
+    pub can_diff: bool,
     /// The bound PR — shown in the pane whatever the column, as provenance once the ticket lands.
     pub pr: Option<PrCtx>,
     /// Review tickets can be retired without landing: done with `discarded: true`, dependents stay blocked.
@@ -420,7 +422,28 @@ fn epic_auto_merge_confirm(id: &str, title: &str, on: bool, count: usize) -> Str
     auto_merge_on_confirm(&target, subject)
 }
 
-pub fn detail(board: &Board, claims: &[Claim], id: &crate::store::model::TicketId, can_pr: bool) -> Option<DetailTpl> {
+/// The diff pane (`templates/diff.html`): a review branch's changes against main, ready for htmx to swap into the modal.
+/// The per-file model comes from [`crate::diff::compute`]; this only tallies the summary line.
+#[derive(Debug, Template)]
+#[template(path = "diff.html")]
+pub struct DiffTpl {
+    pub branch: String,
+    pub main: String,
+    pub files: Vec<crate::diff::FileDiff>,
+    pub files_changed: usize,
+    pub added: usize,
+    pub deleted: usize,
+}
+
+#[must_use]
+pub fn diff(branch: String, main: String, files: Vec<crate::diff::FileDiff>) -> DiffTpl {
+    let files_changed = files.len();
+    let added = files.iter().map(|f| f.added).sum();
+    let deleted = files.iter().map(|f| f.deleted).sum();
+    DiffTpl { branch, main, files, files_changed, added, deleted }
+}
+
+pub fn detail(board: &Board, claims: &[Claim], id: &crate::store::model::TicketId, can_pr: bool, can_diff: bool) -> Option<DetailTpl> {
     use crate::store::model::Column;
     let t = board.ticket(id)?;
     let claim = crate::store::find_claim(claims, id).map(|c| claim_ctx(&ClaimView::from(c)));
@@ -448,6 +471,7 @@ pub fn detail(board: &Board, claims: &[Claim], id: &crate::store::model::TicketI
             branch: t.column.branch().map(str::to_owned),
             completed_at,
             can_pr,
+            can_diff,
             pr: t.pr.as_ref().map(pr_ctx),
             can_discard: t.column.id() == ColumnId::Review,
             discarded: matches!(t.column, Column::Done { discarded: true, .. }),

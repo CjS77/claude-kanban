@@ -16,6 +16,7 @@ use serde::Deserialize;
 
 use super::{AppState, security::VERSION_HEADER, views};
 use crate::{
+    diff,
     ops::{self, Op, TicketPatch},
     pr,
     store::{
@@ -180,7 +181,8 @@ fn rendered_detail(store: &Store, id: &TicketId) -> Result<Html<String>, AppErro
     let board = store.read_board()?;
     let claims = store.read_claims()?;
     let can_pr = board.ticket(id).is_some_and(|t| pr::eligible(store, t));
-    let tpl = views::detail(&board, &claims, id, can_pr).ok_or_else(|| AppError::not_found(&id.to_string()))?;
+    let can_diff = board.ticket(id).is_some_and(|t| diff::eligible(store, t));
+    let tpl = views::detail(&board, &claims, id, can_pr, can_diff).ok_or_else(|| AppError::not_found(&id.to_string()))?;
     Ok(Html(tpl.render()?))
 }
 
@@ -424,6 +426,19 @@ pub async fn create_pr(State(app): State<AppState>, Path(id): Path<String>) -> R
         let text = if report.created { format!("PR created: {}", report.url) } else { format!("PR already open: {}", report.url) };
         ops::apply(store, None, Op::AddNote { id: id.clone(), text, author: Some(author) })?;
         rendered_detail(store, &id)
+    })
+    .await
+}
+
+/// The View diff button: the review branch's own changes against main, rendered GitHub-style. Purely local — no push, no
+/// `gh`, no remote — so unlike Create PR it never leaves the machine. Any failure (no such branch, an unparseable diff)
+/// becomes a toast rather than an empty modal. htmx swaps the fragment into `#diff-view`; glue.js opens the modal and
+/// runs the highlighter.
+pub async fn ticket_diff(State(app): State<AppState>, Path(id): Path<String>) -> Result<Html<String>, AppError> {
+    let id = TicketId(id);
+    blocking(&app, move |store| {
+        let diff = diff::compute(store, &id).map_err(|e| AppError::bad_request(format!("{e:#}")))?;
+        Ok(Html(views::diff(diff.branch, diff.main, diff.files).render()?))
     })
     .await
 }

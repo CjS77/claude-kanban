@@ -14,10 +14,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ title }} — kanban</title>
     <link rel="stylesheet" href="/assets/app.css">
+    {#- Diff view: our GitHub-style layout plus highlight.js token colours. The two hljs themes switch on
+        prefers-color-scheme — the same signal as daisyUI's `dark --prefersdark` — so the diff tracks the board theme. -#}
+    <link rel="stylesheet" href="/assets/diff.css">
+    <link rel="stylesheet" href="/assets/github.min.css" media="(prefers-color-scheme: light)">
+    <link rel="stylesheet" href="/assets/github-dark.min.css" media="(prefers-color-scheme: dark)">
     <script src="/assets/htmx.min.js" defer></script>
     <script src="/assets/sortable.min.js" defer></script>
     <script src="/assets/marked.min.js" defer></script>
     <script src="/assets/purify.min.js" defer></script>
+    <script src="/assets/highlight.min.js" defer></script>
     <script src="/assets/glue.js" defer></script>
 </head>
 <body class="min-h-screen bg-base-200">
@@ -130,6 +136,20 @@
     <dialog id="detail-modal" class="modal">
         <div class="modal-box max-w-3xl">
             <div id="detail"></div>
+        </div>
+        <form method="dialog" class="modal-backdrop"><button aria-label="close">close</button></form>
+    </dialog>
+
+    {#- The diff pane: cards' "View diff" hx-gets the rendered diff into #diff-view; glue.js opens this dialog when
+        content lands and runs highlight.js over it. Wide and its own <dialog> so it stacks over the detail modal. The
+        width is inline because assets/app.css is a committed Tailwind build without the widest max-w-* utilities. -#}
+    <dialog id="diff-modal" class="modal">
+        <div class="modal-box p-0" style="max-width: min(96rem, 95vw); width: 95vw">
+            <div class="flex items-center justify-between gap-3 p-3 border-b border-base-300">
+                <h2 class="font-semibold">Diff</h2>
+                <form method="dialog"><button class="btn btn-sm btn-circle btn-ghost" aria-label="close">✕</button></form>
+            </div>
+            <div id="diff-view" class="overflow-auto" style="max-height: 80vh"></div>
         </div>
         <form method="dialog" class="modal-backdrop"><button aria-label="close">close</button></form>
     </dialog>

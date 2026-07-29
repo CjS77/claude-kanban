@@ -97,6 +97,13 @@
         {% endfor %}
     </div>
     <div class="flex gap-2">
+        {% if ticket.can_diff %}
+        {#- Purely local: the branch's own changes against main, rendered GitHub-style in a modal. No push, no gh — the
+            offline answer to "I only opened a PR to see the diff". Targets #diff-view; glue.js opens the modal. -#}
+        <button class="btn btn-sm" hx-get="/ui/ticket/{{ ticket.id }}/diff" hx-target="#diff-view" hx-swap="innerHTML"
+                title="the branch's changes against main — stays on this machine">
+            View diff <span class="htmx-indicator loading loading-spinner loading-xs"></span></button>
+        {% endif %}
         {% if ticket.can_pr %}{% if let Some(branch) = ticket.branch %}
         {#- The one action that leaves the machine — deliberate, explicit, and server-deduped (a second click finds the
             open PR instead of pushing again). hx-disabled-elt guards the seconds the push takes. -#}

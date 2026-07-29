@@ -523,6 +523,12 @@ async fn raw_markdown_is_plain_text_and_assets_are_embedded() {
     assert_eq!(res.headers()[header::CONTENT_TYPE], "text/javascript; charset=utf-8");
     assert!(body_text(res).await.contains("X-Board-Version"), "embedded glue.js must be the real one");
 
+    // The diff view's vendored assets ride along in the binary too.
+    for asset in ["/assets/highlight.min.js", "/assets/diff.css", "/assets/github.min.css", "/assets/github-dark.min.css"] {
+        let res = router.clone().oneshot(get(asset)).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "{asset} must be embedded");
+    }
+
     let res = router.oneshot(get("/assets/../Cargo.toml")).await.unwrap();
     assert_ne!(res.status(), StatusCode::OK, "no traversal");
 }
@@ -605,6 +611,60 @@ async fn the_create_pr_button_tracks_eligibility_live() {
     git(repo, &["branch", "-D", "k-1/work"]).unwrap();
     let html = body_text(router.oneshot(get("/ui/ticket/K-1")).await.unwrap()).await;
     assert!(!html.contains("Create PR"), "{html}");
+}
+
+#[tokio::test]
+async fn the_view_diff_button_and_endpoint_work_without_a_remote() {
+    // A real repo whose branch carries a change against main. No remote is ever added — a local diff needs none, which
+    // is the whole point (Create PR is the button that needs one).
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    let commit = |msg: &str| {
+        let sign = ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"];
+        let args: Vec<&str> = sign.iter().chain(&["commit", "-q", "-m", msg]).copied().collect();
+        git(repo, &args).unwrap();
+    };
+    git(repo, &["init", "-q", "-b", "main"]).unwrap();
+    std::fs::write(repo.join("f.rs"), "fn main() {}\n").unwrap();
+    git(repo, &["add", "f.rs"]).unwrap();
+    commit("seed");
+    git(repo, &["checkout", "-q", "-b", "k-1/work"]).unwrap();
+    std::fs::write(repo.join("f.rs"), "fn main() {\n    println!(\"hi\");\n}\n").unwrap();
+    git(repo, &["add", "f.rs"]).unwrap();
+    commit("work");
+    git(repo, &["checkout", "-q", "main"]).unwrap();
+
+    let store = Store::at(repo.join(".kanban"));
+    store.init().unwrap();
+    let router = router_for(&store);
+
+    seed_ticket(&store, "In review with a diff");
+    to_review_with_branch(&store, "K-1", "k-1/work");
+
+    // The button shows on a review ticket with a local branch — no remote required (contrast Create PR).
+    let html = body_text(router.clone().oneshot(get("/ui/ticket/K-1")).await.unwrap()).await;
+    assert!(html.contains("View diff") && html.contains("/ui/ticket/K-1/diff"), "{html}");
+
+    // The endpoint renders the branch's own change against main.
+    let res = router.clone().oneshot(get("/ui/ticket/K-1/diff")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let diff = body_text(res).await;
+    assert!(diff.contains("f.rs") && diff.contains("println!"), "the diff names the changed file and its hunk: {diff}");
+
+    // A todo ticket has no branch: no button, and the endpoint refuses with a toast rather than an empty modal.
+    seed_ticket(&store, "Still todo");
+    let html = body_text(router.clone().oneshot(get("/ui/ticket/K-2")).await.unwrap()).await;
+    assert!(!html.contains("View diff"), "{html}");
+    let res = router.clone().oneshot(get("/ui/ticket/K-2/diff")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(res.headers()["hx-retarget"], "#toasts");
+
+    // Deleting the local branch (merged and cleaned up) hides the button and fails the endpoint cleanly.
+    git(repo, &["branch", "-D", "k-1/work"]).unwrap();
+    let html = body_text(router.clone().oneshot(get("/ui/ticket/K-1")).await.unwrap()).await;
+    assert!(!html.contains("View diff"), "{html}");
+    let res = router.oneshot(get("/ui/ticket/K-1/diff")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
 
 #[tokio::test]

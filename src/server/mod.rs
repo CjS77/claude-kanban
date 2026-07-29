@@ -175,6 +175,7 @@ pub fn router(app: AppState) -> Router {
         .route("/ui/ticket/{id}/status", post(routes::ticket_status))
         .route("/ui/ticket/{id}/note", post(routes::add_note))
         .route("/ui/ticket/{id}/create-pr", post(routes::create_pr))
+        .route("/ui/ticket/{id}/diff", get(routes::ticket_diff))
         .route("/ui/ticket/{id}/auto-merge", post(routes::ticket_auto_merge))
         .route("/ui/ticket/{id}/discard", post(routes::discard_ticket))
         .route("/ui/ticket/{id}/delete", post(routes::delete_ticket))

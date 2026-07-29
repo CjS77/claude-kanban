@@ -30,6 +30,7 @@ tower-http = { version = "0.7.0", features = ["trace"] }
 askama = "0.16.0"                                             # compile-time templates; handlers render() to Html<String>
 rust-embed = "8"                                            # web assets baked into the binary (--assets-dir overrides for dev)
 open = "5"                                                  # open the board in a browser on `serve`
+unidiff = "0.4"                                            # parse `git diff` output into the model templates/diff.html renders
 
 # Live updates (SSE)
 tokio-stream = { version = "0.1.18", features = ["sync"] }  # BroadcastStream over the refresh channel
