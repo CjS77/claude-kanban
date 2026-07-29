@@ -37,6 +37,21 @@ fn seed_if_absent(path: &Path, contents: &str) -> Result<(), StoreError> {
     fs::write(path, contents).map_err(|source| StoreError::Io { path: path.to_path_buf(), source })
 }
 
+/// Seed the `merge.sh` land helper beside the board, executable, keeping any customized copy. Like the board it is
+/// committed rather than gitignored — it travels with the repo so every checkout has the manual land flow on hand.
+fn seed_merge_sh(path: &Path) -> Result<(), StoreError> {
+    if path.exists() {
+        return Ok(());
+    }
+    fs::write(path, MERGE_SH).map_err(|source| StoreError::Io { path: path.to_path_buf(), source })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).map_err(|source| StoreError::Io { path: path.to_path_buf(), source })?;
+    }
+    Ok(())
+}
+
 /// A file's raw bytes, or `None` when it isn't there. The upgrade path reads the board this way: it needs the original
 /// bytes to preserve, and an absent board is nothing to upgrade rather than an error.
 fn read_bytes_if_present(path: &Path) -> Result<Option<Vec<u8>>, StoreError> {
@@ -64,8 +79,15 @@ const CLAIMS_FILE: &str = "claims.json";
 pub(crate) const CONFIG_FILE: &str = "config.json";
 /// File name of the landing sweep's branch-tip observations, gitignored like the claims sidecar (machine-local facts).
 const LAND_STATE_FILE: &str = "land-state.json";
-/// Store-local gitignore written by `init`, covering the runtime artifacts (never the board itself).
-const STORE_GITIGNORE: &str = "# claude-kanban runtime artifacts — machine-local, never committed. (board.json and this file ARE committed.)\n.lock\n*.tmp\nserve.pid\nclaims.json\nland-state.json\n";
+/// Store-local gitignore written by `init`, covering the runtime artifacts (never the board, config, or land helper).
+const STORE_GITIGNORE: &str = "# claude-kanban runtime artifacts — machine-local, never committed. (board.json, merge.sh and this file ARE committed.)\n.lock\n*.tmp\nserve.pid\nclaims.json\nland-state.json\n";
+
+/// File name of the manual land helper written by `init`, committed like the board so it travels with the repo.
+const MERGE_SH_FILE: &str = "merge.sh";
+
+/// The manual land flow shipped into every project by `init`: rebase a branch onto main, fast-forward main, delete the
+/// branch. The canonical copy is `merge.sh` at the repo root; embedding it keeps the shipped copy from drifting.
+const MERGE_SH: &str = include_str!("../../merge.sh");
 
 /// Store-local config written by `init`, and committed like the board. Every dial appears explicitly at its default so
 /// the file documents itself. `port` is `null`: an explicit port fails loudly when taken, while no choice means "try
@@ -188,9 +210,10 @@ impl Store {
         io::write_json_atomic(&self.land_state_path(), state)
     }
 
-    /// Create the store directory, seed an empty board, a default `config.json`, and a store-local `.gitignore` covering
-    /// the runtime artifacts. Refuses to touch an existing board; an existing config or gitignore is left alone, so a
-    /// hand-edited one survives. Runs under the lock so two racing `init`s can't both win.
+    /// Create the store directory, seed an empty board, a default `config.json`, a store-local `.gitignore` covering the
+    /// runtime artifacts, and the `merge.sh` land helper. Refuses to touch an existing board; an existing config,
+    /// gitignore, or merge.sh is left alone, so a hand-edited one survives. Runs under the lock so two racing `init`s
+    /// can't both win.
     pub fn init(&self) -> Result<(), StoreError> {
         fs::create_dir_all(&self.dir).map_err(|source| StoreError::Io { path: self.dir.clone(), source })?;
         let _lock = lock::acquire(&self.dir)?;
@@ -200,6 +223,7 @@ impl Store {
         io::write_json_atomic(&self.board_path(), &Board::empty())?;
         seed_if_absent(&self.config_path(), &seeded_config(&self.dir))?;
         seed_if_absent(&self.dir.join(".gitignore"), STORE_GITIGNORE)?;
+        seed_merge_sh(&self.dir.join(MERGE_SH_FILE))?;
         tracing::info!(path = %self.board_path().display(), "board initialised");
         Ok(())
     }
@@ -406,6 +430,16 @@ mod tests {
 
         let gitignore = std::fs::read_to_string(store.dir().join(".gitignore")).unwrap();
         assert!(gitignore.contains("land-state.json"), "the landing observations sidecar is machine-local");
+
+        // merge.sh ships beside the board — the manual land flow, committed so every checkout has it on hand.
+        let merge_sh = store.dir().join("merge.sh");
+        assert_eq!(std::fs::read_to_string(&merge_sh).unwrap(), MERGE_SH, "shipped merge.sh matches the embedded copy");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&merge_sh).unwrap().permissions().mode();
+            assert!(mode & 0o111 != 0, "merge.sh is executable, got mode {mode:o}");
+        }
     }
 
     #[test]
@@ -420,6 +454,19 @@ mod tests {
         let config = crate::config::Config::load(store.dir()).unwrap();
         assert_eq!(config.max_workers(), 4, "a hand-edited config survives init");
         assert_eq!(config.port, Some(5050));
+    }
+
+    #[test]
+    fn init_leaves_an_existing_merge_sh_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::at(dir.path().join(".kanban"));
+        std::fs::create_dir_all(store.dir()).unwrap();
+        let custom = "#!/usr/bin/env bash\n# my own land flow\n";
+        std::fs::write(store.dir().join("merge.sh"), custom).unwrap();
+
+        store.init().unwrap();
+
+        assert_eq!(std::fs::read_to_string(store.dir().join("merge.sh")).unwrap(), custom, "a hand-edited merge.sh survives init");
     }
 
     #[test]
