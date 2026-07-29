@@ -5,6 +5,22 @@ All notable changes to this project are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.0] - 2026-07-29
+
+### Added
+
+- A local, GitHub-style diff viewer for review-column tickets. A View diff button computes the branch's own changes
+  against main (three-dot range), the `unidiff` crate parses them, and an Askama template renders file/hunk/line tables
+  in a theme-aware GitHub palette, with highlight.js colouring the code (and the ticket markdown code blocks) in the
+  browser. Purely local — no push, no remote — unlike Create PR. Adds `GET /ui/ticket/{id}/diff` behind a `can_diff`
+  gate on the detail pane.
+- A file table of contents and collapsible files in the diff modal. A sticky left-hand TOC lists every changed file with
+  anchor links to each file's section, and each file is a `<details>` whose header collapses its hunks. Both are pure
+  HTML/CSS, no new JavaScript; the modal keeps its width and the code rows their size.
+- `kanban:init` seeds `.kanban/merge.sh` (the manual land helper) alongside board.json, config.json and .gitignore,
+  embedding the repo's canonical merge.sh via `include_str!` so the shipped copy never drifts. It is written executable
+  and committed rather than gitignored, and a hand-edited copy survives re-init (seed-if-absent).
+
 ## [2.4.0] - 2026-07-28
 
 ### Added
@@ -123,6 +139,7 @@ First tagged release, covering the plugin's initial publication.
 - The create-ticket epic dropdown stays in sync with the board.
 - Markdown panes that arrive as top-level swap elements render.
 
+[2.5.0]: https://github.com/CjS77/claude-kanban/compare/v2.4.0...v2.5.0
 [2.4.0]: https://github.com/CjS77/claude-kanban/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/CjS77/claude-kanban/compare/v2.2.0...v2.3.0
 [2.2.0]: https://github.com/CjS77/claude-kanban/compare/v2.1.0...v2.2.0
