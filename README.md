@@ -52,6 +52,20 @@ Dependencies (`depends_on`) block a ticket until they're all done — and since 
 
 **Upgrading from 1.x:** a v1 board upgrades itself in memory on first read and persists on the first write — commit the changed `board.json`. Collaborators still on a 1.x plugin can't read a v2 board, so upgrade together. Old done tickets stay done; drag one back to review if you want the landing machinery to re-judge it.
 
+## Accessing Kanban on a remote server
+
+The board is a loopback-only server — it binds `127.0.0.1` and never listens on the network. To reach one running on a remote host, forward its port over SSH and open the tunnel locally:
+
+```bash
+ssh -L 4747:localhost:4747 you@server   # forward the same port on both ends
+# then open http://localhost:4747 in your browser
+```
+
+The gotcha: the server refuses anything whose `Host` header isn't exactly `localhost:<port>` or `127.0.0.1:<port>` — a `403 this board only answers to localhost`. This is deliberate anti-DNS-rebinding hardening, not a network check, and it trips two easy-to-miss ways over a tunnel:
+
+- **The local forwarded port must equal the remote server's port.** The `Host` header carries the port *your browser* dials, so `ssh -L 8080:localhost:4747` makes the browser send `Host: localhost:8080`, which the remote's allowlist (`localhost:4747`) rejects. Forward `4747:localhost:4747`, and browse to `localhost` or `127.0.0.1` — never the machine's hostname or LAN IP.
+- **Know the remote port.** With no explicit choice `serve` hunts off 4747 when it's taken, so the board may not be where you expect. Pin it with `--port 4747` (or `"port"` in `.kanban/config.json`), and confirm on the server with `cat .kanban/serve.pid` — it records the live `pid` and `port`.
+
 ## Features
 
 - Four-column board: create, edit, drag, and delete tickets and epics; one search box narrows it — `landed: true, label: ux, realtime
