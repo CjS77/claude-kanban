@@ -535,6 +535,9 @@ pub struct DetailEditTpl {
     pub epics: Vec<EpicOptionCtx>,
     pub models: [&'static str; 4],
     pub efforts: Vec<EffortOptCtx>,
+    /// Whether the form offers the "Hand to minesweeper" checkbox: feature compiled in, ticket unbound, still in todo.
+    /// Anything already delegated, claimed, or past todo has nothing sensible for the box to do.
+    pub can_hand_over: bool,
 }
 
 #[derive(Debug)]
@@ -575,6 +578,7 @@ pub fn detail_edit(board: &Board, id: &crate::store::model::TicketId) -> Option<
         epics: epic_options(board, t.epic.as_ref().map(|e| e.0.as_str())),
         models: MODEL_SUGGESTIONS,
         efforts: effort_options(t.effort),
+        can_hand_over: cfg!(feature = "minesweeper") && t.external.is_none() && t.column.id() == ColumnId::Todo,
     })
 }
 

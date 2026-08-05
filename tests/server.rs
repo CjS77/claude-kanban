@@ -330,6 +330,32 @@ async fn the_create_modal_hand_to_minesweeper_checkbox_forces_ready_and_reports_
     assert!(html.contains("Hand to minesweeper"), "{html}");
 }
 
+#[cfg(feature = "minesweeper")]
+#[tokio::test]
+async fn the_edit_modal_offers_the_handoff_checkbox_and_saving_with_it_hands_over() {
+    let (_dir, router, store) = test_app();
+    seed_ticket(&store, "grew into something delegable");
+
+    // Offered for an unbound todo ticket…
+    let html = body_text(router.clone().oneshot(get("/ui/ticket/K-1/edit")).await.unwrap()).await;
+    assert!(html.contains("Hand to minesweeper"), "{html}");
+
+    // …and saving with it ticked forces ready and attempts the handoff (no repo here, so it comes back noted).
+    let version = store.read_board().unwrap().version;
+    let form = "title=grew+into+something+delegable&body=spec&minesweeper=on";
+    let res = router.clone().oneshot(post("/ui/ticket/K-1", version, form)).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let board = store.read_board().unwrap();
+    let t = board.ticket(&TicketId("K-1".into())).unwrap();
+    assert_eq!(t.status, Status::Ready);
+    assert!(t.notes.last().unwrap().text.contains("handing to minesweeper failed"), "{:?}", t.notes);
+
+    // A ticket already bound is past handing over — the edit form hides the box.
+    ops::apply(&store, None, Op::BindExternal { id: TicketId("K-1".into()), external: Some(External::github_issue(9)) }).unwrap();
+    let html = body_text(router.oneshot(get("/ui/ticket/K-1/edit")).await.unwrap()).await;
+    assert!(!html.contains("Hand to minesweeper"), "{html}");
+}
+
 /// Seed an epic and file `titles` under it, returning the epic's id.
 fn seed_epic(store: &Store, title: &str, titles: &[&str]) -> EpicId {
     let created =

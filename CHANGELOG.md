@@ -23,9 +23,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Cargo feature `minesweeper` (default-on) — `--no-default-features` compiles the whole delegation egress out for
   installs that want the binary's network surface limited to the Create PR click and the landing poll.
 - Settings pane: the delegation toggle, eligibility label, and flag labels.
-- A **Hand to minesweeper** checkbox on the New-ticket modal: creates the ticket as `ready` and immediately mirrors,
-  claims, and binds it for the daemon — its own per-ticket opt-in, working with or without the project toggle. A failed
-  handoff releases the claim back to todo with a note explaining why.
+- A **Hand to minesweeper** checkbox on the New-ticket and Edit modals: sets the ticket `ready` and immediately
+  mirrors, claims, and binds it for the daemon — its own per-ticket opt-in, working with or without the project
+  toggle. The edit form offers it only for unbound todo tickets. A failed handoff releases the claim back to todo
+  with a note explaining why.
 
 ### Fixed
 

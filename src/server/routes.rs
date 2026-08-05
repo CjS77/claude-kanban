@@ -325,6 +325,9 @@ pub struct UpdateTicketForm {
     model: String,
     #[serde(default)]
     effort: String,
+    /// The "Hand to minesweeper" checkbox — rendered only for unbound todo tickets; unchecked posts nothing.
+    #[serde(default)]
+    minesweeper: String,
 }
 
 /// The edit form posts every field, so the patch sets every descriptive field — an emptied input really does clear it.
@@ -335,6 +338,7 @@ pub async fn update_ticket(
     Form(form): Form<UpdateTicketForm>,
 ) -> Result<Html<String>, AppError> {
     let id = TicketId(id);
+    let hand_over = cfg!(feature = "minesweeper") && !form.minesweeper.trim().is_empty();
     let patch = TicketPatch {
         title: Some(form.title),
         body: Some(form.body),
@@ -346,7 +350,20 @@ pub async fn update_ticket(
         // No control on the edit form yet, and this is the one field an omission must not clear.
         auto_merge: None,
     };
-    mutate_then_detail(&app, &headers, Op::UpdateTicket { id: id.clone(), patch }, id).await
+    let op = Op::UpdateTicket { id: id.clone(), patch };
+    if !hand_over {
+        return mutate_then_detail(&app, &headers, op, id).await;
+    }
+    // Handing over implies the freshly saved spec is ready to be worked; the handoff itself is best-effort — its
+    // failures land as a note, and the refreshed pane the save answers with shows whatever actually happened.
+    let version = client_version(&headers)?;
+    blocking(&app, move |store| {
+        ops::apply(store, Some(version), op)?;
+        ops::apply(store, None, Op::SetTicketStatus { id: id.clone(), status: crate::store::model::Status::Ready })?;
+        crate::minesweeper::hand_over(store, &id);
+        rendered_detail(store, &id)
+    })
+    .await
 }
 
 #[derive(Debug, Deserialize)]
