@@ -12,11 +12,17 @@
 //! ordinary landing machinery's business, not this module's.
 
 #[cfg(feature = "minesweeper")]
-pub use active::{delegate_entering_doing, poll};
+pub use active::{delegate_entering_doing, hand_over, poll};
 
 /// Compiled out: delegation quietly does nothing — but a board *configured* for it deserves one loud line.
 #[cfg(not(feature = "minesweeper"))]
 pub fn delegate_entering_doing(store: &crate::store::Store, _id: &crate::store::model::TicketId) {
+    warn_if_configured(store);
+}
+
+/// Compiled out. Unreachable from the UI — the create modal hides its checkbox in feature-off builds.
+#[cfg(not(feature = "minesweeper"))]
+pub fn hand_over(store: &crate::store::Store, _id: &crate::store::model::TicketId) {
     warn_if_configured(store);
 }
 
@@ -79,6 +85,44 @@ mod active {
         }
     }
 
+    /// The Create-modal checkbox: hand a freshly created ticket straight to the daemon. Ticking the box is the
+    /// per-ticket opt-in, so this runs with or without the project's `minesweeper` toggle. The claim does the
+    /// eligibility work (ready, unblocked, unclaimed). Failures differ from the hook's: the hook leaves a failed
+    /// ticket in doing because its claimant was real, but here the only claimant is the daemon — nothing was
+    /// delegated, so a failed handoff releases the claim and the card returns to todo wearing the explanation.
+    pub fn hand_over(store: &Store, id: &TicketId) {
+        if let Err(e) = ops::apply(store, None, Op::Claim { id: id.clone(), agent: DELEGATE_AGENT.into() }) {
+            note_failure(store, id, &format!("handing to minesweeper failed: {e} — clear that, then delegate again"));
+            return;
+        }
+        let outcome = Config::load(store.dir()).map_err(anyhow::Error::from).and_then(|config| delegate_ticket(store, id, &config));
+        match outcome {
+            Ok(Some(url)) => tracing::info!(ticket = %id, %url, "handed to minesweeper"),
+            Ok(None) => release_noting(store, id, "handing to minesweeper failed: no git repository or remote to mirror the issue to"),
+            Err(e) => {
+                release_noting(store, id, &format!("handing to minesweeper failed: {e:#} — fix the cause and delegate again, or run /kanban:delegate"));
+            }
+        }
+    }
+
+    /// Record a handoff failure on the card — the note is the record; a card that silently did nothing would be a bug
+    /// report waiting to happen.
+    fn note_failure(store: &Store, id: &TicketId, text: &str) {
+        tracing::warn!(ticket = %id, "{text}");
+        if let Err(e) = ops::apply(store, None, Op::AddNote { id: id.clone(), text: text.into(), author: Some("kanban".into()) }) {
+            tracing::warn!(ticket = %id, error = %e, "and the failure could not be noted on the card either");
+        }
+    }
+
+    /// Undo the daemon's claim, then note why. Release before noting so the card is back in todo by the time the SSE
+    /// refresh paints the note.
+    fn release_noting(store: &Store, id: &TicketId, text: &str) {
+        if let Err(e) = ops::apply(store, None, Op::Release { id: id.clone() }) {
+            tracing::warn!(ticket = %id, error = %e, "could not release the undelegated ticket — it stays in doing");
+        }
+        note_failure(store, id, text);
+    }
+
     /// `Ok(None)` means a guard decided this entry into doing is no delegation: toggle off, ticket moved on, rework or
     /// local work (a branch is recorded), a stub claimed for refinement, already bound, or nowhere to mirror to. The
     /// guards run against fresh state — the hook fires after the op released the lock — and [`Op::Delegate`] re-checks
@@ -88,6 +132,12 @@ mod active {
         if !config.minesweeper() {
             return Ok(None);
         }
+        delegate_ticket(store, id, &config)
+    }
+
+    /// The toggle-blind half of [`delegate`]: guards, mirror, bind. [`hand_over`] calls it directly — the checkbox is
+    /// its own authorisation.
+    fn delegate_ticket(store: &Store, id: &TicketId, config: &Config) -> anyhow::Result<Option<String>> {
         let board = store.read_board()?;
         let Some(ticket) = board.ticket(id) else { return Ok(None) };
         let Column::Doing { branch, .. } = &ticket.column else { return Ok(None) };
@@ -424,6 +474,55 @@ mod active {
         fn the_mirror_footer_matches_the_delegate_skills_wording() {
             // The dedup search and /kanban:delegate must agree on this line, or each will duplicate the other's issues.
             assert_eq!(mirror_footer(&TicketId("K-7".into())), "Mirrored from kanban ticket K-7.");
+        }
+
+        fn scratch() -> (tempfile::TempDir, Store) {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Store::at(dir.path().join(".kanban"));
+            store.init().unwrap();
+            (dir, store)
+        }
+
+        fn create(store: &Store, title: &str, depends_on: Vec<TicketId>) -> TicketId {
+            let op = Op::CreateTicket {
+                title: title.into(),
+                body: String::new(),
+                epic: None,
+                labels: vec![],
+                depends_on,
+                status: crate::store::model::Status::Ready,
+                model: None,
+                effort: None,
+                auto_merge: false,
+            };
+            TicketId(ops::apply(store, None, op).unwrap().created_ids[0].clone())
+        }
+
+        /// Both handoff failure shapes stop before any `gh` subprocess could spawn (the scratch store has no repo at
+        /// all), and both leave the card in todo, unclaimed, wearing the explanation.
+        #[test]
+        fn a_failed_handoff_notes_the_card_and_leaves_it_unclaimed_in_todo() {
+            let (_dir, store) = scratch();
+
+            // Blocked: the claim itself refuses — the eligibility contract (the daemon is dependency-blind).
+            let dep = create(&store, "unfinished dependency", vec![]);
+            let blocked = create(&store, "wants delegation too early", vec![dep.clone()]);
+            hand_over(&store, &blocked);
+            let board = store.read_board().unwrap();
+            let t = board.ticket(&blocked).unwrap();
+            assert!(matches!(t.column, Column::Todo), "{:?}", t.column);
+            assert!(t.notes.last().unwrap().text.contains("handing to minesweeper failed"), "{:?}", t.notes);
+            assert!(store.read_claims().unwrap().is_empty());
+
+            // No repo/remote: the claim succeeds, the guards decline, and the daemon's claim is released again —
+            // a card saying "minesweeper has this" with no issue behind it would be a lie.
+            hand_over(&store, &dep);
+            let board = store.read_board().unwrap();
+            let t = board.ticket(&dep).unwrap();
+            assert!(matches!(t.column, Column::Todo), "released back: {:?}", t.column);
+            assert!(t.external.is_none());
+            assert!(t.notes.last().unwrap().text.contains("no git repository or remote"), "{:?}", t.notes);
+            assert!(store.read_claims().unwrap().is_empty(), "the released claim is gone");
         }
 
         #[test]

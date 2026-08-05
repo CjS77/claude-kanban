@@ -193,6 +193,13 @@
                     </label>
                 </div>
                 <div class="modal-action mt-1">
+                    {% if minesweeper_available %}
+                    <label class="flex items-center gap-2 text-sm mr-auto cursor-pointer"
+                           title="creates the ticket as ready and immediately mirrors it to a labelled GitHub issue for a minesweeper daemon — the checkbox is its own opt-in, no settings toggle needed">
+                        <input type="checkbox" name="minesweeper" class="checkbox checkbox-sm">
+                        Hand to minesweeper
+                    </label>
+                    {% endif %}
                     <button type="button" class="btn btn-ghost" onclick="this.closest('dialog').close()">Cancel</button>
                     <button type="submit" class="btn btn-primary">Create</button>
                 </div>

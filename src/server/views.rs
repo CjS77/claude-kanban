@@ -80,6 +80,9 @@ pub struct PageTpl {
     pub models: [&'static str; 4],
     /// Effort levels for the create form's select, all unselected — a new ticket inherits by default.
     pub efforts: Vec<EffortOptCtx>,
+    /// Whether the binary was built with the `minesweeper` feature — gates the create modal's handoff checkbox. The
+    /// checkbox is deliberately toggle-blind: ticking it is the per-ticket opt-in, config or no config.
+    pub minesweeper_available: bool,
     pub filter_oob: bool,
 }
 
@@ -100,6 +103,7 @@ pub fn page(title: String, board: &Board) -> PageTpl {
         epics: epic_options(board, None),
         models: MODEL_SUGGESTIONS,
         efforts: effort_options(None),
+        minesweeper_available: cfg!(feature = "minesweeper"),
         filter_oob: false,
     }
 }

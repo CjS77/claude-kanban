@@ -7,8 +7,9 @@ argument-hint: "<ticket-id> [--label autofix|tryFix] [--agent minesweeper]"
 
 Mirror a board ticket to a GitHub issue so an issue-polling daemon (e.g. minesweeper) picks it up. This is the
 **manual, per-ticket path**: when the project's `minesweeper` config toggle is on, all of this happens automatically
-the moment a ready ticket enters `doing` (a claim or a browser drag), and the poller tracks the issue back — use this
-skill for boards where the toggle is off, or for a one-off with a different label or agent.
+the moment a ready ticket enters `doing` (a claim or a browser drag), and the browser's New-ticket modal has a
+**Hand to minesweeper** checkbox doing the same for a single ticket at creation, toggle or no toggle. Use this skill
+for tickets that already exist on a toggle-off board, or for a one-off with a different label or agent.
 
 Arguments given: `$ARGUMENTS`
 - The ticket id is required (e.g. `K-7`).

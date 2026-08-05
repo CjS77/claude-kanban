@@ -270,6 +270,9 @@ pub struct CreateTicketForm {
     model: String,
     #[serde(default)]
     effort: String,
+    /// The "Hand to minesweeper" checkbox — unchecked posts nothing.
+    #[serde(default)]
+    minesweeper: String,
 }
 
 fn default_create_status() -> String {
@@ -281,18 +284,30 @@ pub async fn create_ticket(
     headers: HeaderMap,
     Form(form): Form<CreateTicketForm>,
 ) -> Result<StatusCode, AppError> {
+    // "Hand to minesweeper" implies the spec is ready to be worked — the checkbox overrides the status dropdown, and
+    // the handoff itself is best-effort after the create: its failures land as a note on the card, never a failed POST.
+    let hand_over = cfg!(feature = "minesweeper") && !form.minesweeper.trim().is_empty();
+    let status = if hand_over { crate::store::model::Status::Ready } else { parse_status(&form.status)? };
     let op = Op::CreateTicket {
         title: form.title,
         body: form.body,
         epic: opt(form.epic).map(EpicId),
         labels: csv(&form.labels),
         depends_on: csv(&form.depends_on).into_iter().map(TicketId).collect(),
-        status: parse_status(&form.status)?,
+        status,
         model: parse_model(&form.model),
         effort: parse_effort(&form.effort)?,
         auto_merge: false,
     };
-    mutate(&app, &headers, op).await
+    let version = client_version(&headers)?;
+    blocking(&app, move |store| {
+        let applied = ops::apply(store, Some(version), op)?;
+        if hand_over && let Some(id) = applied.created_ids.first() {
+            crate::minesweeper::hand_over(store, &TicketId(id.clone()));
+        }
+        Ok(StatusCode::NO_CONTENT)
+    })
+    .await
 }
 
 #[derive(Debug, Deserialize)]

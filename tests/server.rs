@@ -301,6 +301,35 @@ async fn mutations_flow_create_move_status_delete() {
     assert!(store.read_board().unwrap().tickets.is_empty());
 }
 
+#[cfg(feature = "minesweeper")]
+#[tokio::test]
+async fn the_create_modal_hand_to_minesweeper_checkbox_forces_ready_and_reports_handoff_trouble() {
+    let (_dir, router, store) = test_app();
+
+    // The checkbox overrides the status dropdown, and the create must succeed even though the handoff cannot (the
+    // test app has no git repo): the card comes back to todo wearing the explanation instead of a failed POST.
+    let res = router.clone().oneshot(post("/ui/ticket", 0, "title=Ship+it&status=draft&minesweeper=on")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let board = store.read_board().unwrap();
+    let t = board.ticket(&TicketId("K-1".into())).unwrap();
+    assert_eq!(t.status, Status::Ready, "handing over implies the spec is ready");
+    assert!(matches!(t.column, claude_kanban::store::model::Column::Todo), "failed handoff released it: {:?}", t.column);
+    assert!(t.notes.last().unwrap().text.contains("handing to minesweeper failed"), "{:?}", t.notes);
+
+    // Unchecked, the dropdown is honoured and no handoff is attempted.
+    let version = board.version;
+    let res = router.clone().oneshot(post("/ui/ticket", version, "title=Just+a+draft&status=draft")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let t2 = store.read_board().unwrap();
+    let t2 = t2.ticket(&TicketId("K-2".into())).unwrap();
+    assert_eq!(t2.status, Status::Draft);
+    assert!(t2.notes.is_empty());
+
+    // And the modal actually offers the checkbox in feature-on builds.
+    let html = body_text(router.oneshot(get("/")).await.unwrap()).await;
+    assert!(html.contains("Hand to minesweeper"), "{html}");
+}
+
 /// Seed an epic and file `titles` under it, returning the epic's id.
 fn seed_epic(store: &Store, title: &str, titles: &[&str]) -> EpicId {
     let created =

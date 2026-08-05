@@ -366,8 +366,10 @@ of another. Three choices keep that door open:
   `possiblyDangerous`) or a closure without a PR is written onto the binding and noted, the card staying in `doing` for the human; a
   refine split (the daemon breaking one issue into sub-issues) is mirrored as claimed child tickets the parent depends on, the parent
   parking in `review` until every child lands **and a human closes the parent issue** — the one landing rule that needs no PR, and it
-  still carries a human fingerprint. With the toggle off, `/kanban:delegate` is the same flow by hand, and the human moves the card to
-  review when the PR appears. Either way claude-kanban never creates a worktree or branch for an external ticket, and never lands one
+  still carries a human fingerprint. The create modal's **Hand to minesweeper** checkbox is the per-ticket version of the same handoff —
+  create as `ready`, claim for the daemon, mirror, bind — and is deliberately toggle-blind: ticking it is its own opt-in, and a failed
+  handoff releases the daemon's claim back to todo with a note rather than leaving a card that lies about who has it. With the toggle
+  off, `/kanban:delegate` is the same flow by hand, and the human moves the card to review when the PR appears. Either way claude-kanban never creates a worktree or branch for an external ticket, and never lands one
   from local branch state alone. Two daemon-side constraints worth knowing: minesweeper only polls the 30 most recent open issues, and
   the kanban `minesweeper_label` must agree with the daemon's `alwaysFixLabel`/`tryFixLabel` (and `minesweeper_flag_labels` with its
   failure labels) or tickets delegate into the void.

@@ -42,6 +42,9 @@ fn minesweeper_gh_inner() {
     let line = if let Some(id) = mode.strip_prefix("delegate=") {
         minesweeper::delegate_entering_doing(&store, &TicketId(id.into()));
         "delegated".to_owned()
+    } else if let Some(id) = mode.strip_prefix("handover=") {
+        minesweeper::hand_over(&store, &TicketId(id.into()));
+        "handed".to_owned()
     } else {
         match (minesweeper::poll(&store), land::sweep(&store)) {
             (Ok(p), Ok(s)) => format!("polled={p} swept={s}"),
@@ -104,7 +107,7 @@ fn the_delegation_lifecycle_mirrors_tracks_flags_refines_and_lands() {
         "#!/bin/sh\necho \"$@\" >> {log}\ncase \"$1 $2\" in\n\
          \"issue list\") cat {answers}/search.json 2>/dev/null || echo '[]' ;;\n\
          \"label create\") : ;;\n\
-         \"issue create\") echo \"$@\" >> {answers}/created.log; echo 'https://github.com/example/repo/issues/42' ;;\n\
+         \"issue create\") echo \"$@\" >> {answers}/created.log; cat {answers}/issue-url.txt 2>/dev/null || echo 'https://github.com/example/repo/issues/42' ;;\n\
          \"issue view\") cat {answers}/issue-$3.json ;;\n\
          \"repo view\") echo '{{\"owner\":{{\"login\":\"example\"}},\"name\":\"repo\"}}' ;;\n\
          \"api graphql\") cat {answers}/graphql.json ;;\n\
@@ -235,4 +238,19 @@ fn the_delegation_lifecycle_mirrors_tracks_flags_refines_and_lands() {
     let board = store.read_board().unwrap();
     assert!(board.ticket(&k6).unwrap().external.is_none());
     assert!(matches!(&board.ticket(&k6).unwrap().column, Column::Doing { owner, .. } if owner == "claude"));
+
+    // (g) The create-modal handoff checkbox works with the toggle STILL OFF — ticking the box is its own opt-in:
+    // claim for the daemon, mirror, bind, all in one go.
+    std::fs::remove_file(answers.join("search.json")).unwrap();
+    std::fs::write(answers.join("issue-url.txt"), "https://github.com/example/repo/issues/47").unwrap();
+    let k7 = create_ticket(&store, "hand me over");
+    assert_eq!(run_with_path(&shim_path, store.dir(), &out, "handover=K-7"), "handed");
+    let created = std::fs::read_to_string(answers.join("created.log")).unwrap();
+    assert!(created.contains("K-7: hand me over"), "{created}");
+    let board = store.read_board().unwrap();
+    let t7 = board.ticket(&k7).unwrap();
+    assert_eq!(t7.external.as_ref().unwrap().number, 47);
+    assert!(matches!(&t7.column, Column::Doing { owner, .. } if owner == "minesweeper"));
+    assert!(t7.notes.last().unwrap().text.contains("issue #47"), "{:?}", t7.notes);
+    assert_eq!(store.read_claims().unwrap().iter().find(|c| c.ticket == k7).unwrap().agent, "minesweeper");
 }
