@@ -372,12 +372,39 @@ impl PrState {
     }
 }
 
-/// A binding to a work item in another system: `{provider, kind, number}`, e.g. GitHub issue 42.
+/// A binding to a work item in another system: `{provider, kind, number}`, e.g. GitHub issue 42. The extra fields are
+/// the minesweeper poll's durable observations — recorded on the board like [`PrRef`]'s `state`, so every consumer (and
+/// every restart, and every feature-off build) sees them without asking the network again.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct External {
     pub provider: String,
     pub kind: String,
     pub number: u64,
+    /// The issue was observed closed on GitHub — for a refined parent, half of the proof that lands it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub closed: bool,
+    /// A flag label observed on the issue (e.g. `minesweeperFailed`) — the ticket stays in `doing`, wearing it, until a
+    /// human decides.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flag: Option<String>,
+    /// Sub-issue numbers minesweeper refined this issue into, recorded when their mirror tickets were created.
+    /// Non-empty marks a *refined parent* — the one external shape that can land without a PR.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sub_issues: Vec<u64>,
+}
+
+impl External {
+    /// A plain GitHub-issue binding — the shape the delegation hook, the delegate skill, and the sub-issue mirror create.
+    #[must_use]
+    pub fn github_issue(number: u64) -> External {
+        External { provider: "github".into(), kind: "issue".into(), number, closed: false, flag: None, sub_issues: vec![] }
+    }
+
+    /// Whether this binding is a GitHub issue — the only shape the minesweeper machinery knows how to track.
+    #[must_use]
+    pub fn is_github_issue(&self) -> bool {
+        self.provider == "github" && self.kind == "issue"
+    }
 }
 
 /// One entry in a ticket's progress log.
@@ -751,6 +778,27 @@ mod tests {
         let v = serde_json::to_value(&armed).unwrap();
         assert_eq!(v["auto_merge"], true);
         assert_eq!(serde_json::from_value::<Epic>(v).unwrap(), armed);
+    }
+
+    /// The minesweeper observations are the same additive-field story: a binding written before they existed parses
+    /// with all three unset, and unset stays off the wire — no existing board grows the keys by being read and rewritten.
+    #[test]
+    fn external_observations_stay_off_the_wire_when_unset() {
+        let bare: External = serde_json::from_str(r#"{ "provider": "github", "kind": "issue", "number": 42 }"#).unwrap();
+        assert_eq!(bare, External::github_issue(42), "a pre-extension binding reads as unobserved");
+
+        let v = serde_json::to_value(&bare).unwrap();
+        assert!(v.get("closed").is_none() && v.get("flag").is_none() && v.get("sub_issues").is_none());
+
+        let observed = External { closed: true, flag: Some("minesweeperFailed".into()), sub_issues: vec![43, 44], ..bare };
+        let v = serde_json::to_value(&observed).unwrap();
+        assert_eq!(v["closed"], true);
+        assert_eq!(v["flag"], "minesweeperFailed");
+        assert_eq!(v["sub_issues"], serde_json::json!([43, 44]));
+        assert_eq!(serde_json::from_value::<External>(v).unwrap(), observed);
+
+        assert!(External::github_issue(1).is_github_issue());
+        assert!(!External { provider: "gitlab".into(), ..External::github_issue(1) }.is_github_issue());
     }
 
     /// A board written before the field existed: it parses, reads off, and costs no migration — the same additive-field

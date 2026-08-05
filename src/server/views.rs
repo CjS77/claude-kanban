@@ -161,6 +161,9 @@ pub struct CardCtx {
     /// The model/effort preference, pre-rendered as one badge — the point is spotting the expensive tickets at a glance.
     pub run: Option<String>,
     pub external: Option<String>,
+    /// Minesweeper trouble observed on the bound issue: a flag label verbatim, or the closed-without-a-PR shape. The
+    /// card wears it until a human acts — the progress log carries the full story.
+    pub external_flag: Option<String>,
     pub claim: Option<ClaimCtx>,
     pub branch: Option<String>,
     /// The `doing` owner, for cards that are owned but not live-claimed (e.g. dragged into doing by a human).
@@ -279,6 +282,7 @@ fn card(t: &TicketView, view: &BoardView, heads: Option<&HashSet<String>>) -> Ca
         labels: t.ticket.labels.clone(),
         run: run_badge(&t.ticket),
         external: t.ticket.external.as_ref().map(|e| format!("{} {}#{}", e.provider, e.kind, e.number)),
+        external_flag: external_flag(&t.ticket),
         claim: t.claim.as_ref().map(claim_ctx),
         branch: t.ticket.column.branch().map(str::to_owned),
         owner: match &t.ticket.column {
@@ -286,6 +290,20 @@ fn card(t: &TicketView, view: &BoardView, heads: Option<&HashSet<String>>) -> Ca
             _ => None,
         },
     }
+}
+
+/// The warning a delegated ticket wears when the minesweeper poll observed trouble: a flag label verbatim, or the
+/// closed-without-a-PR shape. Landed tickets drop it — the story is over — and a refined parent's closure is progress,
+/// not trouble, so `sub_issues` suppresses the closed variant.
+fn external_flag(t: &crate::store::model::Ticket) -> Option<String> {
+    let ext = t.external.as_ref()?;
+    if t.column.id() == ColumnId::Done {
+        return None;
+    }
+    ext.flag.clone().or_else(|| {
+        (ext.closed && t.column.id() == ColumnId::Doing && t.pr.is_none() && ext.sub_issues.is_empty())
+            .then(|| "closed without a PR".to_owned())
+    })
 }
 
 fn claim_ctx(c: &ClaimView) -> ClaimCtx {
@@ -332,6 +350,8 @@ pub struct TicketCtx {
     pub column: ColumnId,
     pub blocked: bool,
     pub external: Option<String>,
+    /// The same minesweeper-trouble warning the card wears.
+    pub external_flag: Option<String>,
     pub epic: Option<EpicRefCtx>,
     pub labels: Vec<String>,
     /// The model/effort preference as one badge, same as on the card.
@@ -464,6 +484,7 @@ pub fn detail(board: &Board, claims: &[Claim], id: &crate::store::model::TicketI
             column: t.column.id(),
             blocked: derive::blocked(t, board),
             external: t.external.as_ref().map(|e| format!("{} {}#{}", e.provider, e.kind, e.number)),
+            external_flag: external_flag(t),
             epic: epic.map(|e| EpicRefCtx { id: e.id.to_string(), title: e.title.clone(), color: e.color.clone() }),
             labels: t.labels.clone(),
             run: run_badge(t),
@@ -659,6 +680,10 @@ pub struct SettingsTpl {
     pub port: String,
     pub main_branch: String,
     pub poll_interval: String,
+    pub minesweeper: bool,
+    pub minesweeper_label: String,
+    /// Comma-separated in the input.
+    pub minesweeper_flag_labels: String,
     /// True right after a save — shows the confirmation (and the port-needs-restart caveat).
     pub saved: bool,
 }
@@ -676,6 +701,9 @@ pub fn settings(config: &crate::config::Config, saved: bool) -> SettingsTpl {
         port: show(config.port.as_ref()),
         main_branch: config.main_branch.clone().unwrap_or_default(),
         poll_interval: show(config.poll_interval.as_ref()),
+        minesweeper: config.minesweeper(),
+        minesweeper_label: config.minesweeper_label.clone().unwrap_or_default(),
+        minesweeper_flag_labels: config.minesweeper_flag_labels.join(", "),
         saved,
     }
 }

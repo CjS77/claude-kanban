@@ -140,7 +140,7 @@ async fn run_pass(store: &Store, with_gh: bool) {
     let store = store.clone();
     let outcome = tokio::task::spawn_blocking(move || {
         let swept = crate::land::sweep(&store)?;
-        let polled = if with_gh { crate::land::poll(&store)? } else { 0 };
+        let polled = if with_gh { crate::land::poll(&store)? + crate::minesweeper::poll(&store)? } else { 0 };
         anyhow::Ok((swept, polled))
     })
     .await;

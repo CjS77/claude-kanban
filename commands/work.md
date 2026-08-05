@@ -26,6 +26,25 @@ Your first `kanban_board` read carries the effective `max_workers` and `idle_tim
 Orthogonally, a ticket may name the `model` and `effort` its work deserves — see **Model and effort** below. That
 decides *how* a ticket is dispatched, not which loop you are in.
 
+## Minesweeper mode
+
+The same `kanban_board` read carries `minesweeper`. When it is `true`, this board delegates implementation to an
+external daemon and **you write no code for ready tickets**:
+
+- **Stubs are unchanged.** `action: refine` works exactly as **Refining a stub** below — specs are still yours to
+  write, and refining is how a stub becomes delegable in the first place.
+- **`action: implement` becomes a handoff.** The claim itself delegates: the binary mirrors the ticket to a labelled
+  GitHub issue and re-owns the card to `minesweeper`. After `kanban_claim`, re-read the ticket, confirm the external
+  binding appeared (the owner is now `minesweeper`), report the issue URL from the card's latest note, and continue
+  the loop. **No worktree, no implementation, no close-out** — steps 3–8, model/effort dispatch, `--push` and
+  auto-merge never run for a delegated ticket, and it occupies no worker slot in the parallel loop.
+- **If no binding appeared**, the card carries a `kanban` note saying why delegation failed. Report it and move on —
+  the ticket stays in doing for the human to sort out, like every other minesweeper failure.
+- **Hands off after the handoff.** The serve poller tracks the issue from here: a PR moves the card to review, the
+  merge reaching local main lands it. Delegated review tickets are not rework candidates for you — PR feedback is the
+  daemon's job. When idling, do mention delegated tickets that have sat in `doing` across several polls with no PR and
+  no flag: a daemon paused on API limits is invisible to the board, and only the human can go look.
+
 ## The loop
 
 Repeat until the user stops you (or you've done the one requested ticket — a ticket-id argument or `--one` ends the

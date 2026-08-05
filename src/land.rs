@@ -49,7 +49,7 @@ use crate::{
     pr,
     store::{
         Store,
-        model::{Column, ColumnId, PrRef, PrState, Ticket, TicketId},
+        model::{Board, Column, ColumnId, PrRef, PrState, Ticket, TicketId},
     },
     worktree,
 };
@@ -96,7 +96,7 @@ pub fn sweep_reporting(store: &Store) -> anyhow::Result<Sweep> {
 
     let mut swept = Sweep::default();
     board.tickets.iter().filter(|t| matches!(t.column, Column::Review { .. })).for_each(|t| {
-        match verdict(t, &repo, &main, &heads, &observations) {
+        match verdict(t, &board, &repo, &main, &heads, &observations) {
             Verdict::Land(reason) if land(store, t, &reason) => swept.landed += 1,
             // A refused landing is the CAS working, not a stall: the board moved, and the next pass reads it fresh.
             Verdict::Land(_) => {}
@@ -147,11 +147,13 @@ enum Verdict {
     Wait(String),
 }
 
-/// The proof rules, in order: local branch evidence, then the PR route, then — nothing proved it — the explanation.
-fn verdict(t: &Ticket, repo: &Path, main: &str, heads: &HashSet<String>, observations: &HashMap<String, String>) -> Verdict {
+/// The proof rules, in order: local branch evidence, then the PR route, then the refined parent, then — nothing proved
+/// it — the explanation.
+fn verdict(t: &Ticket, board: &Board, repo: &Path, main: &str, heads: &HashSet<String>, observations: &HashMap<String, String>) -> Verdict {
     branch_proof(t, repo, main, heads, observations)
         .or_else(|| pr_proof(t, repo, main))
-        .map_or_else(|| Verdict::Wait(waiting_on(t, main, heads, observations)), Verdict::Land)
+        .or_else(|| refined_parent_proof(t, board))
+        .map_or_else(|| Verdict::Wait(waiting_on(t, board, main, heads, observations)), Verdict::Land)
 }
 
 /// Rules 1-4: local branch evidence — never for external tickets (their branch was never a local ref).
@@ -194,15 +196,59 @@ fn pr_proof(t: &Ticket, repo: &Path, main: &str) -> Option<String> {
     }
 }
 
+/// Rule 6: a refined delegated parent. External tickets normally land only via a merged PR (rule 5) — but a parent that
+/// minesweeper split into sub-issues never gets one. It lands when its issue was observed closed — always a human act,
+/// the daemon never closes refined parents — and every mirrored sub-issue has landed as done-and-kept. Both halves are
+/// durable board facts, so the proof needs neither git nor the network; a *discarded* child keeps the parent in review
+/// forever, exactly as a discarded dependency keeps its dependents blocked.
+fn refined_parent_proof(t: &Ticket, board: &Board) -> Option<String> {
+    let ext = t.external.as_ref().filter(|e| e.is_github_issue())?;
+    if t.pr.is_some() || !ext.closed || ext.sub_issues.is_empty() {
+        return None;
+    }
+    ext.sub_issues.iter().all(|&n| sub_issue_landed(board, n)).then(|| {
+        format!("issue #{} closed and all {} mirrored sub-issue tickets landed", ext.number, ext.sub_issues.len())
+    })
+}
+
+/// Whether some board ticket bound to GitHub issue `n` sits in done, kept (not discarded).
+fn sub_issue_landed(board: &Board, n: u64) -> bool {
+    board.tickets.iter().any(|t| {
+        t.external.as_ref().is_some_and(|e| e.is_github_issue() && e.number == n)
+            && matches!(t.column, Column::Done { discarded: false, .. })
+    })
+}
+
 /// What this ticket is waiting for, once every rule has declined. Pure bookkeeping over facts already gathered — it asks
 /// git nothing, because git has just been asked and answered no.
-fn waiting_on(t: &Ticket, main: &str, heads: &HashSet<String>, observations: &HashMap<String, String>) -> String {
+fn waiting_on(t: &Ticket, board: &Board, main: &str, heads: &HashSet<String>, observations: &HashMap<String, String>) -> String {
     // A PR outranks the branch: it is the thing whose state the human is actually steering.
     if let Some(PrRef { number, state, .. }) = &t.pr {
         return match state {
             PrState::Merged => format!("PR #{number} is merged but its commit has not reached local {main} — pull {main}"),
             PrState::Open => format!("PR #{number} is open"),
             PrState::Closed => format!("PR #{number} was closed without merging — rework the ticket, or discard it"),
+        };
+    }
+    // A refined parent outranks the generic external answer: rule 6 is the route it will actually land by.
+    if let Some(ext) = t.external.as_ref().filter(|e| e.is_github_issue() && !e.sub_issues.is_empty()) {
+        let outstanding: Vec<String> = ext
+            .sub_issues
+            .iter()
+            .filter(|&&n| !sub_issue_landed(board, n))
+            .map(|&n| {
+                board
+                    .tickets
+                    .iter()
+                    .find(|c| c.external.as_ref().is_some_and(|e| e.is_github_issue() && e.number == n))
+                    .map_or_else(|| format!("issue #{n} (no mirror ticket on the board)"), |c| c.id.to_string())
+            })
+            .collect();
+        return match (outstanding.is_empty(), ext.closed) {
+            (false, false) => format!("refined parent — waiting on {} to land, and issue #{} to be closed", outstanding.join(", "), ext.number),
+            (false, true) => format!("refined parent — waiting on {} to land", outstanding.join(", ")),
+            (true, false) => format!("refined parent — sub-issues all landed; close issue #{} to land it", ext.number),
+            (true, true) => "refined parent — the next sweep will land it".to_owned(),
         };
     }
     if t.external.is_some() {
@@ -631,11 +677,95 @@ mod tests {
         // tickets weren't exempt.
         let s = scratch();
         let id = TicketId("K-1".into());
-        ops::apply(&s.store, None, Op::BindExternal { id: id.clone(), external: Some(External { provider: "github".into(), kind: "issue".into(), number: 42 }) }).unwrap();
+        ops::apply(&s.store, None, Op::BindExternal { id: id.clone(), external: Some(External::github_issue(42)) }).unwrap();
         ops::apply(&s.store, None, Op::MoveTicket { id, to: ColumnId::Review, position: None, owner: None, branch: Some("myrepo-issue0042".into()) }).unwrap();
 
         assert_eq!(sweep(&s.store).unwrap(), 0);
         assert!(matches!(column_of(&s.store, "K-1"), Column::Review { .. }));
+    }
+
+    /// Rule 6, the truth table: a refined parent lands exactly when its issue was observed closed AND every mirrored
+    /// sub-issue ticket sits in done-and-kept — and not a moment sooner.
+    #[test]
+    fn a_refined_parent_lands_only_when_closed_and_all_children_landed() {
+        let s = scratch();
+        let parent = refined_parent(&s, &[43, 44]); // K-2, refined into K-3/K-4 (doing, minesweeper's)
+
+        let stalled = |id: &str| {
+            let swept = sweep_reporting(&s.store).unwrap();
+            swept.stalled.into_iter().find(|(t, _)| t.0 == id).map(|(_, r)| r).expect("still in review")
+        };
+        assert!(stalled("K-2").contains("waiting on K-3, K-4"), "{}", stalled("K-2"));
+
+        let to_done = |id: &str| {
+            ops::apply(&s.store, None, Op::MoveTicket { id: TicketId(id.into()), to: ColumnId::Done, position: None, owner: None, branch: None })
+                .unwrap();
+        };
+        to_done("K-3");
+        let reason = stalled("K-2");
+        assert!(reason.contains("K-4") && !reason.contains("K-3,"), "landed children drop out of the answer: {reason}");
+
+        to_done("K-4");
+        assert!(stalled("K-2").contains("close issue #42"), "{}", stalled("K-2"));
+        assert!(matches!(column_of(&s.store, "K-2"), Column::Review { .. }), "children landed, but no human closed the issue yet");
+
+        // The poll records the closure as a durable board fact; the ordinary offline sweep then does the landing.
+        let closed = External { closed: true, sub_issues: vec![43, 44], ..External::github_issue(42) };
+        ops::apply(&s.store, None, Op::BindExternal { id: parent.clone(), external: Some(closed) }).unwrap();
+        assert_eq!(sweep(&s.store).unwrap(), 1);
+        let board = s.store.read_board().unwrap();
+        let p = board.ticket(&parent).unwrap();
+        assert!(matches!(p.column, Column::Done { discarded: false, .. }));
+        assert!(p.notes.last().unwrap().text.contains("issue #42 closed and all 2"), "{:?}", p.notes);
+    }
+
+    #[test]
+    fn a_discarded_child_keeps_its_refined_parent_in_review_forever() {
+        let s = scratch();
+        let parent = refined_parent(&s, &[43]);
+        ops::apply(&s.store, None, Op::MoveTicket { id: TicketId("K-3".into()), to: ColumnId::Review, position: None, owner: None, branch: None })
+            .unwrap();
+        ops::apply(&s.store, None, Op::DiscardTicket { id: TicketId("K-3".into()), reason: "retired".into() }).unwrap();
+        let closed = External { closed: true, sub_issues: vec![43], ..External::github_issue(42) };
+        ops::apply(&s.store, None, Op::BindExternal { id: parent, external: Some(closed) }).unwrap();
+
+        assert_eq!(sweep(&s.store).unwrap(), 0, "a discarded child never satisfies rule 6 — that is the discard contract");
+        assert!(matches!(column_of(&s.store, "K-2"), Column::Review { .. }));
+        let swept = sweep_reporting(&s.store).unwrap();
+        let reason = &swept.stalled.iter().find(|(t, _)| t.0 == "K-2").unwrap().1;
+        assert!(reason.contains("waiting on K-3"), "{reason}");
+    }
+
+    #[test]
+    fn a_closed_issue_without_a_refine_never_lands_by_rule_six() {
+        // Closed-without-a-PR is the *failure* shape; only the mirror op writes `sub_issues`, so rule 6 cannot fire.
+        let s = scratch();
+        let id = TicketId("K-1".into());
+        let closed = External { closed: true, ..External::github_issue(42) };
+        ops::apply(&s.store, None, Op::BindExternal { id, external: Some(closed) }).unwrap();
+
+        assert_eq!(sweep(&s.store).unwrap(), 0);
+        assert!(matches!(column_of(&s.store, "K-1"), Column::Review { .. }));
+        let swept = sweep_reporting(&s.store).unwrap();
+        let reason = &swept.stalled.iter().find(|(t, _)| t.0 == "K-1").unwrap().1;
+        assert!(reason.contains("only a merged PR"), "{reason}");
+    }
+
+    /// A delegated K-2 bound to issue #42, refined into one doing child per number (K-3, …), parked in review by the
+    /// mirror op — the state the minesweeper poll leaves behind.
+    fn refined_parent(s: &Scratch, numbers: &[u64]) -> TicketId {
+        ops::apply(
+            &s.store,
+            None,
+            Op::CreateTicket { title: "parent".into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![], status: Status::Ready, model: None, effort: None, auto_merge: false },
+        )
+        .unwrap();
+        let parent = TicketId("K-2".into());
+        ops::apply(&s.store, None, Op::BindExternal { id: parent.clone(), external: Some(External::github_issue(42)) }).unwrap();
+        ops::apply(&s.store, None, Op::Claim { id: parent.clone(), agent: "minesweeper".into() }).unwrap();
+        let children = numbers.iter().map(|&n| crate::ops::SubIssueSpec { number: n, title: format!("part {n}"), body: String::new() }).collect();
+        ops::apply(&s.store, None, Op::MirrorSubIssues { parent: parent.clone(), agent: "minesweeper".into(), children }).unwrap();
+        parent
     }
 
     #[test]

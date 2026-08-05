@@ -358,12 +358,22 @@ of another. Three choices keep that door open:
 - **The handoff contract is `ready` and unblocked.** Whatever the worker — an interactive session or a daemon — it takes tickets that are
   `ready`, sit in `todo`, and have every dependency `done`. Dependency ordering is the board's job, never the worker's: minesweeper
   processes its queue FIFO and is dependency-blind, so it must only ever be fed tickets that are already unblocked.
-- **`external` tickets are worked elsewhere, and the board knows it.** Delegating a ticket means mirroring it to a GitHub issue, applying
-  the eligibility label minesweeper watches for (`autofix` / `tryFix`), and recording `{provider, kind, number}` on the ticket — the
-  plugin's skill does this with `gh`; the binary stays offline except for the landing poll. A claimed `external` ticket sits in `doing`
-  until its PR opens; moving it to `review` with the daemon's head branch recorded (`kanban_move to=review branch=<head>`) hands it to
-  the poller, which tracks the PR by that branch and lands the card when the merge reaches local main. claude-kanban never creates a
-  worktree or branch for it, and never lands it from local branch state alone.
+- **`external` tickets are worked elsewhere, and the board knows it.** Delegating means mirroring the ticket to a GitHub issue wearing the
+  eligibility label the daemon watches for (`autofix` / `tryFix`), and recording `{provider, kind, number}` on the ticket. With the
+  per-project `minesweeper` config toggle on, the **binary** does this itself the moment a ready ticket enters `doing` — claim or browser
+  drag alike — and its issue-graph poll tracks the ticket back: the daemon's PR (found through GitHub's resolution of the `Fixes #n`
+  closing reference, never by guessing branch names) moves the card to `review` with the PR recorded; a flag label (`minesweeperFailed`,
+  `possiblyDangerous`) or a closure without a PR is written onto the binding and noted, the card staying in `doing` for the human; a
+  refine split (the daemon breaking one issue into sub-issues) is mirrored as claimed child tickets the parent depends on, the parent
+  parking in `review` until every child lands **and a human closes the parent issue** — the one landing rule that needs no PR, and it
+  still carries a human fingerprint. With the toggle off, `/kanban:delegate` is the same flow by hand, and the human moves the card to
+  review when the PR appears. Either way claude-kanban never creates a worktree or branch for an external ticket, and never lands one
+  from local branch state alone. Two daemon-side constraints worth knowing: minesweeper only polls the 30 most recent open issues, and
+  the kanban `minesweeper_label` must agree with the daemon's `alwaysFixLabel`/`tryFixLabel` (and `minesweeper_flag_labels` with its
+  failure labels) or tickets delegate into the void.
+- **The network surface stays enumerable.** The binary's egresses are exactly three: the explicit Create PR click, the `poll_interval`-gated
+  gh polls, and — when the toggle is on — the delegation issue-create. "Local-only" always meant the *board*: board.json never leaves the
+  machine, and nothing talks to an LLM. Builds with `--no-default-features` compile the delegation egress out entirely.
 - **`branch` is data, not a format.** Tickets worked by this plugin get `{id}/{slug}` branches; an external ticket's `branch`, if recorded
   at all, is whatever the delegate created (minesweeper's `myrepo-issue0042`). Nothing in the board assumes it can parse a branch name.
 

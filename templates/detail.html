@@ -16,6 +16,8 @@
     {% if ticket.auto_merge %}<span class="badge badge-warning"
           title="on reaching review this lands itself: /kanban:work rebases the branch onto main and fast-forwards main into it, with no human review of the merge">auto-merge{% if ticket.auto_merge_inherited %} (epic){% endif %}</span>{% endif %}
     {% if let Some(ext) = ticket.external %}<span class="badge badge-neutral" title="worked elsewhere — this board never touches it">↗ {{ ext }}</span>{% endif %}
+    {% if let Some(flag) = ticket.external_flag %}<span class="badge badge-error"
+          title="minesweeper trouble on the bound issue — the progress log has the details; the ticket stays put until you decide">⚠ {{ flag }}</span>{% endif %}
     {% if let Some(epic) = ticket.epic %}
     <span class="badge text-white cursor-pointer" style="background-color: {{ epic.color }}; border-color: {{ epic.color }}"
           hx-get="/ui/epic/{{ epic.id }}" hx-target="#detail" hx-swap="innerHTML">{{ epic.title }}</span>

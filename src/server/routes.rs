@@ -350,10 +350,18 @@ pub async fn move_ticket(
     Form(form): Form<MoveForm>,
 ) -> Result<StatusCode, AppError> {
     let to = parse_column(&form.to)?;
-    let op = Op::MoveTicket { id: TicketId(id), to, position: form.position, owner: Some(app.ui_owner.clone()), branch: None };
+    let id = TicketId(id);
+    let op = Op::MoveTicket { id: id.clone(), to, position: form.position, owner: Some(app.ui_owner.clone()), branch: None };
     // A drag into review arms the landing proof exactly as the MCP close-out does, and the branch it names can be gone
-    // before the next poller tick — so observe the tip here (see `land::observe_entering_review`).
-    mutate_then(&app, &headers, op, move |store| crate::land::observe_entering_review(store, to)).await
+    // before the next poller tick — so observe the tip here (see `land::observe_entering_review`). A drag into doing is
+    // the delegation moment when the minesweeper toggle is on.
+    mutate_then(&app, &headers, op, move |store| {
+        crate::land::observe_entering_review(store, to);
+        if to == ColumnId::Doing {
+            crate::minesweeper::delegate_entering_doing(store, &id);
+        }
+    })
+    .await
 }
 
 #[derive(Debug, Deserialize)]
@@ -457,6 +465,9 @@ pub struct SettingsForm {
     port: String,
     main_branch: String,
     poll_interval: String,
+    minesweeper: String,
+    minesweeper_label: String,
+    minesweeper_flag_labels: String,
 }
 
 impl SettingsForm {
@@ -477,6 +488,16 @@ impl SettingsForm {
             port: num(&self.port, "port")?,
             main_branch: Some(self.main_branch.trim()).filter(|s| !s.is_empty()).map(str::to_owned),
             poll_interval: num(&self.poll_interval, "poll_interval")?,
+            // A checkbox posts nothing when unchecked, so empty means "unset" here like everywhere else.
+            minesweeper: (!self.minesweeper.trim().is_empty()).then_some(true),
+            minesweeper_label: Some(self.minesweeper_label.trim()).filter(|s| !s.is_empty()).map(str::to_owned),
+            minesweeper_flag_labels: self
+                .minesweeper_flag_labels
+                .split(',')
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(str::to_owned)
+                .collect(),
         })
     }
 }

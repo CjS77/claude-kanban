@@ -846,7 +846,7 @@ async fn done_cards_carry_no_merged_badge() {
         None,
         Op::BindExternal {
             id: TicketId("K-1".into()),
-            external: Some(External { provider: "github".into(), kind: "issue".into(), number: 42 }),
+            external: Some(External::github_issue(42)),
         },
     )
     .unwrap();
@@ -862,6 +862,20 @@ async fn done_cards_carry_no_merged_badge() {
     let html = body_text(router.oneshot(get("/ui/board")).await.unwrap()).await;
     assert!(html.contains("Delegated elsewhere"), "{html}");
     assert!(!html.contains(">merged</span>") && !html.contains("+1 merged"), "{html}");
+}
+
+#[tokio::test]
+async fn a_flagged_delegated_ticket_wears_the_minesweeper_warning() {
+    let (_dir, router, store) = test_app();
+    seed_ticket(&store, "delegated and stuck");
+    ops::apply(&store, None, Op::Claim { id: TicketId("K-1".into()), agent: "minesweeper".into() }).unwrap();
+    let flagged = External { flag: Some("minesweeperFailed".into()), ..External::github_issue(42) };
+    ops::apply(&store, None, Op::BindExternal { id: TicketId("K-1".into()), external: Some(flagged) }).unwrap();
+
+    let html = body_text(router.clone().oneshot(get("/ui/board")).await.unwrap()).await;
+    assert!(html.contains("⚠ minesweeperFailed"), "the card wears the flag: {html}");
+    let html = body_text(router.oneshot(get("/ui/ticket/K-1")).await.unwrap()).await;
+    assert!(html.contains("⚠ minesweeperFailed"), "and so does the detail pane: {html}");
 }
 
 #[tokio::test]
@@ -948,7 +962,8 @@ async fn the_settings_pane_round_trips_the_config_and_refuses_garbage() {
     assert!(html.contains("/ui/settings"), "{html}");
 
     // POST writes the whole file; the re-rendered pane confirms and carries the new values.
-    let form = "main_branch=trunk&poll_interval=0&max_workers=3&idle_time=&worktree_root=%2Fdata%2Fwt&copy_to_worktrees=.env%0Acerts%2Flocal.pem&port=";
+    let form = "main_branch=trunk&poll_interval=0&max_workers=3&idle_time=&worktree_root=%2Fdata%2Fwt&copy_to_worktrees=.env%0Acerts%2Flocal.pem&port=\
+                &minesweeper=on&minesweeper_label=tryFix&minesweeper_flag_labels=minesweeperFailed%2C+broken";
     let res = router.clone().oneshot(post("/ui/settings", 1, form)).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     let html = body_text(res).await;
@@ -961,12 +976,20 @@ async fn the_settings_pane_round_trips_the_config_and_refuses_garbage() {
     assert_eq!(config.idle_time(), 300, "cleared field falls back to the default");
     assert_eq!(config.copy_to_worktrees, vec![".env", "certs/local.pem"]);
     assert!(config.port.is_none(), "empty port stays 'nobody chose'");
+    assert!(config.minesweeper(), "the checkbox posted 'on'");
+    assert_eq!(config.minesweeper_label(), "tryFix");
+    assert_eq!(config.minesweeper_flag_labels(), vec!["minesweeperFailed", "broken"], "comma-separated input splits");
 
     // A non-numeric number is a 422 toast and the file stays as-saved.
     let res = router.clone().oneshot(post("/ui/settings", 2, "max_workers=lots")).await.unwrap();
     assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(res.headers()["hx-retarget"], "#toasts");
     assert_eq!(claude_kanban::config::Config::load(store.dir()).unwrap().max_workers(), 3, "bad input must not clobber the file");
+
+    // A form without the checkbox (unchecked boxes post nothing) turns delegation back off.
+    let res = router.clone().oneshot(post("/ui/settings", 3, "minesweeper_label=autofix")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(!claude_kanban::config::Config::load(store.dir()).unwrap().minesweeper(), "unchecked box means off");
 
     // The guard covers settings like every mutation: no version header, no write.
     let req = Request::builder().method("POST").uri("/ui/settings").header(header::HOST, HOST).body(Body::empty()).unwrap();

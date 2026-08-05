@@ -182,7 +182,7 @@ fn unclaimed_and_external_tickets_are_refused() {
     s.store
         .mutate(None, |board, _| {
             let t = board.ticket_mut(&TicketId("K-2".into())).unwrap();
-            t.external = Some(claude_kanban::store::model::External { provider: "github".into(), kind: "issue".into(), number: 42 });
+            t.external = Some(claude_kanban::store::model::External::github_issue(42));
             t.column = Column::Doing { owner: "minesweeper".into(), branch: None };
             Ok::<_, claude_kanban::store::StoreError>(())
         })

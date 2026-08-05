@@ -21,6 +21,8 @@
                 {% if card.auto_merge %}<span class="badge badge-warning badge-xs"
                       title="on reaching review this lands itself: /kanban:work rebases the branch onto main and fast-forwards main into it, with no human review of the merge">auto-merge{% if card.auto_merge_inherited %} (epic){% endif %}</span>{% endif %}
                 {% if let Some(ext) = card.external %}<span class="badge badge-neutral badge-xs" title="worked elsewhere">↗ {{ ext }}</span>{% endif %}
+                {% if let Some(flag) = card.external_flag %}<span class="badge badge-error badge-xs"
+                      title="minesweeper trouble on the bound issue — the progress log has the details; the ticket stays put until you decide">⚠ {{ flag }}</span>{% endif %}
                 {% if let Some(run) = card.run %}<span class="badge badge-ghost badge-xs font-mono"
                       title="/kanban:work runs this ticket at this model and effort">{{ run }}</span>{% endif %}
                 <span class="badge badge-xs {{ card.status_badge }}">{{ card.status }}</span>

@@ -22,6 +22,13 @@ pub const DEFAULT_IDLE_TIME_SECS: u64 = 300;
 /// How often `serve` runs the landing sweep and gh PR poll when `poll_interval` says nothing: 1 minute.
 pub const DEFAULT_POLL_INTERVAL_SECS: u64 = 60;
 
+/// The eligibility label a minesweeper daemon watches for, when `minesweeper_label` says nothing.
+pub const DEFAULT_MINESWEEPER_LABEL: &str = "autofix";
+
+/// Issue labels that flag a delegated ticket for a human, when `minesweeper_flag_labels` says nothing: the daemon's
+/// defaults for "the child crashed" and "the screener balked".
+pub const DEFAULT_MINESWEEPER_FLAG_LABELS: [&str; 2] = ["minesweeperFailed", "possiblyDangerous"];
+
 /// The config file's shape. Unknown keys are ignored (the file is hand-written; a typo shouldn't brick the tool — though it
 /// also won't warn. Keep the schema small.)
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -47,6 +54,16 @@ pub struct Config {
     /// **Seconds** between `serve`'s landing sweeps and gh PR polls. Absent → 60. `0` disables polling entirely —
     /// unlike `idle_time`, this dial needs a real off switch, so zero is honoured rather than collapsed to the default.
     pub poll_interval: Option<u64>,
+    /// Delegate ready tickets entering `doing` to a minesweeper daemon: the binary mirrors them to labelled GitHub
+    /// issues and tracks them back through PR, review and landing. Absent → off. Also requires the `minesweeper`
+    /// compile-time feature (on by default). Config-only: no flag or env var.
+    pub minesweeper: Option<bool>,
+    /// The eligibility label the daemon watches for. Absent → [`DEFAULT_MINESWEEPER_LABEL`]. Must agree with the
+    /// daemon's `alwaysFixLabel`/`tryFixLabel` or tickets delegate into the void.
+    pub minesweeper_label: Option<String>,
+    /// Issue labels that flag a delegated ticket for a human — the ticket stays in `doing`, wearing the label.
+    /// Empty → [`DEFAULT_MINESWEEPER_FLAG_LABELS`].
+    pub minesweeper_flag_labels: Vec<String>,
 }
 
 impl Config {
@@ -95,6 +112,28 @@ impl Config {
             Some(0) => None,
             Some(secs) => Some(Duration::from_secs(secs)),
             None => Some(Duration::from_secs(DEFAULT_POLL_INTERVAL_SECS)),
+        }
+    }
+
+    /// Whether minesweeper delegation is on for this project: absent collapses to off.
+    #[must_use]
+    pub fn minesweeper(&self) -> bool {
+        self.minesweeper.unwrap_or(false)
+    }
+
+    /// The effective eligibility label: absent collapses to [`DEFAULT_MINESWEEPER_LABEL`].
+    #[must_use]
+    pub fn minesweeper_label(&self) -> String {
+        self.minesweeper_label.clone().unwrap_or_else(|| DEFAULT_MINESWEEPER_LABEL.to_owned())
+    }
+
+    /// The effective flag labels: empty collapses to [`DEFAULT_MINESWEEPER_FLAG_LABELS`].
+    #[must_use]
+    pub fn minesweeper_flag_labels(&self) -> Vec<String> {
+        if self.minesweeper_flag_labels.is_empty() {
+            DEFAULT_MINESWEEPER_FLAG_LABELS.iter().map(|&l| l.to_owned()).collect()
+        } else {
+            self.minesweeper_flag_labels.clone()
         }
     }
 }
@@ -183,10 +222,40 @@ mod tests {
     fn config_serializes_every_key_for_the_settings_pane() {
         let json = serde_json::to_value(Config::default()).unwrap();
         let obj = json.as_object().unwrap();
-        let keys = ["worktree_root", "copy_to_worktrees", "max_workers", "idle_time", "port", "main_branch", "poll_interval"];
+        let keys = [
+            "worktree_root",
+            "copy_to_worktrees",
+            "max_workers",
+            "idle_time",
+            "port",
+            "main_branch",
+            "poll_interval",
+            "minesweeper",
+            "minesweeper_label",
+            "minesweeper_flag_labels",
+        ];
         let missing: Vec<_> = keys.iter().filter(|key| !obj.contains_key(**key)).collect();
         assert!(missing.is_empty(), "missing {missing:?}");
         assert!(obj["port"].is_null(), "unset options serialize as null, preserving 'nobody chose'");
+    }
+
+    #[test]
+    fn minesweeper_defaults_are_off_autofix_and_the_daemon_flag_labels() {
+        let cfg = Config::default();
+        assert!(!cfg.minesweeper(), "delegation is opt-in per project");
+        assert_eq!(cfg.minesweeper_label(), DEFAULT_MINESWEEPER_LABEL);
+        assert_eq!(cfg.minesweeper_flag_labels(), DEFAULT_MINESWEEPER_FLAG_LABELS.map(str::to_owned).to_vec());
+    }
+
+    #[test]
+    fn minesweeper_keys_parse_from_config_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let json = r#"{ "minesweeper": true, "minesweeper_label": "tryFix", "minesweeper_flag_labels": ["broken"] }"#;
+        std::fs::write(dir.path().join("config.json"), json).unwrap();
+        let cfg = Config::load(dir.path()).unwrap();
+        assert!(cfg.minesweeper());
+        assert_eq!(cfg.minesweeper_label(), "tryFix");
+        assert_eq!(cfg.minesweeper_flag_labels(), vec!["broken"]);
     }
 
     #[test]

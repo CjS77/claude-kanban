@@ -1,9 +1,11 @@
 //! The Create PR button's lifecycle: eligibility, then `git push` + `gh pr create`.
 //!
-//! This is the binary's one network egress, and it only ever runs on an explicit user click — the recorded amendment to
-//! "nothing leaves the machine" (see design.md). The mechanics are deliberately dumb: no LLM, no schema change. The PR
-//! body is templated verbatim from the ticket (its `body` is a refined spec, its `notes` are the progress log), and the
-//! resulting URL is recorded as a progress note by the handler — the note is the record, exactly like branches.
+//! This is the first of the binary's three sanctioned network egresses — the explicit user click, beside the
+//! `poll_interval`-gated gh polls in `land`/`minesweeper` and the toggle-gated delegation issue-create in `minesweeper`
+//! (see design.md; "local-only" always meant the board itself). The mechanics are deliberately dumb: no LLM, no schema
+//! change. The PR body is templated verbatim from the ticket (its `body` is a refined spec, its `notes` are the
+//! progress log), and the resulting URL is recorded as a progress note by the handler — the note is the record, exactly
+//! like branches.
 //!
 //! Everything here shells out through [`crate::git::run`] with prompts suppressed (`GIT_TERMINAL_PROMPT=0`,
 //! `GH_PROMPT_DISABLED=1`), so a missing credential fails fast with stderr instead of hanging the handler.

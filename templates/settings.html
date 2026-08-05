@@ -42,6 +42,23 @@
         <textarea name="copy_to_worktrees" rows="3" placeholder=".env" class="textarea textarea-sm w-full font-mono">{{ copy_to_worktrees }}</textarea>
         <span class="text-xs opacity-60">gitignored files copied into each new worktree — anything git tracks is refused</span>
     </label>
+    <div class="divider my-0 text-xs opacity-60">Minesweeper delegation</div>
+    <label class="flex items-center justify-between gap-3 text-sm">
+        <span>Delegate ready tickets
+            <span class="block text-xs opacity-60">entering doing mirrors the ticket to a labelled GitHub issue for a minesweeper daemon — kanban writes no code</span>
+        </span>
+        <input type="checkbox" name="minesweeper" class="toggle toggle-sm" {% if minesweeper %}checked{% endif %}>
+    </label>
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <label class="flex flex-col gap-1 text-sm">Eligibility label
+            <input name="minesweeper_label" value="{{ minesweeper_label }}" placeholder="autofix" class="input input-sm w-full font-mono">
+            <span class="text-xs opacity-60">must match the daemon's alwaysFixLabel or tryFixLabel</span>
+        </label>
+        <label class="flex flex-col gap-1 text-sm">Flag labels (comma-separated)
+            <input name="minesweeper_flag_labels" value="{{ minesweeper_flag_labels }}" placeholder="minesweeperFailed, possiblyDangerous" class="input input-sm w-full font-mono">
+            <span class="text-xs opacity-60">issue labels that flag the ticket for a human — it stays in doing</span>
+        </label>
+    </div>
     <div class="modal-action mt-1">
         <button type="button" class="btn btn-ghost btn-sm" onclick="this.closest('dialog').close()">Close</button>
         <button type="submit" class="btn btn-primary btn-sm">Save</button>

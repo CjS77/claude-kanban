@@ -332,7 +332,7 @@ mod tests {
         let mut t = ticket("K-27", "Search bar");
         t.body = "Realtime results as you type".into();
         t.labels = vec!["UX".into()];
-        t.external = Some(External { provider: "github".into(), kind: "issue".into(), number: 42 });
+        t.external = Some(External::github_issue(42));
         t.column = Column::Review { branch: Some("k-27/search-bar".into()) };
         let v = view(t);
 

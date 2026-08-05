@@ -63,8 +63,20 @@ pub enum Op {
     /// Append to the ticket's progress log.
     AddNote { id: TicketId, text: String, author: Option<String> },
     /// Bind (or unbind, with `None`) a ticket to a work item in another system — the delegate skill records where a
-    /// mirrored ticket went. The binding is an address for other tools; this binary never touches the network.
+    /// mirrored ticket went, and the minesweeper poll refreshes a binding's observed facts. The binding is an address;
+    /// nothing here touches the network.
     BindExternal { id: TicketId, external: Option<crate::store::model::External> },
+    /// Record a completed delegation: bind the mirrored issue and re-own the doing ticket — live claim included — to the
+    /// delegate agent, with a note saying where the work went. Constructed only by the minesweeper hook *after*
+    /// `gh issue create` succeeded; the evidence is re-checked under the lock (still in doing, still ready, still unbound,
+    /// still branchless) and a refusal is harmless — the issue exists either way, and the hook's dedup search re-adopts it
+    /// on the ticket's next entry into doing.
+    Delegate { id: TicketId, external: crate::store::model::External, agent: String, note: String },
+    /// Mirror a minesweeper refine split: one external-bound child ticket per sub-issue — created in `doing`, owned by the
+    /// delegate, `ready` (the daemon is already working them) — recorded on the parent (`depends_on` plus the binding's
+    /// `sub_issues`), and the parent moved to `review`, where the refined-parent landing rule can finish it. Constructed
+    /// only by the minesweeper poll; idempotent — sub-issues already bound anywhere on the board are skipped.
+    MirrorSubIssues { parent: TicketId, agent: String, children: Vec<SubIssueSpec> },
     /// Record a refinement pass (the thinking happened in the caller — this binary never talks to an LLM): replace the
     /// target's spec, optionally split off new tickets and epics, and land everything touched or created in `review`.
     /// All-or-nothing.
@@ -86,6 +98,14 @@ pub enum Op {
     /// Drop the worktree path from the live claim (the claim itself survives — the ticket is in flight until moved to
     /// `review`). Constructed only by `worktree::finish`.
     ClearWorktreePath { id: TicketId },
+}
+
+/// One sub-issue of a minesweeper refine split, as fetched from GitHub.
+#[derive(Debug, Clone)]
+pub struct SubIssueSpec {
+    pub number: u64,
+    pub title: String,
+    pub body: String,
 }
 
 /// What `Refine` refines.
@@ -220,6 +240,8 @@ impl Op {
             Op::Release { .. } => "release",
             Op::AddNote { .. } => "add_note",
             Op::BindExternal { .. } => "bind_external",
+            Op::Delegate { .. } => "delegate",
+            Op::MirrorSubIssues { .. } => "mirror_sub_issues",
             Op::Refine { .. } => "refine",
             Op::LandTicket { .. } => "land_ticket",
             Op::DiscardTicket { .. } => "discard_ticket",
@@ -265,6 +287,8 @@ fn transition(op: Op, board: &mut Board, claims: &mut Vec<Claim>) -> Result<OpOu
         Op::Release { id } => release(board, claims, &id),
         Op::AddNote { id, text, author } => add_note(board, &id, text, author),
         Op::BindExternal { id, external } => bind_external(board, &id, external),
+        Op::Delegate { id, external, agent, note } => delegate(board, claims, &id, external, &agent, note),
+        Op::MirrorSubIssues { parent, agent, children } => mirror_sub_issues(board, claims, &parent, &agent, &children),
         Op::Refine { target, title, body, split_tickets, split_epics } => refine(board, claims, &target, title, body, split_tickets, split_epics),
         Op::LandTicket { id, expected_branch, reason } => land_ticket(board, claims, &id, expected_branch.as_deref(), &reason),
         Op::DiscardTicket { id, reason } => discard_ticket(board, claims, &id, &reason),
@@ -569,6 +593,106 @@ fn bind_external(board: &mut Board, id: &TicketId, external: Option<crate::store
     let ticket = ticket_mut(board, id)?;
     ticket.external = external;
     Ok(OpOutput::plain(json!({ "id": id, "external": ticket.external })))
+}
+
+/// Record a completed delegation (see [`Op::Delegate`]): bind the issue and re-own the ticket — claim included — to the
+/// delegate, so the card stops saying the original claimant is working it. The refusals re-check what the hook already
+/// verified, because the slow `gh` call ran outside the lock and the board may have moved underneath it.
+fn delegate(
+    board: &mut Board,
+    claims: &mut Vec<Claim>,
+    id: &TicketId,
+    external: crate::store::model::External,
+    agent: &str,
+    note: String,
+) -> Result<OpOutput, OpError> {
+    let ticket = ticket_mut(board, id)?;
+    let Column::Doing { branch, .. } = &ticket.column else {
+        return Err(OpError::Invalid(format!("{id} is no longer in doing — not recording the delegation")));
+    };
+    if branch.is_some() {
+        return Err(OpError::Invalid(format!("{id} grew a local branch since delegation started — local work is not delegated")));
+    }
+    if ticket.status != Status::Ready {
+        return Err(OpError::Invalid(format!("{id} is {} — only ready tickets delegate", ticket.status)));
+    }
+    if ticket.external.is_some() {
+        return Err(OpError::Invalid(format!("{id} is already bound to an external work item")));
+    }
+    ticket.column = Column::Doing { owner: agent.to_owned(), branch: None };
+    ticket.external = Some(external);
+    ticket.notes.push(Note { at: Utc::now(), author: Some("kanban".into()), text: note });
+    let since = find_claim(claims, id).map_or_else(Utc::now, |c| c.since);
+    upsert_claim(claims, Claim { ticket: id.clone(), agent: agent.to_owned(), since, path: None });
+    Ok(OpOutput::plain(json!({ "id": id, "owner": agent, "external": ticket.external })))
+}
+
+/// Mirror a refine split (see [`Op::MirrorSubIssues`]). Sub-issues already bound anywhere on the board are skipped, so
+/// re-observing the same refine comment creates nothing; the parent's `sub_issues` record still absorbs every listed
+/// number, because that list is what the refined-parent landing rule waits on.
+fn mirror_sub_issues(
+    board: &mut Board,
+    claims: &mut Vec<Claim>,
+    parent: &TicketId,
+    agent: &str,
+    children: &[SubIssueSpec],
+) -> Result<OpOutput, OpError> {
+    let ticket = ticket_mut(board, parent)?;
+    let Some(external) = &ticket.external else {
+        return Err(OpError::Invalid(format!("{parent} is not externally bound — nothing could have refined it")));
+    };
+    if !external.is_github_issue() {
+        return Err(OpError::Invalid(format!("{parent} is not bound to a GitHub issue")));
+    }
+    let epic = ticket.epic.clone();
+
+    let bound: HashSet<u64> =
+        board.tickets.iter().filter_map(|t| t.external.as_ref().filter(|e| e.is_github_issue()).map(|e| e.number)).collect();
+    let created: Vec<(u64, TicketId)> = children
+        .iter()
+        .filter(|c| !bound.contains(&c.number))
+        .map(|child| {
+            let id = board.mint_ticket_id();
+            board.tickets.push(Ticket {
+                id: id.clone(),
+                title: child.title.clone(),
+                epic: epic.clone(),
+                status: Status::Ready,
+                body: child.body.clone(),
+                labels: vec![],
+                model: None,
+                effort: None,
+                auto_merge: false,
+                depends_on: vec![],
+                notes: vec![],
+                external: Some(crate::store::model::External::github_issue(child.number)),
+                pr: None,
+                column: Column::Doing { owner: agent.to_owned(), branch: None },
+            });
+            upsert_claim(claims, Claim { ticket: id.clone(), agent: agent.to_owned(), since: Utc::now(), path: None });
+            (child.number, id)
+        })
+        .collect();
+
+    let ticket = ticket_mut(board, parent)?;
+    ticket.depends_on.extend(created.iter().map(|(_, id)| id.clone()));
+    let external = ticket.external.as_mut().expect("verified above");
+    let missing: Vec<u64> = children.iter().map(|c| c.number).filter(|n| !external.sub_issues.contains(n)).collect();
+    external.sub_issues.extend(missing);
+    let issue = external.number;
+    if !created.is_empty() {
+        let mapping = created.iter().map(|(n, id)| format!("#{n} → {id}")).collect::<Vec<_>>().join(", ");
+        let text = format!("minesweeper refined issue #{issue} into sub-issues, mirrored here: {mapping}");
+        ticket.notes.push(Note { at: Utc::now(), author: Some("kanban".into()), text });
+    }
+    if matches!(ticket.column, Column::Doing { .. }) {
+        ticket.column = Column::Review { branch: None };
+        remove_claim(claims, parent);
+        reposition(board, parent, ColumnId::Review, None);
+    }
+
+    let ids: Vec<String> = created.iter().map(|(_, id)| id.to_string()).collect();
+    Ok(OpOutput::created(ids.clone(), json!({ "parent": parent, "children": ids })))
 }
 
 /// Record a refinement (see [`Op::Refine`]). Creation order — and thus id order — is: each split epic, then that epic's
@@ -1226,7 +1350,7 @@ mod tests {
     fn stamping_an_external_ticket_is_refused_but_claiming_it_is_fine() {
         let (_dir, store) = scratch();
         let id = create(&store, "delegated");
-        let external = crate::store::model::External { provider: "github".into(), kind: "issue".into(), number: 7 };
+        let external = crate::store::model::External::github_issue(7);
         apply(&store, None, Op::BindExternal { id: id.clone(), external: Some(external) }).unwrap();
         // Delegating claims the ticket on the daemon's behalf — external tickets are claimable…
         apply(&store, None, Op::Claim { id: id.clone(), agent: "minesweeper".into() }).unwrap();
@@ -1236,6 +1360,127 @@ mod tests {
         // Unbind clears it again.
         apply(&store, None, Op::BindExternal { id: id.clone(), external: None }).unwrap();
         assert!(store.read_board().unwrap().ticket(&id).unwrap().external.is_none());
+    }
+
+    #[test]
+    fn delegating_binds_reowns_and_notes_a_ready_doing_ticket() {
+        let (_dir, store) = scratch();
+        let id = create(&store, "the work");
+        apply(&store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
+
+        let op = Op::Delegate {
+            id: id.clone(),
+            external: crate::store::model::External::github_issue(42),
+            agent: "minesweeper".into(),
+            note: "delegated to minesweeper: issue #42".into(),
+        };
+        apply(&store, None, op).unwrap();
+
+        let board = store.read_board().unwrap();
+        let t = board.ticket(&id).unwrap();
+        assert!(matches!(&t.column, Column::Doing { owner, branch: None } if owner == "minesweeper"), "{:?}", t.column);
+        assert_eq!(t.external.as_ref().unwrap().number, 42);
+        assert!(t.notes.last().unwrap().text.contains("issue #42"));
+        let claims = store.read_claims().unwrap();
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0].agent, "minesweeper", "the live claim follows the delegation");
+    }
+
+    /// Every guard the hook checked outside the lock is re-checked here, because the slow gh call ran unlocked and the
+    /// board may have moved. Each refusal must leave the board byte-identical — the issue exists either way, and the
+    /// hook's dedup search re-adopts it later.
+    #[test]
+    fn delegating_refuses_moved_stub_bound_and_branched_tickets_without_touching_the_board() {
+        let (_dir, store) = scratch();
+        let delegate = |id: &TicketId| Op::Delegate {
+            id: id.clone(),
+            external: crate::store::model::External::github_issue(1),
+            agent: "minesweeper".into(),
+            note: "n".into(),
+        };
+        let refused = |id: &TicketId| {
+            let before = std::fs::read_to_string(store.board_path()).unwrap();
+            let err = apply(&store, None, delegate(id)).unwrap_err();
+            assert!(matches!(err, OpError::Invalid(_)), "{err}");
+            assert_eq!(std::fs::read_to_string(store.board_path()).unwrap(), before, "a refusal must not write");
+        };
+
+        let todo = create(&store, "never claimed");
+        refused(&todo); // not in doing
+
+        let stub = create(&store, "spec to write");
+        apply(&store, None, Op::SetTicketStatus { id: stub.clone(), status: Status::Stub }).unwrap();
+        apply(&store, None, Op::Claim { id: stub.clone(), agent: "claude".into() }).unwrap();
+        refused(&stub); // stubs refine locally, never delegate
+
+        let bound = create(&store, "already delegated");
+        apply(&store, None, Op::BindExternal { id: bound.clone(), external: Some(crate::store::model::External::github_issue(7)) }).unwrap();
+        apply(&store, None, Op::Claim { id: bound.clone(), agent: "minesweeper".into() }).unwrap();
+        refused(&bound); // the primary idempotency gate
+
+        let branched = create(&store, "local work started");
+        apply(&store, None, Op::Claim { id: branched.clone(), agent: "claude".into() }).unwrap();
+        apply(&store, None, Op::StampWorktree { id: branched.clone(), branch: "k/work".into(), path: "/p".into() }).unwrap();
+        refused(&branched); // a branch appeared while gh ran — local work is not delegated
+    }
+
+    #[test]
+    fn mirroring_sub_issues_creates_claimed_children_and_parks_the_parent_in_review() {
+        let (_dir, store) = scratch();
+        let parent = create(&store, "big delegated thing");
+        apply(&store, None, Op::BindExternal { id: parent.clone(), external: Some(crate::store::model::External::github_issue(42)) }).unwrap();
+        apply(&store, None, Op::Claim { id: parent.clone(), agent: "minesweeper".into() }).unwrap();
+
+        let child = |number: u64, title: &str| SubIssueSpec { number, title: title.into(), body: "spec".into() };
+        let op = Op::MirrorSubIssues { parent: parent.clone(), agent: "minesweeper".into(), children: vec![child(43, "first half"), child(44, "second half")] };
+        let applied = apply(&store, None, op.clone()).unwrap();
+        assert_eq!(applied.created_ids.len(), 2);
+
+        let board = store.read_board().unwrap();
+        let p = board.ticket(&parent).unwrap();
+        assert!(matches!(p.column, Column::Review { branch: None }), "the parent waits for its children in review: {:?}", p.column);
+        assert_eq!(p.external.as_ref().unwrap().sub_issues, vec![43, 44]);
+        assert_eq!(p.depends_on.len(), 2, "the parent depends on its mirrors");
+        assert!(p.notes.last().unwrap().text.contains("#43"), "{:?}", p.notes);
+
+        let ids: Vec<TicketId> = applied.created_ids.iter().map(|s| TicketId(s.clone())).collect();
+        let claims = store.read_claims().unwrap();
+        for id in &ids {
+            let c = board.ticket(id).unwrap();
+            assert!(matches!(&c.column, Column::Doing { owner, branch: None } if owner == "minesweeper"));
+            assert_eq!(c.status, Status::Ready, "the daemon is already working them — they are not proposals");
+            assert!(c.external.as_ref().is_some_and(crate::store::model::External::is_github_issue));
+            assert!(claims.iter().any(|cl| &cl.ticket == id && cl.agent == "minesweeper"), "each mirror carries a live claim");
+        }
+        assert!(claims.iter().all(|c| c.ticket != parent), "entering review dropped the parent's claim");
+
+        // Re-observing the same refine comment is a no-op: every number is already bound on the board.
+        let applied = apply(&store, None, op).unwrap();
+        assert!(applied.created_ids.is_empty(), "idempotent — nothing new to mirror");
+        assert_eq!(store.read_board().unwrap().ticket(&parent).unwrap().depends_on.len(), 2);
+    }
+
+    #[test]
+    fn mirroring_refuses_unbound_parents_and_skips_already_bound_numbers() {
+        let (_dir, store) = scratch();
+        let unbound = create(&store, "never delegated");
+        let op = Op::MirrorSubIssues { parent: unbound.clone(), agent: "minesweeper".into(), children: vec![] };
+        assert!(matches!(apply(&store, None, op).unwrap_err(), OpError::Invalid(_)));
+
+        let parent = create(&store, "delegated");
+        apply(&store, None, Op::BindExternal { id: parent.clone(), external: Some(crate::store::model::External::github_issue(42)) }).unwrap();
+        let taken = create(&store, "someone else's mirror");
+        apply(&store, None, Op::BindExternal { id: taken.clone(), external: Some(crate::store::model::External::github_issue(43)) }).unwrap();
+
+        let children = vec![
+            SubIssueSpec { number: 43, title: "already on the board".into(), body: String::new() },
+            SubIssueSpec { number: 44, title: "fresh".into(), body: String::new() },
+        ];
+        let applied = apply(&store, None, Op::MirrorSubIssues { parent: parent.clone(), agent: "minesweeper".into(), children }).unwrap();
+        assert_eq!(applied.created_ids.len(), 1, "only the unbound number gets a mirror");
+        let board = store.read_board().unwrap();
+        assert_eq!(board.ticket(&parent).unwrap().external.as_ref().unwrap().sub_issues, vec![43, 44], "but the record lists both");
+        assert_eq!(board.ticket(&parent).unwrap().depends_on.len(), 1, "the dependency edge only reaches the ticket this op created");
     }
 
     #[test]

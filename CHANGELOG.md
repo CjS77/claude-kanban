@@ -5,6 +5,30 @@ All notable changes to this project are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.0] - 2026-08-05
+
+### Added
+
+- Minesweeper delegation (`"minesweeper": true` in `.kanban/config.json`, off by default): a ready ticket entering
+  doing is mirrored by the binary to a GitHub issue wearing `"minesweeper_label"` (default `autofix`) for an external
+  minesweeper daemon — kanban writes no code. The serve poller batch-queries every delegated issue per tick
+  (GraphQL `closedByPullRequestsReferences`, one call): the daemon's PR moves the card to review with the PR recorded,
+  flag labels (`"minesweeper_flag_labels"`, default `minesweeperFailed`/`possiblyDangerous`) and closed-without-a-PR
+  issues flag the card in place with a note, and a refine split is mirrored as claimed child tickets the parent
+  depends on. A refined parent lands by a new rule 6: every mirrored child done-and-kept **and** the parent issue
+  closed by a human.
+- `Op::Delegate` and `Op::MirrorSubIssues` in the write funnel; `External` grows optional `closed`/`flag`/`sub_issues`
+  observations (additive, no schema bump). `kanban_board` reports `minesweeper` so `/kanban:work` knows to hand off
+  instead of implementing; cards and the detail pane wear a `⚠ minesweeper` badge while flagged.
+- Cargo feature `minesweeper` (default-on) — `--no-default-features` compiles the whole delegation egress out for
+  installs that want the binary's network surface limited to the Create PR click and the landing poll.
+- Settings pane: the delegation toggle, eligibility label, and flag labels.
+
+### Fixed
+
+- `.claude-plugin/plugin.json` and `marketplace.json` versions had fallen behind Cargo.toml (2.3.0 vs 2.5.0), failing
+  the manifests test.
+
 ## [2.5.0] - 2026-07-29
 
 ### Added

@@ -278,7 +278,7 @@ mod tests {
         ]);
         b.tickets[0].status = Status::Draft;
         b.tickets[1].depends_on = vec![TicketId("K-1".into())];
-        b.tickets[3].external = Some(crate::store::model::External { provider: "github".into(), kind: "issue".into(), number: 1 });
+        b.tickets[3].external = Some(crate::store::model::External::github_issue(1));
         let claims = vec![Claim { ticket: TicketId("K-3".into()), agent: "claude".into(), since: Utc::now(), path: None }];
         assert_eq!(next_ticket(&b, &claims).unwrap().id.0, "K-5");
     }
@@ -297,7 +297,7 @@ mod tests {
         ]);
         b.tickets[0].status = Status::Draft;
         b.tickets[1].depends_on = vec![TicketId("K-1".into()), TicketId("K-6".into())];
-        b.tickets[3].external = Some(crate::store::model::External { provider: "github".into(), kind: "issue".into(), number: 1 });
+        b.tickets[3].external = Some(crate::store::model::External::github_issue(1));
         b.tickets[5].status = Status::Review;
         let claims = vec![Claim { ticket: TicketId("K-3".into()), agent: "claude".into(), since: Utc::now(), path: None }];
 

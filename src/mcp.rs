@@ -360,6 +360,10 @@ impl KanbanServer {
     /// `discarded` id lists, kept apart because a discarded ticket never unblocks a dependent. Two ways to the full
     /// text: `include_done=true` for the whole board, or `column="done"` for that column alone. `version` always means
     /// the board's version whatever the shape, so it is a valid `expected_version` either way.
+    ///
+    /// `minesweeper: true` means delegation mode is live: claiming a ready ticket mirrors it to a labelled GitHub issue
+    /// for an external daemon — never start a worktree or implement it yourself; the board tracks the daemon's PR back
+    /// through review to done.
     #[tool]
     async fn kanban_board(&self, Parameters(p): Parameters<BoardParams>) -> Result<CallToolResult, ErrorData> {
         let column = match p.column.as_deref() {
@@ -374,6 +378,7 @@ impl KanbanServer {
             if let Some(obj) = value.as_object_mut() {
                 obj.insert("max_workers".into(), config.max_workers().into());
                 obj.insert("idle_time".into(), config.idle_time().into());
+                obj.insert("minesweeper".into(), (cfg!(feature = "minesweeper") && config.minesweeper()).into());
             }
             Ok(value)
         })
@@ -426,8 +431,11 @@ impl KanbanServer {
     /// `kanban_worktree_start` re-attaches to it.
     #[tool]
     async fn kanban_claim(&self, Parameters(p): Parameters<ClaimParams>) -> Result<CallToolResult, ErrorData> {
-        let op = Op::Claim { id: TicketId(p.ticket), agent: p.agent.unwrap_or_else(|| DEFAULT_AGENT.into()) };
-        self.apply(Some(p.expected_version), op).await
+        let id = TicketId(p.ticket);
+        let op = Op::Claim { id: id.clone(), agent: p.agent.unwrap_or_else(|| DEFAULT_AGENT.into()) };
+        // Claiming is the MCP door into `doing` (kanban_move passes no owner, so it can't enter) — with the minesweeper
+        // toggle on, a ready claim is the delegation moment.
+        self.apply_then(Some(p.expected_version), op, move |store| crate::minesweeper::delegate_entering_doing(store, &id)).await
     }
 
     /// Give a claimed ticket back: drops the claim and returns the card to the top of todo.
@@ -512,7 +520,9 @@ impl KanbanServer {
     #[tool]
     async fn kanban_bind_external(&self, Parameters(p): Parameters<BindExternalParams>) -> Result<CallToolResult, ErrorData> {
         let external = match (p.provider, p.kind, p.number) {
-            (Some(provider), Some(kind), Some(number)) => Some(crate::store::model::External { provider, kind, number }),
+            (Some(provider), Some(kind), Some(number)) => {
+                Some(crate::store::model::External { provider, kind, number, closed: false, flag: None, sub_issues: vec![] })
+            }
             (None, None, None) => None,
             _ => return Err(ErrorData::invalid_params("provider, kind, and number must be given together (or all omitted to unbind)", None)),
         };

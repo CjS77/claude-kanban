@@ -98,9 +98,12 @@ fn seeded_config(store_dir: &Path) -> String {
     let main = store_dir.parent().and_then(crate::git::detect_main_branch).unwrap_or_else(|| "main".to_owned());
     format!(
         "{{\n  \"worktree_root\": {root},\n  \"copy_to_worktrees\": [],\n  \"max_workers\": 1,\n  \"idle_time\": 300,\n  \
-         \"port\": null,\n  \"main_branch\": {main},\n  \"poll_interval\": 60\n}}\n",
+         \"port\": null,\n  \"main_branch\": {main},\n  \"poll_interval\": 60,\n  \"minesweeper\": false,\n  \
+         \"minesweeper_label\": {label},\n  \"minesweeper_flag_labels\": {flags}\n}}\n",
         root = serde_json::json!(crate::config::DEFAULT_WORKTREE_ROOT),
         main = serde_json::json!(main),
+        label = serde_json::json!(crate::config::DEFAULT_MINESWEEPER_LABEL),
+        flags = serde_json::json!(crate::config::DEFAULT_MINESWEEPER_FLAG_LABELS),
     )
 }
 
@@ -418,11 +421,24 @@ mod tests {
         assert_eq!(config.idle_time(), 300);
         assert!(config.port.is_none(), "port seeds as null: that is what lets serve try 4747 and then hunt");
         assert_eq!(config.poll_interval(), Some(std::time::Duration::from_secs(60)));
+        assert!(!config.minesweeper(), "delegation seeds off — turning it on is a per-project choice");
+        assert_eq!(config.minesweeper_label(), crate::config::DEFAULT_MINESWEEPER_LABEL);
 
         // The seeded file is fully defined: every dial present, port explicitly null, main_branch pinned concretely.
         let raw: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(store.config_path()).unwrap()).unwrap();
         let obj = raw.as_object().unwrap();
-        let keys = ["worktree_root", "copy_to_worktrees", "max_workers", "idle_time", "port", "main_branch", "poll_interval"];
+        let keys = [
+            "worktree_root",
+            "copy_to_worktrees",
+            "max_workers",
+            "idle_time",
+            "port",
+            "main_branch",
+            "poll_interval",
+            "minesweeper",
+            "minesweeper_label",
+            "minesweeper_flag_labels",
+        ];
         let missing: Vec<_> = keys.iter().filter(|key| !obj.contains_key(**key)).collect();
         assert!(missing.is_empty(), "seeded config missing {missing:?}");
         assert!(obj["port"].is_null());
