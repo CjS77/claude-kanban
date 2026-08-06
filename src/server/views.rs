@@ -716,6 +716,36 @@ pub fn settings(config: &crate::config::Config, saved: bool) -> SettingsTpl {
     }
 }
 
+// ---- docs -----------------------------------------------------------------------------------------------------------
+
+/// The docs pane: a TOC on the left, the first entry's article primed on the right for glue.js to render. Every
+/// subsequent click swaps just `#docs-content`, so this template is only rendered once per modal open.
+#[derive(Debug, Template)]
+#[template(path = "docs.html")]
+pub struct DocsTpl {
+    pub entries: Vec<DocEntryCtx>,
+    pub first: Option<DocEntryCtx>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DocEntryCtx {
+    pub file: String,
+    pub title: String,
+    /// `btn-active` on the leading entry so the TOC opens with an obvious current-selection.
+    pub first: bool,
+}
+
+#[must_use]
+pub fn docs(entries: Vec<crate::server::docs::DocEntry>) -> DocsTpl {
+    let ctx: Vec<DocEntryCtx> = entries
+        .into_iter()
+        .enumerate()
+        .map(|(i, e)| DocEntryCtx { file: e.file, title: e.title, first: i == 0 })
+        .collect();
+    let first = ctx.first().cloned();
+    DocsTpl { entries: ctx, first }
+}
+
 // ---- toasts -----------------------------------------------------------------------------------------------------------
 
 #[derive(Debug, Template)]

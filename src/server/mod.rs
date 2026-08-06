@@ -3,6 +3,7 @@
 //! read model, writes funnel through [`crate::ops`] exactly like the MCP server's do.
 
 pub mod assets;
+pub mod docs;
 pub mod routes;
 pub mod search;
 pub mod security;
@@ -188,6 +189,10 @@ pub fn router(app: AppState) -> Router {
         .route("/ui/settings", get(routes::settings).post(routes::save_settings))
         .route("/raw/ticket/{id}", get(routes::raw_ticket))
         .route("/raw/epic/{id}", get(routes::raw_epic))
+        .route("/docs", get(docs::shell))
+        .route("/docs/page/{name}", get(docs::page))
+        .route("/docs/assets/{*path}", get(docs::asset))
+        .route("/raw/docs/{name}", get(docs::raw))
         .route("/events", get(sse::events))
         .route("/assets/{*path}", get(assets::asset))
         .layer(middleware::from_fn_with_state(app.clone(), security::guard))

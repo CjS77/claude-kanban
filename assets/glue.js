@@ -171,6 +171,12 @@
             if (modal && !modal.open) modal.showModal();
             highlightCode(target);
         }
+        // Docs: the 📖 button drops the whole pane (TOC + first article primed) into #docs; open its dialog on arrival.
+        // Subsequent TOC clicks swap only #docs-content and never re-trigger this.
+        if (target.id === "docs" && target.innerHTML.trim() !== "") {
+            const modal = document.getElementById("docs-modal");
+            if (modal && !modal.open) modal.showModal();
+        }
     });
 
     document.body.addEventListener("htmx:afterRequest", (e) => {
