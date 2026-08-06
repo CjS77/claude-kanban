@@ -5,6 +5,17 @@ All notable changes to this project are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.7.0] - 2026-08-06
+
+### Added
+
+- In-app documentation: a 📖 button in the board header opens a two-pane modal — a file-based table of contents on the
+  left, rendered markdown on the right. The `docs/` tree is baked into the binary with `rust-embed`, so the server stays
+  self-contained, and rendering reuses the `data-md-src` → `marked`/`DOMPurify` pipeline that already draws ticket and
+  epic bodies. Four read-only routes (`/docs`, `/docs/page/{name}`, `/raw/docs/{name}`, `/docs/assets/{*path}`), each
+  rejecting path traversal. Seeded with getting-started, workflow and search pages (#5).
+- README: how to reach a board served on a remote machine.
+
 ## [2.6.0] - 2026-08-05
 
 ### Added
@@ -167,6 +178,8 @@ First tagged release, covering the plugin's initial publication.
 - The create-ticket epic dropdown stays in sync with the board.
 - Markdown panes that arrive as top-level swap elements render.
 
+[2.7.0]: https://github.com/CjS77/claude-kanban/compare/v2.6.0...v2.7.0
+[2.6.0]: https://github.com/CjS77/claude-kanban/compare/v2.5.0...v2.6.0
 [2.5.0]: https://github.com/CjS77/claude-kanban/compare/v2.4.0...v2.5.0
 [2.4.0]: https://github.com/CjS77/claude-kanban/compare/v2.3.0...v2.4.0
 [2.3.0]: https://github.com/CjS77/claude-kanban/compare/v2.2.0...v2.3.0
