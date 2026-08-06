@@ -85,6 +85,7 @@ The gotcha: the server refuses anything whose `Host` header isn't exactly `local
 - Typed MCP tools for Claude (`kanban_board`, `kanban_next`, `kanban_claim`, `kanban_move`, `kanban_refine`, …) — every write goes through the same validated operations as the UI, guarded by an advisory lock and an optimistic version counter. `kanban_board` omits done tickets by default, summarizing their ids instead, so a work loop can poll cheaply; `include_done=true` or `column="done"` reads them in full, and your browser board is unaffected
 - One ticket, one git worktree, one branch (`k-7/rate-limit-login`) — parallel sessions can't trample each other or your checkout
 - A settings pane (⚙) editing `.kanban/config.json` from the board
+- In-app documentation (📖): a TOC + formatted markdown viewer over the board; content ships in `docs/`, embedded in the binary
 - Everything local: one binary, a JSON file, a loopback server. Network happens in exactly three places, all yours to control: the explicit **Create PR** click, the read-only `gh` polls (`"poll_interval": 0` switches them off), and — only when a project turns the toggle on — minesweeper delegation's `gh issue create`
 
 The reasoning behind these choices — store shape, worktree anchoring, landing proofs, statuses, interop — is in [design.md](design.md).

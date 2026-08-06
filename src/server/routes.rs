@@ -38,7 +38,7 @@ pub struct AppError {
 }
 
 impl AppError {
-    fn not_found(what: &str) -> AppError {
+    pub(super) fn not_found(what: &str) -> AppError {
         AppError { status: StatusCode::NOT_FOUND, message: format!("{what} not found"), refresh: false }
     }
 

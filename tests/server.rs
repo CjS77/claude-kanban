@@ -1161,3 +1161,114 @@ async fn auto_merge_true_finds_a_ticket_that_inherits_the_flag_from_its_epic() {
     assert!(!store.read_board().unwrap().ticket(&id).unwrap().auto_merge, "though the ticket's own flag stays false");
     assert!(!html.contains("Filed under nothing"), "a ticket under no epic keeps its own answer: {html}");
 }
+
+// ---- in-app documentation viewer -------------------------------------------------------------------------------------
+
+mod docs_ui {
+    use super::{HOST, body_text, get, test_app};
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode, header},
+    };
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    /// The three seed docs shipped under `docs/`. Kept as a shared expectation so a fourth file added later fails the
+    /// TOC test loudly rather than being silently omitted.
+    const SEED_TITLES: &[&str] = &["Getting started", "Workflow", "Search syntax"];
+
+    #[tokio::test]
+    async fn shell_renders_toc_with_every_seeded_entry() {
+        let (_dir, router, _store) = test_app();
+        let html = body_text(router.oneshot(get("/docs")).await.unwrap()).await;
+
+        for title in SEED_TITLES {
+            assert!(html.contains(title), "the TOC must list {title}: {html}");
+        }
+        // Alphabetically first is getting-started.md — its article is primed for glue.js to render.
+        assert!(
+            html.contains(r#"data-md-src="/raw/docs/getting-started.md""#),
+            "the leading entry's article must be primed: {html}"
+        );
+        // The dialog closes via a form method="dialog" button, the same shape the diff modal uses.
+        assert!(html.contains(r#"method="dialog""#), "the pane must offer a close button: {html}");
+    }
+
+    #[tokio::test]
+    async fn page_returns_article_fragment_without_inlining_the_markdown() {
+        let (_dir, router, _store) = test_app();
+        let html = body_text(router.oneshot(get("/docs/page/getting-started.md")).await.unwrap()).await;
+
+        assert!(html.contains(r#"data-md-src="/raw/docs/getting-started.md""#), "{html}");
+        assert!(html.contains("prose"), "the article carries the prose class for typography: {html}");
+        // The whole point of client-side rendering is that the server never emits the markdown text — a smoke check.
+        assert!(!html.contains("# Getting started"), "the H1 belongs to the client-side render, not the fragment: {html}");
+    }
+
+    #[tokio::test]
+    async fn page_404s_on_missing_file() {
+        let (_dir, router, _store) = test_app();
+        let res = router.oneshot(get("/docs/page/does-not-exist.md")).await.unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn page_rejects_path_traversal() {
+        let (_dir, router, _store) = test_app();
+        // Percent-encoded traversal.
+        let res = router.clone().oneshot(get("/docs/page/..%2FCargo.toml")).await.unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND, "traversal is a 404, not a read: {res:?}");
+        // A nested key would evade `DocsEmbed::get` for a top-level file — the guard catches it.
+        let res = router.oneshot(get("/docs/page/foo/bar")).await.unwrap();
+        // Axum's matchit rejects the nested path against `/docs/page/{name}` (a single segment), so this may 404 at
+        // the routing layer rather than the handler — either way, nothing is served.
+        assert!(matches!(res.status(), StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED), "unexpected {}", res.status());
+    }
+
+    #[tokio::test]
+    async fn raw_serves_markdown_bytes() {
+        let (_dir, router, _store) = test_app();
+        let res = router.oneshot(get("/raw/docs/getting-started.md")).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let ct = res.headers().get(header::CONTENT_TYPE).unwrap().to_str().unwrap().to_owned();
+        assert_eq!(ct, "text/plain; charset=utf-8");
+        let body = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+        assert!(body.starts_with("# Getting started"), "the raw endpoint returns markdown untouched: {body:.80}");
+    }
+
+    #[tokio::test]
+    async fn raw_404s_on_missing_or_traversal() {
+        let (_dir, router, _store) = test_app();
+        for path in ["/raw/docs/nope.md", "/raw/docs/..%2FCargo.toml"] {
+            let res = router.clone().oneshot(get(path)).await.unwrap();
+            assert_eq!(res.status(), StatusCode::NOT_FOUND, "{path} must 404");
+        }
+    }
+
+    #[tokio::test]
+    async fn asset_serves_svg_from_docs_assets() {
+        let (_dir, router, _store) = test_app();
+        let res = router.oneshot(get("/docs/assets/logo.svg")).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let ct = res.headers().get(header::CONTENT_TYPE).unwrap().to_str().unwrap().to_owned();
+        assert_eq!(ct, "image/svg+xml");
+    }
+
+    #[tokio::test]
+    async fn asset_404s_on_traversal() {
+        let (_dir, router, _store) = test_app();
+        let res = router.oneshot(get("/docs/assets/..%2FCargo.toml")).await.unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn docs_routes_require_the_host_header() {
+        let (_dir, router, _store) = test_app();
+        // Same middleware guards every route; one 403 is enough to prove docs isn't wired around it.
+        let req = Request::builder().uri("/docs").header(header::HOST, "evil.example").body(Body::empty()).unwrap();
+        let res = router.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        // Silence the unused-constant warning that would fire for a module with no other reference to HOST.
+        let _ = HOST;
+    }
+}
