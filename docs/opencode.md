@@ -8,7 +8,8 @@ opencode's config hook:
   Windows) that downloads or builds the binary on demand;
 - the four commands, under the same names: `/kanban:init`, `/kanban:open`, `/kanban:work`, `/kanban:delegate`;
 - the five `kanban-effort-*` subagents, reusing the Claude Code agent prompts verbatim with the effort level carried
-  as a `reasoningEffort` model option;
+  as a `reasoningEffort` model option — plus model-pinned `kanban-model-*` twins for every `provider/model` entry in
+  the board's `models` config (see below);
 - the workflow rules (the text Claude Code receives as MCP server instructions, which opencode doesn't surface),
   injected as an instructions file — only in projects that actually have a `.kanban/` board.
 
@@ -47,10 +48,15 @@ same board under the other, and sessions from both can share it. What differs is
 - **Tool names wear the server prefix.** opencode registers MCP tools as `<server>_<tool>`, so `kanban_board`
   appears in the tool list as `kanban_kanban_board`, `kanban_claim` as `kanban_kanban_claim`, and so on. The
   commands and rules the plugin injects say this explicitly; you'll see the prefixed names in permission prompts.
-- **Per-ticket `model` is not honoured.** opencode's task tool takes no per-call model override and the effort
-  agents deliberately pin no model, so a ticket's `model` field can't switch models mid-loop the way Claude Code's
-  Agent tool can. The work loop notes the deviation on the card instead of silently ignoring it. The workaround when
-  the model matters: start a session on that model and run `/kanban:work <ticket-id>` there — a ticket-id argument
+- **Per-ticket `model` is honoured through the board config.** opencode's task tool takes no per-call model
+  override, so the pin must live in an agent definition: for every `provider/model` entry in the `models` list of
+  `.kanban/config.json`, the plugin injects six `kanban-model-<slug>` subagents (a base one, plus one per effort
+  level) that the work loop dispatches to when a ticket names that model. A ten-model list means sixty injected
+  subagent entries — cheap in config, but worth knowing when reading `opencode debug config`. The Claude aliases the
+  board suggests by default (`opus`, `sonnet`, …) carry no provider prefix, so they are not addressable here: a
+  ticket naming an unconfigured or bare-alias model keeps the old behaviour — the loop dispatches by `effort` alone
+  and notes the deviation on the card. The fix when the model matters: add it to `models` (as `provider/model`) and
+  restart opencode, or start a session on that model and run `/kanban:work <ticket-id>` there — a ticket-id argument
   works that one ticket and ends.
 - **Per-ticket `effort` maps to `reasoningEffort`.** Each `kanban-effort-<level>` subagent carries its level as a
   `reasoningEffort` model option, passed through to whatever provider the session runs on. `max` maps to `xhigh`
@@ -61,10 +67,11 @@ same board under the other, and sessions from both can share it. What differs is
   way; stop it with the pid recorded in `.kanban/serve.pid`.
 - **Rules load after the board exists.** The workflow contract is injected as an instructions file only when the
   project has a `.kanban/` directory, so unrelated projects don't carry kanban rules. After the very first
-  `/kanban:init` in a project, restart opencode to pick the rules up.
+  `/kanban:init` in a project, restart opencode to pick the rules up. The `models` list is read the same way — at
+  session start — so editing it (or seeing rules at all on a fresh board) needs an opencode restart.
 
-Overriding any injected piece is supported: an `mcp.kanban`, `command["kanban:work"]`, or `agent["kanban-effort-…"]`
-entry you define in your own opencode config wins over the plugin's.
+Overriding any injected piece is supported: an `mcp.kanban`, `command["kanban:work"]`, `agent["kanban-effort-…"]`,
+or `agent["kanban-model-…"]` entry you define in your own opencode config wins over the plugin's.
 
 ## Uninstall
 

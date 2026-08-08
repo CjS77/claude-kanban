@@ -98,6 +98,9 @@ fn opencode_plugin_wires_the_same_surface() {
     }
     assert!(plugin.contains("kanban-mcp.cmd"), "index.js must pick the .cmd launcher on Windows");
     assert!(plugin.contains("kanban-rules.md"), "index.js must inject the workflow rules file");
+    assert!(plugin.contains("config.json"), "index.js must read the board config for the models vocabulary");
+    assert!(plugin.contains("kanban-model-"), "index.js must inject model-pinned agents for configured provider/model entries");
+    assert!(plugin.contains("{{KANBAN_MODELS}}"), "index.js must substitute the model dispatch table into the command templates");
 }
 
 /// Same contract as `the_setup_commands_drive_the_binary_through_the_launcher`, for the opencode templates: every
@@ -130,6 +133,8 @@ fn the_opencode_commands_drive_the_binary_through_the_launcher() {
         assert!(body.contains("description:"), "{rel} must carry a description");
         assert!(body.contains("kanban_kanban_"), "{rel} must explain opencode's server-name tool prefix");
     }
+    let work = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("opencode/command/work.md")).unwrap();
+    assert!(work.contains("{{KANBAN_MODELS}}"), "work.md must carry the placeholder index.js fills with the model dispatch table");
 }
 
 /// opencode never surfaces MCP server instructions, so the rules file the plugin injects via `instructions` must

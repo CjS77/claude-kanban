@@ -98,8 +98,8 @@ tickets in flight; a refinement counts as one worker, an implementation counts a
    sequential loop. Never let subagents race `kanban_next`: claim first, then delegate. (Claims are CAS-guarded by
    `expected_version` and refused when already claimed, so even a race only costs a re-read and retry.)
 2. **Delegate** — launch one subagent per claimed ticket via the task tool, passing the ticket id, its full `body`
-   as the spec, and the action. Pick the subagent from the ticket's `effort` — see **Model and effort** below;
-   with no effort set, use the `general` subagent. Issue independent task calls together in a single message so
+   as the spec, and the action. Pick the subagent from the ticket's `model` and `effort` — see **Model and effort**
+   below; with neither set, use the `general` subagent. Issue independent task calls together in a single message so
    they run concurrently. Every subagent starts in the **main checkout** — never inside another ticket's worktree.
    - `implement` → the subagent runs `kanban_worktree_start` (tell it to supply a short kebab-case `slug`), `cd`s into
      the reported worktree and stays there, works the spec, commits logical chunks, `kanban_note`s progress, runs
@@ -134,28 +134,35 @@ what needs discipline is the policy above: one claimer, one board-writer, subage
 
 ## Model and effort
 
-A ticket can name what its work is worth running at: `model` (an alias or a full id) and `effort` (`low` / `medium` /
-`high` / `xhigh` / `max`). Both are optional and usually absent — absent means "inherit", i.e. exactly today's
-behaviour.
+A ticket can name what its work is worth running at: `model` (one of the board's configured models, or free text) and
+`effort` (`low` / `medium` / `high` / `xhigh` / `max`). Both are optional and usually absent — absent means "inherit",
+i.e. exactly today's behaviour.
 
-You cannot change your own model or reasoning settings mid-session, so the only way to honour `effort` is to
+{{KANBAN_MODELS}}
+
+You cannot change your own model or reasoning settings mid-session, so the only way to honour either dial is to
 dispatch the ticket to a subagent. Read both fields off the ticket and pick:
 
-| `effort` | Dispatch |
-|----------|----------|
-| absent | Work it yourself (sequential loop), or the `general` subagent (parallel loop). Nothing changes. |
-| set | task tool with the `kanban-effort-<level>` subagent. |
+| `model` | `effort` | Dispatch |
+|---------|----------|----------|
+| absent | absent | Work it yourself (sequential loop), or the `general` subagent (parallel loop). Nothing changes. |
+| absent | set | task tool with the `kanban-effort-<level>` subagent. |
+| in the table above | absent | task tool with the `kanban-model-<slug>` subagent. |
+| in the table above | set | task tool with the `kanban-model-<slug>-<level>` subagent. |
+| anything else | either | No agent can run that model — see below. |
 
-The `kanban-effort-*` subagents ship with this plugin, one per level, each carrying its level as a
-`reasoningEffort` model option in its definition — the only place this harness lets effort be set, since the task
-tool takes no effort parameter. `max` maps to `xhigh`, the highest value providers accept; when a ticket asks for
-`max`, note the mapping. They pin no model, so each inherits the session's.
+These subagents ship with this plugin. The `kanban-effort-*` five carry their level as a `reasoningEffort` model
+option in their definitions — the only place this harness lets effort be set, since the task tool takes no effort
+parameter — and pin no model, so each inherits the session's. The `kanban-model-*` agents pin exactly the configured
+model their name carries, with the same effort levels as suffixes. `max` maps to `xhigh`, the highest value providers
+accept; when a ticket asks for `max`, note the mapping (the `-max` agent names still exist, carrying `xhigh`).
 
-**`model` cannot be honoured per ticket on this harness**: the task tool takes no model override, and the agent
-definitions deliberately pin none. Dispatch by `effort` alone (or work it yourself when only `model` is set) and
-`kanban_note` what was requested versus what actually ran. If the model genuinely matters, tell the user the
-workaround: start a session on that model and run `/kanban:work <ticket-id>` there — a ticket-id argument works the
-one ticket and ends.
+**A `model` outside the table above cannot be honoured**: the task tool takes no model override, and only configured
+`provider/model` entries get pinned agents — both the agents and the table freeze at session start, so a `models`
+edit in `.kanban/config.json` needs an opencode restart. Dispatch by `effort` alone (or work it yourself when only
+`model` is set) and `kanban_note` what was requested versus what actually ran. If the model genuinely matters, tell
+the user the fix: add it to `models` in `.kanban/config.json` (as `provider/model`) and restart opencode — or start
+a session on that model and run `/kanban:work <ticket-id>` there; a ticket-id argument works the one ticket and ends.
 
 **Never silently ignore either field.** If you dispatch a ticket at anything other than what it asked for — a level
 this harness maps down, a model it cannot switch to, a fallback you chose — `kanban_note` what was requested versus

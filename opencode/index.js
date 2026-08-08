@@ -1,7 +1,8 @@
 // claude-kanban as an opencode plugin. opencode reads none of the Claude Code manifests — not
 // .claude-plugin/plugin.json, not .mcp.json, not commands/ or agents/ — so this file injects the same
 // surface through the plugin API's config hook: the `kanban` MCP server, the four /kanban:* commands,
-// the five kanban-effort-* subagents, and (in projects that have a board) the workflow rules file.
+// the five kanban-effort-* subagents — plus model-pinned kanban-model-* twins for each provider/model
+// entry in the board's `models` config — and (in projects that have a board) the workflow rules file.
 //
 // Deliberately a single file with zero dependencies: the repo is a cargo project and opencode's bun
 // runtime loads this directly — no package.json, no npm, no build step. Install is one line in
@@ -61,6 +62,26 @@ const exists = (p) =>
     () => false,
   )
 
+// The board's configured model vocabulary — `models` in `.kanban/config.json`, `[]` when absent. The Rust side treats
+// a malformed config as a loud error; here silence is right, because the plugin loads in every project, board or not,
+// and must never take a session down with it.
+async function readModels(project) {
+  try {
+    const config = JSON.parse(await readFile(path.join(project, ".kanban", "config.json"), "utf8"))
+    return Array.isArray(config.models) ? config.models.filter((m) => typeof m === "string") : []
+  } catch {
+    return []
+  }
+}
+
+// A provider/model id as an agent-name fragment: "venice/zai-org-glm-5-2" → "venice-zai-org-glm-5-2". Collisions
+// ("a/b.c" vs "a/b-c") resolve first-entry-wins via the injection guard.
+const slug = (model) =>
+  model
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+
 export const KanbanPlugin = async ({ directory, worktree }) => {
   const project = worktree || directory
   // The same launcher the Claude Code plugin uses: it materialises the binary (download or cargo
@@ -75,11 +96,33 @@ export const KanbanPlugin = async ({ directory, worktree }) => {
       config.mcp ??= {}
       config.mcp["kanban"] ??= { type: "local", command: [launcher, "mcp"], enabled: true }
 
+      // Only entries with a provider/ prefix are dispatchable: an opencode model ref is provider/model,
+      // so a bare alias ("opus") can get no pinned agent and falls to work.md's unconfigured-model path.
+      const vocabulary = await readModels(project)
+      const dispatchable = vocabulary.filter((m) => m.includes("/"))
+      const undispatchable = vocabulary.filter((m) => !m.includes("/"))
+
+      // The {{KANBAN_MODELS}} block for work.md: the model → agent table this session's injected agents
+      // answer to, frozen at the same moment they are injected — self-consistent by construction, stale
+      // together after a config edit until restart. No table when nothing is dispatchable: an empty one
+      // would invite guessed agent names.
+      const modelBlock = dispatchable.length
+        ? "This board's configured models and their pinned agents (`models` in `.kanban/config.json`, frozen at " +
+          "session start — a config edit needs an opencode restart):\n\n" +
+          "| ticket `model` | `effort` absent | `effort` set |\n|---|---|---|\n" +
+          dispatchable.map((m) => `| \`${m}\` | \`kanban-model-${slug(m)}\` | \`kanban-model-${slug(m)}-<level>\` |`).join("\n") +
+          (undispatchable.length
+            ? `\n\nConfigured entries without a provider prefix (${undispatchable.map((m) => `\`${m}\``).join(", ")}) ` +
+              "are not addressable on this harness and have no agents — treat them as unconfigured."
+            : "")
+        : "No `models` are configured in `.kanban/config.json`, so no model-pinned agents exist this session — " +
+          "treat every ticket `model` as unconfigured."
+
       config.command ??= {}
       for (const [name, file] of Object.entries(COMMANDS)) {
         if (config.command[name]) continue
         const { description, body } = await parse(path.join(root, "opencode", "command", file))
-        config.command[name] = { description, template: body.replaceAll("{{KANBAN_ROOT}}", root) }
+        config.command[name] = { description, template: body.replaceAll("{{KANBAN_ROOT}}", root).replaceAll("{{KANBAN_MODELS}}", modelBlock) }
       }
 
       // The agent prompts are the Claude Code ones, verbatim — agents/*.md is the single source of
@@ -96,6 +139,32 @@ export const KanbanPlugin = async ({ directory, worktree }) => {
           mode: "subagent",
           prompt: TOOL_NOTE + body,
           options: { reasoningEffort },
+        }
+      }
+
+      // Model-pinned twins of the effort agents, six per dispatchable model: a base agent for "model
+      // set, effort absent" plus one per effort level. This is the only way a ticket's model is
+      // honoured on this harness — the task tool takes no model override, so the pin must live in an
+      // agent definition. Names use the card's level (…-max) even where the option saturates to xhigh,
+      // so work.md's dispatch stays mechanical.
+      if (dispatchable.length) {
+        // All five agents/*.md share one body — only the frontmatter differs — so borrow medium's.
+        const { body } = await parse(path.join(root, "agents", "kanban-effort-medium.md"))
+        for (const model of dispatchable) {
+          const base = `kanban-model-${slug(model)}`
+          const variants = [[base, null, null], ...Object.entries(EFFORT).map(([level, re]) => [`${base}-${level}`, level, re])]
+          for (const [name, level, reasoningEffort] of variants) {
+            if (config.agent[name]) continue
+            config.agent[name] = {
+              description:
+                `Works a single Kanban ticket on ${model}${level ? ` at ${level} reasoning effort` : ""}. ` +
+                `Launched by /kanban:work for tickets whose card asks for \`model: ${model}\`; not meant to be selected on your own judgement.`,
+              mode: "subagent",
+              model,
+              prompt: TOOL_NOTE + body,
+              ...(reasoningEffort ? { options: { reasoningEffort } } : {}),
+            }
+          }
         }
       }
 

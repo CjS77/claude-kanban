@@ -5,6 +5,20 @@ All notable changes to this project are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Configurable model vocabulary: a `"models"` list in `.kanban/config.json` (editable from the ⚙ settings pane)
+  replaces the default Claude aliases (`opus`/`sonnet`/`haiku`/`fable`) everywhere they surface — the web UI's model
+  datalists and placeholders, and the `kanban_board` MCP response, which now returns the effective list as `models`
+  so board-driving agents suggest ids their harness can actually run. Empty or absent keeps the defaults. Under
+  opencode the list also unlocks per-ticket model dispatch: for every `provider/model` entry the plugin injects six
+  model-pinned `kanban-model-<slug>` subagents (base + one per effort level) and substitutes the model → agent table
+  into `/kanban:work` via a new `{{KANBAN_MODELS}}` placeholder, so a ticket's `model` field is honoured instead of
+  only noted as a deviation. Entries without a provider prefix, and models not in the list, keep the old
+  note-the-deviation behaviour; the list is read at session start, so edits need an opencode restart.
+
 ## [3.0.0] - 2026-08-08
 
 ### Added

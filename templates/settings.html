@@ -42,6 +42,10 @@
         <textarea name="copy_to_worktrees" rows="3" placeholder=".env" class="textarea textarea-sm w-full font-mono">{{ copy_to_worktrees }}</textarea>
         <span class="text-xs opacity-60">gitignored files copied into each new worktree — anything git tracks is refused</span>
     </label>
+    <label class="flex flex-col gap-1 text-sm">Models (one per line)
+        <textarea name="models" rows="3" placeholder="opus&#10;sonnet&#10;haiku&#10;fable" class="textarea textarea-sm w-full font-mono">{{ models }}</textarea>
+        <span class="text-xs opacity-60">the model vocabulary tickets may name — empty means the Claude aliases; opencode dispatch needs provider/model ids</span>
+    </label>
     <div class="divider my-0 text-xs opacity-60">Minesweeper delegation</div>
     <label class="flex items-center justify-between gap-3 text-sm">
         <span>Delegate ready tickets

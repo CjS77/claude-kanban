@@ -1018,7 +1018,8 @@ async fn the_settings_pane_round_trips_the_config_and_refuses_garbage() {
 
     // POST writes the whole file; the re-rendered pane confirms and carries the new values.
     let form = "main_branch=trunk&poll_interval=0&max_workers=3&idle_time=&worktree_root=%2Fdata%2Fwt&copy_to_worktrees=.env%0Acerts%2Flocal.pem&port=\
-                &minesweeper=on&minesweeper_label=tryFix&minesweeper_flag_labels=minesweeperFailed%2C+broken";
+                &minesweeper=on&minesweeper_label=tryFix&minesweeper_flag_labels=minesweeperFailed%2C+broken\
+                &models=opus%0Avenice%2Fzai-org-glm-5-2";
     let res = router.clone().oneshot(post("/ui/settings", 1, form)).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     let html = body_text(res).await;
@@ -1034,6 +1035,7 @@ async fn the_settings_pane_round_trips_the_config_and_refuses_garbage() {
     assert!(config.minesweeper(), "the checkbox posted 'on'");
     assert_eq!(config.minesweeper_label(), "tryFix");
     assert_eq!(config.minesweeper_flag_labels(), vec!["minesweeperFailed", "broken"], "comma-separated input splits");
+    assert_eq!(config.models, vec!["opus", "venice/zai-org-glm-5-2"], "newline-separated textarea splits");
 
     // A non-numeric number is a 422 toast and the file stays as-saved.
     let res = router.clone().oneshot(post("/ui/settings", 2, "max_workers=lots")).await.unwrap();
@@ -1041,14 +1043,36 @@ async fn the_settings_pane_round_trips_the_config_and_refuses_garbage() {
     assert_eq!(res.headers()["hx-retarget"], "#toasts");
     assert_eq!(claude_kanban::config::Config::load(store.dir()).unwrap().max_workers(), 3, "bad input must not clobber the file");
 
-    // A form without the checkbox (unchecked boxes post nothing) turns delegation back off.
+    // A form without the checkbox (unchecked boxes post nothing) turns delegation back off — and the whole-file save
+    // means an emptied models textarea clears the list back to the defaults.
     let res = router.clone().oneshot(post("/ui/settings", 3, "minesweeper_label=autofix")).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
-    assert!(!claude_kanban::config::Config::load(store.dir()).unwrap().minesweeper(), "unchecked box means off");
+    let config = claude_kanban::config::Config::load(store.dir()).unwrap();
+    assert!(!config.minesweeper(), "unchecked box means off");
+    assert!(config.models.is_empty(), "an omitted models field clears the list");
 
     // The guard covers settings like every mutation: no version header, no write.
     let req = Request::builder().method("POST").uri("/ui/settings").header(header::HOST, HOST).body(Body::empty()).unwrap();
     assert_eq!(router.oneshot(req).await.unwrap().status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn the_model_datalists_follow_the_configured_vocabulary() {
+    let (_dir, router, store) = test_app();
+    seed_ticket(&store, "needs a model");
+
+    // Unconfigured board: the Claude aliases, with the first as placeholder.
+    let html = body_text(router.clone().oneshot(get("/")).await.unwrap()).await;
+    assert!(html.contains(r#"<option value="sonnet">"#), "{html}");
+    assert!(html.contains(r#"placeholder="opus""#), "{html}");
+
+    // A configured list replaces them — create form and edit fragment alike, no restart.
+    store.write_config(&claude_kanban::config::Config { models: vec!["venice/zai-org-glm-5-2".into()], ..Default::default() }).unwrap();
+    let html = body_text(router.clone().oneshot(get("/")).await.unwrap()).await;
+    assert!(html.contains(r#"<option value="venice/zai-org-glm-5-2">"#) && !html.contains(r#"<option value="sonnet">"#), "{html}");
+    assert!(html.contains(r#"placeholder="venice/zai-org-glm-5-2""#), "{html}");
+    let html = body_text(router.oneshot(get("/ui/ticket/K-1/edit")).await.unwrap()).await;
+    assert!(html.contains(r#"<option value="venice/zai-org-glm-5-2">"#) && !html.contains(r#"<option value="sonnet">"#), "{html}");
 }
 
 #[tokio::test]

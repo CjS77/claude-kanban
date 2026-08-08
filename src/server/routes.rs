@@ -190,7 +190,11 @@ fn rendered_detail(store: &Store, id: &TicketId) -> Result<Html<String>, AppErro
 
 pub async fn page(State(app): State<AppState>) -> Result<Html<String>, AppError> {
     let title = app.title.clone();
-    blocking(&app, move |store| Ok(Html(views::page(title, &store.read_board()?).render()?))).await
+    blocking(&app, move |store| {
+        let models = crate::config::Config::load(store.dir())?.models();
+        Ok(Html(views::page(title, &store.read_board()?, models).render()?))
+    })
+    .await
 }
 
 pub async fn board(State(app): State<AppState>, Query(filters): Query<views::Filters>) -> Result<Html<String>, AppError> {
@@ -210,7 +214,8 @@ pub async fn ticket_detail(State(app): State<AppState>, Path(id): Path<String>) 
 
 pub async fn ticket_edit(State(app): State<AppState>, Path(id): Path<String>) -> Result<Html<String>, AppError> {
     blocking(&app, move |store| {
-        let tpl = views::detail_edit(&store.read_board()?, &TicketId(id.clone())).ok_or_else(|| AppError::not_found(&id))?;
+        let models = crate::config::Config::load(store.dir())?.models();
+        let tpl = views::detail_edit(&store.read_board()?, &TicketId(id.clone()), models).ok_or_else(|| AppError::not_found(&id))?;
         Ok(Html(tpl.render()?))
     })
     .await
@@ -500,6 +505,7 @@ pub struct SettingsForm {
     minesweeper: String,
     minesweeper_label: String,
     minesweeper_flag_labels: String,
+    models: String,
 }
 
 impl SettingsForm {
@@ -530,6 +536,7 @@ impl SettingsForm {
                 .filter(|l| !l.is_empty())
                 .map(str::to_owned)
                 .collect(),
+            models: self.models.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_owned).collect(),
         })
     }
 }

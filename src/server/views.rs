@@ -21,10 +21,6 @@ use crate::{
 /// The four statuses in workflow order, for the status button groups.
 const STATUSES: [Status; 4] = [Status::Draft, Status::Stub, Status::Review, Status::Ready];
 
-/// The model aliases the `<datalist>` suggests. Only suggestions — the field is free text, because `--model` takes a
-/// full id (`claude-opus-4-8`) just as happily as an alias.
-pub const MODEL_SUGGESTIONS: [&str; 4] = ["opus", "sonnet", "haiku", "fable"];
-
 /// A ticket's model/effort preference as one badge: `opus · xhigh`, or whichever half is set. `None` when neither is —
 /// the overwhelming majority of tickets, which should stay visually quiet.
 fn run_badge(ticket: &crate::store::model::Ticket) -> Option<String> {
@@ -76,8 +72,11 @@ pub struct PageTpl {
     /// The plugin's repo, behind the header's GitHub mark. Also manifest-sourced (`[package] repository`).
     pub repo_url: &'static str,
     pub epics: Vec<EpicOptionCtx>,
-    /// Model aliases the create form's `<datalist>` suggests; the field itself stays free text.
-    pub models: [&'static str; 4],
+    /// The board's model vocabulary ([`crate::config::Config::models`]) for the create form's `<datalist>`; the field
+    /// itself stays free text.
+    pub models: Vec<String>,
+    /// The first vocabulary entry, as the model input's placeholder.
+    pub model_placeholder: String,
     /// Effort levels for the create form's select, all unselected — a new ticket inherits by default.
     pub efforts: Vec<EffortOptCtx>,
     /// Whether the binary was built with the `minesweeper` feature — gates the create modal's handoff checkbox. The
@@ -94,14 +93,15 @@ pub struct EpicOptionCtx {
     pub selected: bool,
 }
 
-#[must_use] 
-pub fn page(title: String, board: &Board) -> PageTpl {
+#[must_use]
+pub fn page(title: String, board: &Board, models: Vec<String>) -> PageTpl {
     PageTpl {
         title,
         version: env!("CARGO_PKG_VERSION"),
         repo_url: env!("CARGO_PKG_REPOSITORY"),
         epics: epic_options(board, None),
-        models: MODEL_SUGGESTIONS,
+        model_placeholder: models.first().cloned().unwrap_or_default(),
+        models,
         efforts: effort_options(None),
         minesweeper_available: cfg!(feature = "minesweeper"),
         filter_oob: false,
@@ -533,7 +533,10 @@ pub fn detail(board: &Board, claims: &[Claim], id: &crate::store::model::TicketI
 pub struct DetailEditTpl {
     pub ticket: EditCtx,
     pub epics: Vec<EpicOptionCtx>,
-    pub models: [&'static str; 4],
+    /// The board's model vocabulary ([`crate::config::Config::models`]); the input stays free text.
+    pub models: Vec<String>,
+    /// The first vocabulary entry, as the model input's placeholder.
+    pub model_placeholder: String,
     pub efforts: Vec<EffortOptCtx>,
     /// Whether the form offers the "Hand to minesweeper" checkbox: feature compiled in, ticket unbound, still in todo.
     /// Anything already delegated, claimed, or past todo has nothing sensible for the box to do.
@@ -564,7 +567,7 @@ fn effort_options(current: Option<Effort>) -> Vec<EffortOptCtx> {
     Effort::ALL.map(|e| EffortOptCtx { name: e.as_str(), selected: Some(e) == current }).into()
 }
 
-pub fn detail_edit(board: &Board, id: &crate::store::model::TicketId) -> Option<DetailEditTpl> {
+pub fn detail_edit(board: &Board, id: &crate::store::model::TicketId, models: Vec<String>) -> Option<DetailEditTpl> {
     let t = board.ticket(id)?;
     Some(DetailEditTpl {
         ticket: EditCtx {
@@ -576,7 +579,8 @@ pub fn detail_edit(board: &Board, id: &crate::store::model::TicketId) -> Option<
             model: t.model.clone().unwrap_or_default(),
         },
         epics: epic_options(board, t.epic.as_ref().map(|e| e.0.as_str())),
-        models: MODEL_SUGGESTIONS,
+        model_placeholder: models.first().cloned().unwrap_or_default(),
+        models,
         efforts: effort_options(t.effort),
         can_hand_over: cfg!(feature = "minesweeper") && t.external.is_none() && t.column.id() == ColumnId::Todo,
     })
@@ -692,6 +696,9 @@ pub struct SettingsTpl {
     pub minesweeper_label: String,
     /// Comma-separated in the input.
     pub minesweeper_flag_labels: String,
+    /// One entry per line in the textarea. The raw field, not the accessor: unset renders empty, and the placeholder
+    /// names the alias defaults.
+    pub models: String,
     /// True right after a save — shows the confirmation (and the port-needs-restart caveat).
     pub saved: bool,
 }
@@ -712,6 +719,7 @@ pub fn settings(config: &crate::config::Config, saved: bool) -> SettingsTpl {
         minesweeper: config.minesweeper(),
         minesweeper_label: config.minesweeper_label.clone().unwrap_or_default(),
         minesweeper_flag_labels: config.minesweeper_flag_labels.join(", "),
+        models: config.models.join("\n"),
         saved,
     }
 }

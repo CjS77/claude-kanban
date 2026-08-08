@@ -92,14 +92,15 @@ const MERGE_SH: &str = include_str!("../../merge.sh");
 /// Store-local config written by `init`, and committed like the board. Every dial appears explicitly at its default so
 /// the file documents itself. `port` is `null`: an explicit port fails loudly when taken, while no choice means "try
 /// 4747, then hunt". `main_branch` is detected from the surrounding repo and pinned concretely, falling back to
-/// `"main"` outside one. Strict JSON — [`crate::config::Config`] is serde-parsed and a malformed file is a loud error,
-/// so this cannot carry comments.
+/// `"main"` outside one. `models` stays `[]` rather than its effective default: which model ids make sense depends on
+/// the harness driving the board, so the seed must not pin the Claude aliases. Strict JSON —
+/// [`crate::config::Config`] is serde-parsed and a malformed file is a loud error, so this cannot carry comments.
 fn seeded_config(store_dir: &Path) -> String {
     let main = store_dir.parent().and_then(crate::git::detect_main_branch).unwrap_or_else(|| "main".to_owned());
     format!(
         "{{\n  \"worktree_root\": {root},\n  \"copy_to_worktrees\": [],\n  \"max_workers\": 1,\n  \"idle_time\": 300,\n  \
          \"port\": null,\n  \"main_branch\": {main},\n  \"poll_interval\": 60,\n  \"minesweeper\": false,\n  \
-         \"minesweeper_label\": {label},\n  \"minesweeper_flag_labels\": {flags}\n}}\n",
+         \"minesweeper_label\": {label},\n  \"minesweeper_flag_labels\": {flags},\n  \"models\": []\n}}\n",
         root = serde_json::json!(crate::config::DEFAULT_WORKTREE_ROOT),
         main = serde_json::json!(main),
         label = serde_json::json!(crate::config::DEFAULT_MINESWEEPER_LABEL),

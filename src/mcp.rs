@@ -138,8 +138,8 @@ pub struct CreateTicketParams {
     pub epic: Option<String>,
     #[serde(default)]
     pub labels: Option<Vec<String>>,
-    /// The model this ticket's work should run on — an alias like "opus"/"sonnet"/"haiku", or a full id like
-    /// "claude-opus-4-8". Omit to inherit whatever the worker session is already running.
+    /// The model this ticket's work should run on — one of the board's models (`kanban_board` returns the effective
+    /// list as `models`), or any free-text model id. Omit to inherit whatever the worker session is already running.
     #[serde(default)]
     pub model: Option<String>,
     /// Reasoning effort for this ticket's work: "low", "medium", "high", "xhigh", or "max". Omit to inherit.
@@ -193,8 +193,9 @@ pub struct UpdateTicketParams {
     /// Epic id, e.g. "EP-2". `null` detaches the ticket from its epic; omit to leave it alone.
     #[serde(default, deserialize_with = "present_or_null")]
     pub epic: Option<Option<String>>,
-    /// The model this ticket's work should run on — an alias like "opus", or a full id like "claude-opus-4-8". `null`
-    /// clears the preference back to "inherit"; omit to leave it alone.
+    /// The model this ticket's work should run on — one of the board's models (`kanban_board` returns the effective
+    /// list as `models`), or any free-text model id. `null` clears the preference back to "inherit"; omit to leave it
+    /// alone.
     #[serde(default, deserialize_with = "present_or_null")]
     pub model: Option<Option<String>>,
     /// Reasoning effort: "low", "medium", "high", "xhigh", or "max". `null` clears it back to "inherit"; omit to leave it
@@ -253,7 +254,8 @@ pub struct NewTicketParam {
     pub body: Option<String>,
     #[serde(default)]
     pub labels: Option<Vec<String>>,
-    /// Model for this subtask's work — an alias like "opus", or a full id. Omit to inherit; set it on the hard split.
+    /// Model for this subtask's work — one of the board's models (`kanban_board` returns the effective list as
+    /// `models`), or any free-text model id. Omit to inherit; set it on the hard split.
     #[serde(default)]
     pub model: Option<String>,
     /// Reasoning effort for this subtask: "low", "medium", "high", "xhigh", or "max". Omit to inherit.
@@ -355,7 +357,8 @@ pub struct WorktreeFinishParams {
 impl KanbanServer {
     /// Read the board: columns, tickets (with derived blocked/claim facts), epics (with derived columns), the current
     /// version — pass that version as `expected_version` to mutating tools — plus `max_workers`, how many tickets a work
-    /// loop may drive concurrently, and `idle_time`, how many seconds it sleeps between polls when nothing is eligible.
+    /// loop may drive concurrently, `idle_time`, how many seconds it sleeps between polls when nothing is eligible, and
+    /// `models`, the model vocabulary a ticket's `model` field should draw from.
     ///
     /// Done tickets are **omitted by default**: finished work is not input to the next decision, and its specs and
     /// progress logs are the bulk of the board. In their place comes a `done` summary — `count` plus the `landed` and
@@ -381,6 +384,7 @@ impl KanbanServer {
                 obj.insert("max_workers".into(), config.max_workers().into());
                 obj.insert("idle_time".into(), config.idle_time().into());
                 obj.insert("minesweeper".into(), (cfg!(feature = "minesweeper") && config.minesweeper()).into());
+                obj.insert("models".into(), config.models().into());
             }
             Ok(value)
         })

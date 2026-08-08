@@ -29,6 +29,9 @@ pub const DEFAULT_MINESWEEPER_LABEL: &str = "autofix";
 /// defaults for "the child crashed" and "the screener balked".
 pub const DEFAULT_MINESWEEPER_FLAG_LABELS: [&str; 2] = ["minesweeperFailed", "possiblyDangerous"];
 
+/// The model vocabulary when `models` says nothing: the Claude Code aliases.
+pub const DEFAULT_MODELS: [&str; 4] = ["opus", "sonnet", "haiku", "fable"];
+
 /// The config file's shape. Unknown keys are ignored (the file is hand-written; a typo shouldn't brick the tool — though it
 /// also won't warn. Keep the schema small.)
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -64,6 +67,11 @@ pub struct Config {
     /// Issue labels that flag a delegated ticket for a human — the ticket stays in `doing`, wearing the label.
     /// Empty → [`DEFAULT_MINESWEEPER_FLAG_LABELS`].
     pub minesweeper_flag_labels: Vec<String>,
+    /// The model vocabulary tickets may name in their `model` field — suggested by the web UI, returned by
+    /// `kanban_board`, and (on opencode) turned into model-pinned subagents so per-ticket dispatch works. Entries a
+    /// harness can actually switch to: Claude Code takes aliases or full ids, opencode needs `provider/model` ids.
+    /// Empty → [`DEFAULT_MODELS`].
+    pub models: Vec<String>,
 }
 
 impl Config {
@@ -134,6 +142,17 @@ impl Config {
             DEFAULT_MINESWEEPER_FLAG_LABELS.iter().map(|&l| l.to_owned()).collect()
         } else {
             self.minesweeper_flag_labels.clone()
+        }
+    }
+
+    /// The effective model vocabulary: empty collapses to [`DEFAULT_MODELS`]. Never empty, so "the first entry" is a
+    /// safe placeholder.
+    #[must_use]
+    pub fn models(&self) -> Vec<String> {
+        if self.models.is_empty() {
+            DEFAULT_MODELS.iter().map(|&m| m.to_owned()).collect()
+        } else {
+            self.models.clone()
         }
     }
 }
@@ -233,6 +252,7 @@ mod tests {
             "minesweeper",
             "minesweeper_label",
             "minesweeper_flag_labels",
+            "models",
         ];
         let missing: Vec<_> = keys.iter().filter(|key| !obj.contains_key(**key)).collect();
         assert!(missing.is_empty(), "missing {missing:?}");
@@ -256,6 +276,21 @@ mod tests {
         assert!(cfg.minesweeper());
         assert_eq!(cfg.minesweeper_label(), "tryFix");
         assert_eq!(cfg.minesweeper_flag_labels(), vec!["broken"]);
+    }
+
+    #[test]
+    fn models_absent_and_empty_collapse_to_the_claude_aliases() {
+        assert_eq!(Config::default().models(), DEFAULT_MODELS.map(str::to_owned).to_vec());
+        assert_eq!(Config { models: vec![], ..Config::default() }.models(), DEFAULT_MODELS.map(str::to_owned).to_vec());
+        let cfg = Config { models: vec!["venice/zai-org-glm-5-2".into()], ..Config::default() };
+        assert_eq!(cfg.models(), vec!["venice/zai-org-glm-5-2"], "a configured list replaces the defaults, never merges");
+    }
+
+    #[test]
+    fn models_parse_from_config_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.json"), r#"{ "models": ["venice/zai-org-glm-5-2", "anthropic/claude-opus-4-8"] }"#).unwrap();
+        assert_eq!(Config::load(dir.path()).unwrap().models(), vec!["venice/zai-org-glm-5-2", "anthropic/claude-opus-4-8"]);
     }
 
     #[test]

@@ -131,9 +131,9 @@ what needs discipline is the policy above: one claimer, one board-writer, subage
 
 ## Model and effort
 
-A ticket can name what its work is worth running at: `model` (an alias like `opus`, or a full id like
-`claude-opus-4-8`) and `effort` (`low` / `medium` / `high` / `xhigh` / `max`). Both are optional and usually absent —
-absent means "inherit", i.e. exactly today's behaviour.
+A ticket can name what its work is worth running at: `model` (one of the board's models — `kanban_board` returns the
+effective list as `models` — or any full id) and `effort` (`low` / `medium` / `high` / `xhigh` / `max`). Both are
+optional and usually absent — absent means "inherit", i.e. exactly today's behaviour.
 
 You cannot change your own model or effort mid-session, so the only way to honour either is to dispatch the ticket to a
 subagent. Read both fields off the ticket and pick:
