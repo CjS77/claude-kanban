@@ -28,8 +28,10 @@ use crate::{
 /// What Claude is called on the board when a tool doesn't say otherwise.
 const DEFAULT_AGENT: &str = "claude";
 
-/// The workflow contract, shipped to the client as server instructions.
-const INSTRUCTIONS: &str = "A local Kanban board shared with a human (who sees it live in a browser). \
+/// The workflow contract, shipped to the client as server instructions. Public because opencode never surfaces MCP
+/// server instructions, so `opencode/kanban-rules.md` must carry the same text — tests/manifests.rs pins the two
+/// together.
+pub const INSTRUCTIONS: &str ="A local Kanban board shared with a human (who sees it live in a browser). \
 The lifecycle of a ready ticket: kanban_claim → kanban_worktree_start → work in the worktree, committing as you go → \
 kanban_note progress → kanban_worktree_finish → kanban_move to review. \
 Done is not yours to declare: the board lands review tickets in done automatically once their branch or PR is merged \

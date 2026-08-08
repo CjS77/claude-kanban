@@ -26,6 +26,9 @@ download, the launcher falls back to `cargo build --release`, which needs a Rust
 everything that worked before the prebuilt binaries still works. If that first-run build takes long enough that MCP
 startup gives up waiting, the build carries on and the next session attaches normally.
 
+**opencode.** The same board works under [opencode](https://opencode.ai): clone the repo and add its `opencode/`
+directory as a plugin — the walkthrough is on the *Using the board with opencode* page of these docs.
+
 To hack on the plugin itself, load your clone directly:
 
 ```bash

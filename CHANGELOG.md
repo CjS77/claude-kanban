@@ -5,6 +5,20 @@ All notable changes to this project are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- opencode support: `opencode/index.js` — a dependency-free plugin for [opencode](https://opencode.ai) that injects
+  the `kanban` MCP server (through the existing launcher, `.cmd` on Windows), the four `/kanban:*` commands (from
+  templates in `opencode/command/`, launcher path substituted at load), the five `kanban-effort-*` subagents (sharing
+  the `agents/*.md` prompts, effort carried as a `reasoningEffort` model option, `max` saturating at `xhigh`), and the
+  workflow rules (`opencode/kanban-rules.md`, injected as an instructions file only where a `.kanban/` board exists,
+  since opencode never surfaces MCP server instructions — tests/manifests.rs pins it to `mcp::INSTRUCTIONS`). Install
+  is one `"plugin"` line in opencode config; the walkthrough and harness differences (server-name tool prefix,
+  per-ticket `model` not honourable per call, `serve` detached via `nohup`) are in `docs/opencode.md`, which also
+  ships in the in-app 📖 docs.
+
 ## [2.7.0] - 2026-08-06
 
 ### Added

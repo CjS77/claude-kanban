@@ -79,6 +79,73 @@ fn bash_blocks(body: &str) -> impl Iterator<Item = &str> {
     body.split("```bash").skip(1).filter_map(|rest| rest.split_once("```")).map(|(block, _)| block)
 }
 
+/// The opencode surface: `opencode/index.js` injects the MCP server, commands, and effort agents through opencode's
+/// config hook (opencode reads none of the Claude Code manifests). These tests pin the pieces the hook assembles at
+/// runtime: the command templates it reads, the launcher placeholder it substitutes, and the agent files it shares
+/// with the Claude Code plugin. See docs/opencode.md for the install story.
+#[test]
+fn opencode_plugin_wires_the_same_surface() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let plugin = fs::read_to_string(root.join("opencode/index.js")).expect("opencode/index.js is the opencode entry point");
+
+    for name in ["kanban:init", "kanban:open", "kanban:work", "kanban:delegate"] {
+        assert!(plugin.contains(&format!("\"{name}\"")), "index.js must register the {name} command");
+    }
+    for level in ["low", "medium", "high", "xhigh", "max"] {
+        assert!(plugin.contains(&format!("{level}:")), "index.js must map effort level {level}");
+        let agent = root.join(format!("agents/kanban-effort-{level}.md"));
+        assert!(agent.is_file(), "index.js reads the shared agent prompt {}", agent.display());
+    }
+    assert!(plugin.contains("kanban-mcp.cmd"), "index.js must pick the .cmd launcher on Windows");
+    assert!(plugin.contains("kanban-rules.md"), "index.js must inject the workflow rules file");
+}
+
+/// Same contract as `the_setup_commands_drive_the_binary_through_the_launcher`, for the opencode templates: every
+/// runnable block goes through the launcher via the `{{KANBAN_ROOT}}` placeholder index.js substitutes at load.
+#[test]
+fn the_opencode_commands_drive_the_binary_through_the_launcher() {
+    for name in ["init", "open"] {
+        let rel = format!("opencode/command/{name}.md");
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(&rel);
+        let body = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{rel} must exist: it is an opencode command template: {e}"));
+
+        let frontmatter = body.strip_prefix("---\n").and_then(|rest| rest.split_once("\n---")).map(|(front, _)| front);
+        let frontmatter = frontmatter.unwrap_or_else(|| panic!("{rel} must open with a --- frontmatter block"));
+        assert!(frontmatter.contains("description:"), "{rel}'s frontmatter must carry a description: index.js refuses to load without one");
+
+        assert!(
+            body.contains("{{KANBAN_ROOT}}/bin/kanban-mcp"),
+            "{rel} must invoke the launcher through the {{{{KANBAN_ROOT}}}} placeholder — the binary is not on PATH"
+        );
+        bash_blocks(&body).for_each(|block| {
+            assert!(
+                block.contains("{{KANBAN_ROOT}}/bin/kanban-mcp"),
+                "{rel} has a runnable block that doesn't go through the launcher:\n{block}"
+            );
+        });
+    }
+    for name in ["work", "delegate"] {
+        let rel = format!("opencode/command/{name}.md");
+        let body = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(&rel)).unwrap_or_else(|e| panic!("{rel} must exist: {e}"));
+        assert!(body.contains("description:"), "{rel} must carry a description");
+        assert!(body.contains("kanban_kanban_"), "{rel} must explain opencode's server-name tool prefix");
+    }
+}
+
+/// opencode never surfaces MCP server instructions, so the rules file the plugin injects via `instructions` must
+/// carry the same workflow contract the Rust server ships — compared word-for-word, ignoring line wrapping.
+#[test]
+fn opencode_rules_carry_the_mcp_instructions() {
+    let rules = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("opencode/kanban-rules.md"))
+        .expect("opencode/kanban-rules.md must exist: index.js injects it as an instructions file");
+    let normalize = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        normalize(&rules).contains(&normalize(claude_kanban::mcp::INSTRUCTIONS)),
+        "opencode/kanban-rules.md must contain the MCP INSTRUCTIONS text verbatim (line wrapping aside) — \
+         src/mcp.rs changed without the rules file following"
+    );
+}
+
 #[test]
 fn windows_shim_backs_the_same_mcp_command() {
     let bin_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("bin");

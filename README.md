@@ -17,6 +17,11 @@ Restart Claude Code (or `/reload-plugins`), then run `/kanban:init` — it seeds
 
 **Fallback / building from source.** On any other platform, offline, or when checksum verification refuses the download, the launcher falls back to `cargo build --release`, which needs a Rust toolchain ([rustup.rs](https://rustup.rs)) — everything that worked before the prebuilt binaries still works. If that first-run build takes long enough that MCP startup gives up waiting, the build carries on and the next session attaches normally. Running `cargo build --release` in the plugin directory yourself always works too. Windows follows the normal flow: `bin/kanban-mcp.cmd` (PowerShell underneath) downloads, verifies, and installs the same way, with the same cargo fallback — only Windows arm64, which has no published binary, needs the toolchain.
 
+**opencode.** The same clone works as an [opencode](https://opencode.ai) plugin — the binary and board are
+agent-agnostic, and `opencode/index.js` injects the same MCP server, commands, and effort agents through opencode's
+config hook. Clone the repo and add `"plugin": ["/path/to/claude-kanban/opencode"]` to your opencode config; the
+full walkthrough and the handful of harness differences are in [docs/opencode.md](docs/opencode.md).
+
 To hack on the plugin itself, load your clone directly:
 
 ```bash
@@ -124,6 +129,7 @@ GitHub Release. Binaries live only in Releases, never in git.
 .mcp.json                    registers the `kanban` MCP server with Claude Code
 commands/                    the plugin skills: /kanban:init, /kanban:open, /kanban:work, /kanban:delegate
 agents/                      one ticket-worker per effort level, the only place effort is settable
+opencode/                    the opencode adapter: index.js (config-hook plugin), command templates, rules file
 src/
   store/                     model, atomic IO, advisory lock, validation, derived read model
   ops.rs                     the single typed-mutation funnel both faces share

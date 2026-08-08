@@ -1,0 +1,112 @@
+// claude-kanban as an opencode plugin. opencode reads none of the Claude Code manifests — not
+// .claude-plugin/plugin.json, not .mcp.json, not commands/ or agents/ — so this file injects the same
+// surface through the plugin API's config hook: the `kanban` MCP server, the four /kanban:* commands,
+// the five kanban-effort-* subagents, and (in projects that have a board) the workflow rules file.
+//
+// Deliberately a single file with zero dependencies: the repo is a cargo project and opencode's bun
+// runtime loads this directly — no package.json, no npm, no build step. Install is one line in
+// opencode.json: "plugin": ["/path/to/claude-kanban/opencode"]. See docs/opencode.md.
+import { readFile, stat } from "node:fs/promises"
+import { fileURLToPath } from "node:url"
+import path from "node:path"
+
+// The repo root: this file lives in <root>/opencode/.
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
+
+// Command name → template under opencode/command/. The names carry the colon so the commands read
+// identically on both harnesses (/kanban:init …); the files can't, because a colon in a filename
+// breaks git checkout on Windows — which is exactly why these entries are injected here instead of
+// shipped as .opencode/commands/kanban:*.md.
+const COMMANDS = {
+  "kanban:init": "init.md",
+  "kanban:open": "open.md",
+  "kanban:work": "work.md",
+  "kanban:delegate": "delegate.md",
+}
+
+// Claude Code's five effort levels → the reasoningEffort option opencode passes through to the
+// provider. xhigh is the highest value opencode's model variants document, so max saturates there —
+// the work command tells the loop to kanban_note whenever a dial was mapped rather than applied.
+const EFFORT = { low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "xhigh" }
+
+// Prepended to every effort agent's prompt: the agent bodies are shared with the Claude Code plugin
+// verbatim, and the one thing that differs per harness is what the tools are called.
+const TOOL_NOTE =
+  "Note: this harness registers the board's MCP tools under the `kanban` server and prefixes tool names " +
+  "with the server name — `kanban_board` appears as `kanban_kanban_board`, `kanban_claim` as " +
+  "`kanban_kanban_claim`, and so on. Every `kanban_*` tool named below means the prefixed tool.\n\n"
+
+// A markdown file's `---` frontmatter and body. Only `description:` is ever read out of the
+// frontmatter, so the parser stays a split, not a YAML implementation.
+async function parse(file) {
+  const raw = await readFile(file, "utf8")
+  if (!raw.startsWith("---\n")) throw new Error(`${file}: expected --- frontmatter`)
+  const end = raw.indexOf("\n---", 4)
+  if (end < 0) throw new Error(`${file}: unterminated frontmatter`)
+  const front = raw.slice(4, end)
+  const body = raw.slice(raw.indexOf("\n", end + 4) + 1).trimStart()
+  const description = front
+    .split("\n")
+    .find((line) => line.startsWith("description:"))
+    ?.slice("description:".length)
+    .trim()
+    .replace(/^"(.*)"$/s, "$1")
+  if (!description) throw new Error(`${file}: frontmatter carries no description`)
+  return { description, body }
+}
+
+const exists = (p) =>
+  stat(p).then(
+    () => true,
+    () => false,
+  )
+
+export const KanbanPlugin = async ({ directory, worktree }) => {
+  const project = worktree || directory
+  // The same launcher the Claude Code plugin uses: it materialises the binary (download or cargo
+  // build) on first run and execs it. Windows resolves through the .cmd trampoline — opencode spawns
+  // the command array directly, so nothing else picks the extension for us.
+  const launcher = path.join(root, "bin", process.platform === "win32" ? "kanban-mcp.cmd" : "kanban-mcp")
+
+  return {
+    config: async (config) => {
+      // ??= throughout: anything the user defined themselves — a differently-tuned kanban server, an
+      // overridden command — wins over what this plugin would inject.
+      config.mcp ??= {}
+      config.mcp["kanban"] ??= { type: "local", command: [launcher, "mcp"], enabled: true }
+
+      config.command ??= {}
+      for (const [name, file] of Object.entries(COMMANDS)) {
+        if (config.command[name]) continue
+        const { description, body } = await parse(path.join(root, "opencode", "command", file))
+        config.command[name] = { description, template: body.replaceAll("{{KANBAN_ROOT}}", root) }
+      }
+
+      // The agent prompts are the Claude Code ones, verbatim — agents/*.md is the single source of
+      // truth for how a ticket worker behaves. Only the dispatch mechanics differ: effort rides as a
+      // reasoningEffort model option here instead of Claude Code's frontmatter `effort:`, and no
+      // model is pinned so a subagent inherits the session's.
+      config.agent ??= {}
+      for (const [level, reasoningEffort] of Object.entries(EFFORT)) {
+        const name = `kanban-effort-${level}`
+        if (config.agent[name]) continue
+        const { description, body } = await parse(path.join(root, "agents", `${name}.md`))
+        config.agent[name] = {
+          description,
+          mode: "subagent",
+          prompt: TOOL_NOTE + body,
+          options: { reasoningEffort },
+        }
+      }
+
+      // The workflow contract (the text Claude Code receives as MCP server instructions, which
+      // opencode does not surface) — but only in projects that actually have a board: with a global
+      // install, every unrelated project would otherwise carry kanban rules in every session.
+      if (await exists(path.join(project, ".kanban"))) {
+        const rules = path.join(root, "opencode", "kanban-rules.md")
+        config.instructions ??= []
+        if (!config.instructions.includes(rules)) config.instructions.push(rules)
+      }
+    },
+  }
+}
