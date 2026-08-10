@@ -5,7 +5,7 @@ All notable changes to this project are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.2.0] - 2026-08-10
 
 ### Added
 
@@ -36,10 +36,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   one, and the board says "stalled, it will be retried" instead of hiding it.
 - A **Review** pane on the ticket card, reached by a Details/Review switch on any non-external review ticket: the
   branch, the worktree still on disk (badged when it holds uncommitted changes), the landing sweep's own verdict, the
-  progress log, a comment box, and the three verdicts — **Accept**, **Request changes**, **Discard**. Accept closes
-  the card as `done` and unblocks its dependents on the reviewer's word alone, with no proof the branch reached main,
-  so its confirm spells that out and quotes the lander's verdict (a new `land::explain`) rather than leaving it to be
-  guessed at. Discard grows the shared comment box, folding it into the reason, while its existing bodyless POST keeps
+  progress log, a comment box, and the three verdicts — **Accept**, **Request changes**, **Discard**. An *On accept*
+  line says what the click will hand to the work loop, read from the same gate the loop's own eligibility check applies
+  (a new `land::explain`), so the button is never a surprise; an accepted ticket then says it is waiting to land.
+  Discard grows the shared comment box, folding it into the reason, while its existing bodyless POST keeps
   working. Server-rendered htmx throughout — no new JavaScript, and no classes outside the committed Tailwind build.
   Cards and detail panes badge `changes requested`, and a `changes-requested:` search key filters on it.
 - Review rounds: a human reviewing a ticket can send it back instead of only accepting or discarding it. The card
@@ -279,6 +279,9 @@ First tagged release, covering the plugin's initial publication.
 - The create-ticket epic dropdown stays in sync with the board.
 - Markdown panes that arrive as top-level swap elements render.
 
+[3.2.0]: https://github.com/CjS77/claude-kanban/compare/v3.1.0...v3.2.0
+[3.1.0]: https://github.com/CjS77/claude-kanban/compare/v3.0.0...v3.1.0
+[3.0.0]: https://github.com/CjS77/claude-kanban/compare/v2.7.0...v3.0.0
 [2.7.0]: https://github.com/CjS77/claude-kanban/compare/v2.6.0...v2.7.0
 [2.6.0]: https://github.com/CjS77/claude-kanban/compare/v2.5.0...v2.6.0
 [2.5.0]: https://github.com/CjS77/claude-kanban/compare/v2.4.0...v2.5.0
