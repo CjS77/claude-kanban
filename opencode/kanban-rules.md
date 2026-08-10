@@ -14,7 +14,10 @@ to review refuses while that worktree has uncommitted changes — commit them fi
 board lands review tickets in done automatically once their branch or PR is merged into the local main branch — done
 means landed, and dependencies unblock only then (a discarded done ticket never unblocks anything). A review ticket
 can be claimed again for rework (PR feedback); its branch and worktree are kept and kanban_worktree_start
-re-attaches. Stubs are specs to write, not code to build:
+re-attaches. A human can also send a review ticket back with feedback: it returns to doing unclaimed, kanban_next
+surfaces it as action "rework" ahead of any todo work, and the newest "changes requested:" note is the spec for that
+round — address it in the existing worktree and move it to review again. Accepting, requesting changes and discarding
+are the human's verdicts, made in the browser; never press one for them. Stubs are specs to write, not code to build:
 kanban_claim (the card sits pink in doing) → research → kanban_refine, which lands it back in todo at status=review
 for the human — no worktree. Only claim tickets kanban_next surfaces — ready (implement) or stub (refine), in todo,
 unblocked; never claim spontaneously outside an explicit work loop. Never touch draft tickets. Tickets you create

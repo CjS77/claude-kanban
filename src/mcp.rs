@@ -39,7 +39,10 @@ ticket lands. kanban_move to review refuses while that worktree has uncommitted 
 Done is not yours to declare: the board lands review tickets in done automatically once their branch or PR is merged \
 into the local main branch — done means landed, and dependencies unblock only then (a discarded done ticket never \
 unblocks anything). A review ticket can be claimed again for rework (PR feedback); its branch and worktree are kept \
-and kanban_worktree_start re-attaches. \
+and kanban_worktree_start re-attaches. A human can also send a review ticket back with feedback: it returns to doing \
+unclaimed, kanban_next surfaces it as action \"rework\" ahead of any todo work, and the newest \"changes requested:\" \
+note is the spec for that round — address it in the existing worktree and move it to review again. Accepting, \
+requesting changes and discarding are the human's verdicts, made in the browser; never press one for them. \
 Stubs are specs to write, not code to build: kanban_claim (the card sits pink in doing) → research → kanban_refine, \
 which lands it back in todo at status=review for the human — no worktree. \
 Only claim tickets kanban_next surfaces — ready (implement) or stub (refine), in todo, unblocked; never claim \
@@ -393,11 +396,18 @@ impl KanbanServer {
         .await
     }
 
-    /// The next thing to work on: the highest ticket in todo that is unblocked, unclaimed, non-external, and either
-    /// ready (action "implement") or stub (action "refine" — write its spec, don't build it). Returns the full ticket
-    /// plus the action, or explains that nothing is eligible. First auto-lands any review tickets whose branches have
-    /// provably reached the local main branch (offline git, no network), so use the `version` this tool returns for
-    /// your next mutation — the sweep may have advanced it.
+    /// The next thing to work on, and what it needs. Returns the full ticket plus the action, or explains that nothing
+    /// is eligible:
+    ///
+    /// - `"rework"` — a human reviewed this ticket and sent it back. It is sitting in doing, unclaimed, with its branch
+    ///   and worktree intact: claim it, `kanban_worktree_start` (which re-attaches), treat the newest
+    ///   `changes requested:` note as the spec for this round, then move it to review again. Ranked **above** todo work.
+    /// - `"implement"` — a ready ticket in todo: build it.
+    /// - `"refine"` — a stub: write its spec, don't build it.
+    ///
+    /// Eligibility is otherwise the same throughout: unblocked, unclaimed, non-external. First auto-lands any review
+    /// tickets whose branches have provably reached the local main branch (offline git, no network), so use the
+    /// `version` this tool returns for your next mutation — the sweep may have advanced it.
     ///
     /// `auto_merge` is the *effective* answer — the ticket's own flag or its epic's — and is the field `/kanban:work`
     /// reads to decide whether to land the branch itself. Read it here, not off the ticket: the ticket carries only its
@@ -420,7 +430,8 @@ impl KanbanServer {
             let board = store.read_board()?;
             let claims = store.read_claims()?;
             Ok(if let Some(t) = derive::next_ticket(&board, &claims) {
-                let action = if t.status == Status::Stub { "refine" } else { "implement" };
+                let action =
+                    if t.changes_requested { "rework" } else if t.status == Status::Stub { "refine" } else { "implement" };
                 serde_json::json!({ "version": board.version, "ticket": t, "action": action,
                     "auto_merge": derive::auto_merge(t, &board) })
             } else {
@@ -436,7 +447,9 @@ impl KanbanServer {
     /// status ready (to implement) or stub (to refine — the card shows pink while you write the spec). A pure board
     /// mutation — create the worktree with `kanban_worktree_start` afterwards (implementation only; refining needs none).
     /// Review tickets are claimable too: that is the rework path (PR feedback) — the branch is kept and
-    /// `kanban_worktree_start` re-attaches to it.
+    /// `kanban_worktree_start` re-attaches to it. So is a ticket a human sent back for changes: it sits in doing owned
+    /// by the reviewer but unclaimed, and any agent may take it — that is what `kanban_next`'s `"rework"` action hands
+    /// you.
     #[tool]
     async fn kanban_claim(&self, Parameters(p): Parameters<ClaimParams>) -> Result<CallToolResult, ErrorData> {
         let id = TicketId(p.ticket);
@@ -873,6 +886,7 @@ mod tests {
             model: None,
             effort: None,
             auto_merge: false,
+            changes_requested: false,
             depends_on: vec![],
             notes: vec![],
             external: None,

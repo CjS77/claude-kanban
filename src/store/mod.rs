@@ -399,6 +399,7 @@ mod tests {
             model: None,
             effort: None,
             auto_merge: false,
+            changes_requested: false,
             depends_on: vec![],
             notes: vec![],
             external: None,

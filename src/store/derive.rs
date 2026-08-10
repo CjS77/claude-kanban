@@ -72,10 +72,34 @@ pub fn auto_merge(ticket: &Ticket, board: &Board) -> bool {
     ticket.auto_merge || ticket.epic.as_ref().and_then(|id| board.epic(id)).is_some_and(|e| e.auto_merge)
 }
 
-/// The handoff contract: the highest ticket in `todo` that is unblocked, unclaimed, not `external` (external tickets are
-/// worked elsewhere), and either `ready` (implement it) or `stub` (refine it into a spec). `None` when nothing is eligible.
+/// The handoff contract, in two passes: **rework first**, then the highest eligible ticket in `todo`.
+///
+/// Rework outranks new work on purpose. A human is waiting on near-finished code, and its branch and worktree already
+/// exist — so addressing the feedback is both the shorter job and the one somebody is actually blocked on. Starting a
+/// fresh ticket ahead of it would leave a reviewed card sitting there while the board grows a second half-done branch.
+///
+/// `None` when nothing is eligible either way.
 #[must_use]
 pub fn next_ticket<'a>(board: &'a Board, claims: &[Claim]) -> Option<&'a Ticket> {
+    rework_ticket(board, claims).or_else(|| todo_ticket(board, claims))
+}
+
+/// The highest ticket a reviewer sent back for changes and nobody has picked up yet: in `doing`, `changes_requested`,
+/// unclaimed, and subject to every rule todo work obeys — ready, unblocked, and never `external` (a delegated ticket's
+/// review feedback belongs on its issue, which is what keeps minesweeper's tickets out of this pass by construction).
+fn rework_ticket<'a>(board: &'a Board, claims: &[Claim]) -> Option<&'a Ticket> {
+    board.tickets_in(ColumnId::Doing).find(|t| {
+        t.changes_requested
+            && t.status == Status::Ready
+            && t.external.is_none()
+            && !blocked(t, board)
+            && claims::find(claims, &t.id).is_none()
+    })
+}
+
+/// The original contract: the highest ticket in `todo` that is unblocked, unclaimed, not `external` (external tickets are
+/// worked elsewhere), and either `ready` (implement it) or `stub` (refine it into a spec).
+fn todo_ticket<'a>(board: &'a Board, claims: &[Claim]) -> Option<&'a Ticket> {
     board
         .tickets_in(ColumnId::Todo)
         .find(|t| matches!(t.status, Status::Ready | Status::Stub) && t.external.is_none() && !blocked(t, board) && claims::find(claims, &t.id).is_none())
@@ -225,6 +249,7 @@ mod tests {
             model: None,
             effort: None,
             auto_merge: false,
+            changes_requested: false,
             depends_on: vec![],
             notes: vec![],
             external: None,

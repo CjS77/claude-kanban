@@ -136,6 +136,7 @@ mod tests {
             model: None,
             effort: None,
             auto_merge: false,
+            changes_requested: false,
             depends_on: deps.iter().map(|d| TicketId((*d).into())).collect(),
             notes: vec![],
             external: None,

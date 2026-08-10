@@ -258,6 +258,14 @@ pub struct Ticket {
     /// own say, never the inherited one.
     #[serde(default, skip_serializing_if = "is_false")]
     pub auto_merge: bool,
+    /// A human reviewed this ticket and sent it back for changes: the card sits unclaimed in `doing`, its feedback the
+    /// newest `changes requested:` note, until a worker addresses it and moves it to `review` again.
+    ///
+    /// Cleared by that move, and by landing or discarding. Deliberately *kept* across [`crate::ops::Op::Release`]:
+    /// unaddressed feedback does not stop existing because a worker handed the ticket back, and the next
+    /// [`crate::store::derive::next_ticket`] should still see rework waiting.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub changes_requested: bool,
     /// Until every ticket named here is `done`, this ticket is *blocked*: visible in `todo`, skipped by `kanban_next`.
     /// Must form a DAG with the other tickets; checked on load.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -869,6 +877,7 @@ mod tests {
             model: None,
             effort: None,
             auto_merge: false,
+            changes_requested: false,
             depends_on: vec![],
             notes: vec![],
             external: None,

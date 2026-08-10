@@ -89,6 +89,10 @@ pub enum Op {
     /// Retire a review ticket without landing it: `done` with `discarded: true`, which never satisfies dependencies.
     /// Always an explicit human action (the Discard button) — the sweep never constructs this.
     DiscardTicket { id: TicketId, reason: String },
+    /// A human's review verdict of "not yet": send a review ticket back to `doing` carrying its feedback. The branch and
+    /// the worktree are untouched — the worker re-attaches to them and picks up where it left off. Always a human
+    /// action, like [`Op::DiscardTicket`]; no agent-facing tool constructs this.
+    RequestChanges { id: TicketId, feedback: String, by: String },
     /// Record (or clear) the ticket's bound GitHub PR — the Create PR button on creation, the serve poller on discovery
     /// and on state transitions. Pure data recording; refuses nothing.
     SetPr { id: TicketId, pr: Option<crate::store::model::PrRef> },
@@ -245,6 +249,7 @@ impl Op {
             Op::Refine { .. } => "refine",
             Op::LandTicket { .. } => "land_ticket",
             Op::DiscardTicket { .. } => "discard_ticket",
+            Op::RequestChanges { .. } => "request_changes",
             Op::SetPr { .. } => "set_pr",
             Op::StampWorktree { .. } => "stamp_worktree",
             Op::ClearWorktreePath { .. } => "clear_worktree_path",
@@ -292,6 +297,7 @@ fn transition(op: Op, board: &mut Board, claims: &mut Vec<Claim>) -> Result<OpOu
         Op::Refine { target, title, body, split_tickets, split_epics } => refine(board, claims, &target, title, body, split_tickets, split_epics),
         Op::LandTicket { id, expected_branch, reason } => land_ticket(board, claims, &id, expected_branch.as_deref(), &reason),
         Op::DiscardTicket { id, reason } => discard_ticket(board, claims, &id, &reason),
+        Op::RequestChanges { id, feedback, by } => request_changes(board, &id, &feedback, &by),
         Op::SetPr { id, pr } => set_pr(board, &id, pr),
         Op::StampWorktree { id, branch, path } => stamp_worktree(board, claims, &id, &branch, &path),
         Op::ClearWorktreePath { id } => Ok(clear_worktree_path(claims, &id)),
@@ -332,6 +338,7 @@ fn create_ticket(board: &mut Board, new: NewTicket) -> OpOutput {
         model,
         effort,
         auto_merge,
+        changes_requested: false,
         depends_on,
         notes: vec![],
         external: None,
@@ -434,6 +441,10 @@ fn move_ticket(
 ) -> Result<OpOutput, OpError> {
     let ticket = ticket_mut(board, id)?;
     ticket.column = next_column_state(&ticket.column, to, owner, branch, id)?;
+    if to == ColumnId::Review {
+        // Reaching review IS the feedback being addressed — the next round starts clean.
+        ticket.changes_requested = false;
+    }
     if matches!(to, ColumnId::Review | ColumnId::Done) {
         remove_claim(claims, id);
     }
@@ -492,6 +503,7 @@ fn land_ticket(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, expect
         return Err(OpError::Invalid(format!("{id}'s branch changed since the evidence was gathered — not landing it")));
     }
     ticket.column = Column::Done { branch: branch.clone(), completed_at: Utc::now(), discarded: false };
+    ticket.changes_requested = false; // finished work carries no outstanding feedback
     ticket.notes.push(Note { at: Utc::now(), author: Some("kanban".into()), text: reason.to_owned() });
     remove_claim(claims, id); // review tickets are unclaimed by construction, but never leave a ghost behind
     reposition(board, id, ColumnId::Done, None);
@@ -505,10 +517,34 @@ fn discard_ticket(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, rea
         return Err(OpError::Invalid(format!("{id} is not in review — only code-complete, unlanded work can be discarded")));
     };
     ticket.column = Column::Done { branch: branch.clone(), completed_at: Utc::now(), discarded: true };
+    ticket.changes_requested = false; // retired work carries no outstanding feedback either
     ticket.notes.push(Note { at: Utc::now(), author: Some("kanban".into()), text: reason.to_owned() });
     remove_claim(claims, id);
     reposition(board, id, ColumnId::Done, None);
     Ok(OpOutput::plain(json!({ "id": id, "column": ColumnId::Done, "discarded": true })))
+}
+
+/// Send a review ticket back for changes: to the top of `doing`, wearing `changes_requested`, with the feedback as the
+/// newest note. No claim is created — the card is unclaimed work waiting for whichever worker picks it up next, which is
+/// what [`crate::store::derive::next_ticket`] looks for.
+fn request_changes(board: &mut Board, id: &TicketId, feedback: &str, by: &str) -> Result<OpOutput, OpError> {
+    let ticket = ticket_mut(board, id)?;
+    let Column::Review { branch } = &ticket.column else {
+        return Err(OpError::Invalid(format!("{id} is not in review — only a review ticket can be sent back for changes")));
+    };
+    if ticket.external.is_some() {
+        return Err(OpError::Invalid(format!("{id} is external — its review feedback belongs on the delegate's issue, not here")));
+    }
+    let feedback = feedback.trim();
+    if feedback.is_empty() {
+        return Err(OpError::Invalid("changes requested needs feedback — say what has to change".into()));
+    }
+
+    ticket.column = Column::Doing { owner: by.to_owned(), branch: branch.clone() };
+    ticket.changes_requested = true;
+    ticket.notes.push(Note { at: Utc::now(), author: Some(by.to_owned()), text: format!("changes requested: {feedback}") });
+    reposition(board, id, ColumnId::Doing, Some(0));
+    Ok(OpOutput::plain(json!({ "id": id, "column": ColumnId::Doing, "changes_requested": true })))
 }
 
 fn set_pr(board: &mut Board, id: &TicketId, pr: Option<crate::store::model::PrRef>) -> Result<OpOutput, OpError> {
@@ -552,7 +588,10 @@ fn claim(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, agent: &str)
     let ticket = ticket_mut(board, id)?;
     match &ticket.column {
         Column::Done { .. } => return Err(OpError::Invalid(format!("{id} is already done — move it back to todo first"))),
-        Column::Doing { owner, .. } if owner != agent => {
+        // A changes-requested card sits in `doing` owned by the *reviewer*, with nobody working it: the exception that
+        // has to be claimable by anyone, or `owner != agent` would refuse every worker the rework was meant for. The
+        // live-claim check above still refuses when somebody actually holds it, so only that one state is opened up.
+        Column::Doing { owner, .. } if owner != agent && !ticket.changes_requested => {
             return Err(OpError::AlreadyClaimed { id: id.clone(), agent: owner.clone() });
         }
         Column::Todo | Column::Doing { .. } | Column::Review { .. } => {}
@@ -663,6 +702,7 @@ fn mirror_sub_issues(
                 model: None,
                 effort: None,
                 auto_merge: false,
+                changes_requested: false,
                 depends_on: vec![],
                 notes: vec![],
                 external: Some(crate::store::model::External::github_issue(child.number)),
@@ -822,6 +862,7 @@ fn build_refined_ticket(spec: NewTicketSpec, id: TicketId, default_epic: Option<
         model: spec.model,
         effort: spec.effort,
         auto_merge: spec.auto_merge,
+        changes_requested: false,
         depends_on,
         notes: vec![],
         external: None,
