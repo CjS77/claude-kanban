@@ -58,6 +58,25 @@ at all.
    it as worked elsewhere; once its PR opens, move the card to `review` with the PR's head branch and the board
    lands it like any other.
 
+## Reviewing a ticket
+
+A card in `review` carries a **Review** tab beside its details, with the branch, the worktree still on disk, the
+progress log, a comment box, and three verdicts:
+
+- **Accept** — closes the card as `done` and unblocks everything depending on it. This is the one to understand:
+  unlike the automatic lander it demands **no proof the branch reached main**, so accepting work that never landed
+  unblocks dependents onto code that doesn't exist. The pane shows the lander's own verdict — *"branch k-7/foo
+  exists but main does not contain its work yet"* — and the confirm repeats it, so you can see which case you're in.
+  When the branch really has landed, you don't need this button: the board closes the card by itself.
+- **Request changes** — sends the card back to the top of `doing` with your comment as the spec for the next round.
+  Its branch and worktree stay exactly as they were, and a running `/kanban:work` loop picks it up ahead of any new
+  work. Feedback is required; the button won't send an empty round trip.
+- **Discard** — retires work that will never land. The card closes but its dependents stay blocked, which is the
+  point of the difference from Accept. Your comment is folded into the reason.
+
+All three are yours alone: agents address feedback, they never decide it was addressed well enough. Delegated
+(external) tickets have no Review tab — their verdict belongs on the issue the daemon is working from.
+
 Dependencies (`depends_on`) block a ticket until they're all done — and since done means landed, a dependent's
 fresh worktree is guaranteed to contain its predecessors' code. Epics group tickets, colour their cards, and move
 themselves — their column is derived from their tickets; deleting an epic deletes its tickets.

@@ -9,6 +9,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- A **Review** pane on the ticket card, reached by a Details/Review switch on any non-external review ticket: the
+  branch, the worktree still on disk (badged when it holds uncommitted changes), the landing sweep's own verdict, the
+  progress log, a comment box, and the three verdicts — **Accept**, **Request changes**, **Discard**. Accept closes
+  the card as `done` and unblocks its dependents on the reviewer's word alone, with no proof the branch reached main,
+  so its confirm spells that out and quotes the lander's verdict (a new `land::explain`) rather than leaving it to be
+  guessed at. Discard grows the shared comment box, folding it into the reason, while its existing bodyless POST keeps
+  working. Server-rendered htmx throughout — no new JavaScript, and no classes outside the committed Tailwind build.
+  Cards and detail panes badge `changes requested`, and a `changes-requested:` search key filters on it.
 - Review rounds: a human reviewing a ticket can send it back instead of only accepting or discarding it. The card
   returns to the top of `doing` carrying a new `changes_requested` flag, with its feedback as the newest
   `changes requested:` note and its branch and worktree untouched, and `kanban_next` surfaces it as a new
