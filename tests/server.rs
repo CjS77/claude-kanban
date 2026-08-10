@@ -240,7 +240,8 @@ async fn the_search_box_wears_a_magnifier_and_a_javascript_free_help_popup() {
 
     // The keys it documents are exactly the ones search.rs answers to — `merged:` was removed in v2 and must not return.
     let keys =
-        ["text:", "label:", "epic:", "id:", "note:", "status:", "col: column:", "landed:", "discarded:", "blocked:", "auto-merge:"];
+        ["text:", "label:", "epic:", "id:", "note:", "status:", "col: column:", "landed:", "discarded:", "blocked:", "auto-merge:",
+         "changes-requested:"];
     let missing: Vec<_> = keys.into_iter().filter(|key| !popup.contains(key)).collect();
     assert!(missing.is_empty(), "the popup must document every search key — missing {missing:?}: {popup}");
     assert!(!popup.contains("merged:"), "there is no merged: key: {popup}");
@@ -1295,4 +1296,137 @@ mod docs_ui {
         // Silence the unused-constant warning that would fire for a module with no other reference to HOST.
         let _ = HOST;
     }
+}
+
+// ---- the review pane ----------------------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn the_review_pane_renders_for_a_review_ticket_and_not_otherwise() {
+    let (_dir, router, store) = test_app();
+    seed_ticket(&store, "Code complete");
+    seed_ticket(&store, "Not started");
+    to_review_with_branch(&store, "K-1", "k-1/done-ish");
+
+    let res = router.clone().oneshot(get("/ui/ticket/K-1/review")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let pane = body_text(res).await;
+    assert!(pane.contains("Request changes") && pane.contains("Accept") && pane.contains("Discard"), "{pane}");
+    assert!(pane.contains(r#"name="comment""#), "the verdicts share one comment box: {pane}");
+    assert!(pane.contains("k-1/done-ish"), "the reviewer needs to know which branch they are judging: {pane}");
+
+    // The detail pane offers the tab only for a review ticket.
+    let detail = body_text(router.clone().oneshot(get("/ui/ticket/K-1")).await.unwrap()).await;
+    assert!(detail.contains("/ui/ticket/K-1/review"), "a review ticket's pane links its verdict view: {detail}");
+    let todo = body_text(router.clone().oneshot(get("/ui/ticket/K-2")).await.unwrap()).await;
+    assert!(!todo.contains("/ui/ticket/K-2/review"), "a todo ticket has nothing to review: {todo}");
+
+    // And a todo ticket's pane is refused outright rather than rendered empty.
+    let res = router.oneshot(get("/ui/ticket/K-2/review")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+/// A delegated ticket's verdict belongs on its issue: no tab, no pane, and the op behind the middle button refuses it.
+#[tokio::test]
+async fn an_external_review_ticket_gets_no_review_pane() {
+    let (_dir, router, store) = test_app();
+    seed_ticket(&store, "Delegated");
+    to_review_with_branch(&store, "K-1", "k-1/elsewhere");
+    ops::apply(&store, None, Op::BindExternal { id: TicketId("K-1".into()), external: Some(External::github_issue(4)) }).unwrap();
+
+    let detail = body_text(router.clone().oneshot(get("/ui/ticket/K-1")).await.unwrap()).await;
+    assert!(!detail.contains("/ui/ticket/K-1/review"), "no verdict tab on delegated work: {detail}");
+
+    let res = router.oneshot(get("/ui/ticket/K-1/review")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn request_changes_sends_the_card_back_to_doing_with_the_comment_as_a_note() {
+    let (_dir, router, store) = test_app();
+    seed_ticket(&store, "Needs another pass");
+    to_review_with_branch(&store, "K-1", "k-1/again");
+
+    let res = router.clone().oneshot(post("/ui/ticket/K-1/review/changes", 4, "comment=the+naming+is+off")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let pane = body_text(res).await;
+    assert!(pane.contains(">changes requested</span>"), "the pane badges the outstanding feedback: {pane}");
+
+    let board = store.read_board().unwrap();
+    let t = board.ticket(&TicketId("K-1".into())).unwrap();
+    assert_eq!(t.column.id(), ColumnId::Doing);
+    assert!(t.changes_requested);
+    assert_eq!(t.notes.last().unwrap().text, "changes requested: the naming is off");
+    assert_eq!(t.notes.last().unwrap().author.as_deref(), Some("tester"), "the browser user owns the verdict");
+
+    // The card wears it too, so an unclaimed doing card waiting for rework reads differently from an unstarted one.
+    let html = body_text(router.clone().oneshot(get("/ui/board")).await.unwrap()).await;
+    assert!(html.contains(">changes requested</span>"), "{html}");
+
+    // Blank feedback is refused — a send-back with no spec for the next round is useless.
+    seed_ticket(&store, "Second");
+    to_review_with_branch(&store, "K-2", "k-2/x");
+    let version = store.read_board().unwrap().version;
+    let res = router.oneshot(post("/ui/ticket/K-2/review/changes", version, "comment=+++")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn accept_closes_the_card_as_done_kept_with_the_comment_as_a_note() {
+    let (_dir, router, store) = test_app();
+    seed_ticket(&store, "Good enough");
+    ops::apply(
+        &store,
+        None,
+        Op::CreateTicket { title: "Waits on it".into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![TicketId("K-1".into())], status: Status::Ready, model: None, effort: None, auto_merge: false },
+    )
+    .unwrap();
+    to_review_with_branch(&store, "K-1", "k-1/good");
+
+    let version = store.read_board().unwrap().version;
+    let res = router.oneshot(post("/ui/ticket/K-1/review/accept", version, "comment=ship+it")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let board = store.read_board().unwrap();
+    let t = board.ticket(&TicketId("K-1".into())).unwrap();
+    assert!(
+        matches!(t.column, claude_kanban::store::model::Column::Done { discarded: false, .. }),
+        "accept closes it as kept, not discarded: {:?}",
+        t.column
+    );
+    assert_eq!(t.notes.last().unwrap().text, "ship it");
+    assert_eq!(t.notes.last().unwrap().author.as_deref(), Some("tester"));
+
+    // The whole hazard the confirm warns about: dependents unblock on a human's word, not on proof.
+    assert!(!claude_kanban::store::derive::blocked(board.ticket(&TicketId("K-2".into())).unwrap(), &board));
+}
+
+#[tokio::test]
+async fn discard_folds_the_reviewers_comment_into_the_reason() {
+    let (_dir, router, store) = test_app();
+    seed_ticket(&store, "Superseded");
+    to_review_with_branch(&store, "K-1", "k-1/gone");
+
+    let version = store.read_board().unwrap().version;
+    let res = router.oneshot(post("/ui/ticket/K-1/discard", version, "comment=replaced+by+K-9")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let board = store.read_board().unwrap();
+    let note = board.ticket(&TicketId("K-1".into())).unwrap().notes.last().unwrap().text.clone();
+    assert_eq!(note, "discarded from the board by tester: replaced by K-9");
+}
+
+/// The detail pane's own Discard button posts an empty body and predates the comment box — it must keep working.
+#[tokio::test]
+async fn the_bodyless_discard_post_still_works() {
+    let (_dir, router, store) = test_app();
+    seed_ticket(&store, "Old-style discard");
+    to_review_with_branch(&store, "K-1", "k-1/old");
+
+    let version = store.read_board().unwrap().version;
+    let res = router.oneshot(post("/ui/ticket/K-1/discard", version, "")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let board = store.read_board().unwrap();
+    let note = board.ticket(&TicketId("K-1".into())).unwrap().notes.last().unwrap().text.clone();
+    assert_eq!(note, "discarded from the board by tester", "no comment, no colon");
 }

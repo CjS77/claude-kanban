@@ -152,6 +152,30 @@ enum Verdict {
     Wait(String),
 }
 
+/// Why this review ticket has or has not landed, in the sweep's own words — so the Review pane's **Accept** button is an
+/// informed click rather than a guess. A reviewer accepting a card closes it as `done` and unblocks its dependents even
+/// when the branch is nowhere near main, so the one thing the pane must never do is stay quiet about which case they
+/// are in.
+///
+/// Pure reads, exactly like [`verdict`] itself: no board write, no git mutation, no network. `None` when the ticket is
+/// not in review, or when the repo cannot answer at all (no main branch, or git will not list heads) — the pane then
+/// says nothing rather than inventing reassurance.
+#[must_use]
+pub fn explain(store: &Store, id: &TicketId) -> Option<String> {
+    let (repo, main) = context(store)?;
+    let board = store.read_board().ok()?;
+    let ticket = board.ticket(id)?;
+    if !matches!(ticket.column, Column::Review { .. }) {
+        return None;
+    }
+    let heads = git::local_heads(&repo)?;
+    let observations = store.read_land_state().ok()?;
+    Some(match verdict(ticket, &board, &repo, &main, &heads, &observations) {
+        Verdict::Land(reason) => format!("{reason} — the next sweep lands it"),
+        Verdict::Wait(reason) => reason,
+    })
+}
+
 /// The proof rules, in order: local branch evidence, then the PR route, then the refined parent, then — nothing proved
 /// it — the explanation.
 fn verdict(t: &Ticket, board: &Board, repo: &Path, main: &str, heads: &HashSet<String>, observations: &HashMap<String, String>) -> Verdict {

@@ -13,6 +13,8 @@
     <span class="badge badge-outline" title="workflow column">{{ ticket.column }}</span>
     {% if ticket.discarded %}<span class="badge badge-neutral" title="retired without landing — tickets depending on this stay blocked">discarded</span>{% endif %}
     {% if ticket.blocked %}<span class="badge badge-error">blocked</span>{% endif %}
+    {% if ticket.changes_requested %}<span class="badge badge-warning"
+          title="a reviewer sent this back — the feedback is the newest 'changes requested:' entry in the progress log">changes requested</span>{% endif %}
     {% if ticket.auto_merge %}<span class="badge badge-warning"
           title="on reaching review this lands itself: /kanban:work rebases the branch onto main and fast-forwards main into it, with no human review of the merge">auto-merge{% if ticket.auto_merge_inherited %} (epic){% endif %}</span>{% endif %}
     {% if let Some(ext) = ticket.external %}<span class="badge badge-neutral" title="worked elsewhere — this board never touches it">↗ {{ ext }}</span>{% endif %}
@@ -26,6 +28,16 @@
     {% if let Some(run) = ticket.run %}<span class="badge badge-ghost font-mono"
           title="/kanban:work dispatches this ticket at this model and effort instead of the session's own">⚙ {{ run }}</span>{% endif %}
 </div>
+
+{#- Review tickets get a second view: the verdict pane. A plain join of two buttons, matching the status switch below —
+    it swaps #detail server-side, so there is no tab state to keep anywhere. -#}
+{% if ticket.can_review %}
+<div class="join mt-3">
+    <button class="join-item btn btn-xs btn-active btn-primary">Details</button>
+    <button class="join-item btn btn-xs" hx-get="/ui/ticket/{{ ticket.id }}/review" hx-target="#detail" hx-swap="innerHTML"
+            title="accept this work, send it back with feedback, or discard it">Review</button>
+</div>
+{% endif %}
 
 {% if let Some(claim) = ticket.claim %}
 <div class="mt-3 p-3 rounded-lg bg-base-200 text-sm flex flex-col gap-1">

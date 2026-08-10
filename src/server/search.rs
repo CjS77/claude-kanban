@@ -41,6 +41,7 @@ enum Term {
     Blocked(bool),
     /// Auto-merge as the board applies it — the ticket's own flag or the epic's it inherits from.
     AutoMerge(bool),
+    ChangesRequested(bool),
 }
 
 impl Query {
@@ -120,6 +121,7 @@ fn keyed(key: &str, value: &str) -> Option<Term> {
         "discarded" => boolean(value).map(Term::Discarded),
         "blocked" => boolean(value).map(Term::Blocked),
         "auto-merge" | "automerge" | "auto_merge" => boolean(value).map(Term::AutoMerge),
+        "changes-requested" | "changes_requested" => boolean(value).map(Term::ChangesRequested),
         _ => None,
     }
 }
@@ -194,6 +196,7 @@ fn admits_ticket(term: &Term, t: &TicketView, epics: &[EpicView]) -> bool {
         Term::Discarded(want) => matches!(ticket.column, Column::Done { discarded: true, .. }) == *want,
         Term::Blocked(want) => t.blocked == *want,
         Term::AutoMerge(want) => t.auto_merge_effective == *want,
+        Term::ChangesRequested(want) => t.ticket.changes_requested == *want,
     }
 }
 

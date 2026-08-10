@@ -555,9 +555,85 @@ pub async fn save_settings(State(app): State<AppState>, Form(form): Form<Setting
 
 /// The Discard button: retire a review ticket without landing it — done with `discarded: true`, dependents stay
 /// blocked. Always a human decision (the confirm dialog says exactly what it costs); the auto-lander never does this.
-pub async fn discard_ticket(State(app): State<AppState>, Path(id): Path<String>, headers: HeaderMap) -> Result<Html<String>, AppError> {
+/// The comment box the three verdicts share. Every field defaults: the detail pane's own Discard button posts an empty
+/// body, and must keep working.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct ReviewForm {
+    comment: String,
+}
+
+/// The review pane. 404 when there is no such ticket, 422 when it is not a review ticket of ours to judge — rendering
+/// this for a todo card or a delegated one is a caller bug, not an empty pane.
+pub async fn review_pane(State(app): State<AppState>, Path(id): Path<String>) -> Result<Html<String>, AppError> {
     let id = TicketId(id);
-    let op = Op::DiscardTicket { id: id.clone(), reason: format!("discarded from the board by {}", app.ui_owner) };
+    blocking(&app, move |store| {
+        let board = store.read_board()?;
+        if board.ticket(&id).is_none() {
+            return Err(AppError::not_found(&id.to_string()));
+        }
+        // Subprocess work lives here, not in views: the worktree lookup and the landing verdict both shell out to git.
+        let worktree_path = worktree::path_for(store, &id).ok().flatten();
+        let worktree_dirty = worktree::dirty_worktree(store, &id).is_some();
+        let landing = crate::land::explain(store, &id);
+        let tpl = views::review(&board, &id, worktree_path.map(|p| p.display().to_string()), worktree_dirty, landing)
+            .ok_or_else(|| AppError::bad_request(format!("{id} is not a review ticket to judge here")))?;
+        Ok(Html(tpl.render()?))
+    })
+    .await
+}
+
+/// Accept: the human's verdict that this is done, with no proof the branch landed. That is the whole difference from
+/// the auto-lander, and why the button's confirm spells the consequence out.
+pub async fn review_accept(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Form(form): Form<ReviewForm>,
+) -> Result<Html<String>, AppError> {
+    let id = TicketId(id);
+    let version = client_version(&headers)?;
+    let (owner, comment) = (app.ui_owner.clone(), form.comment.trim().to_owned());
+    blocking(&app, move |store| {
+        // The move carries the client's version and so must go first: it is the guarded action, and any write ahead of
+        // it — the note included — would bump the board out from under its own CAS check.
+        ops::apply(store, Some(version), Op::MoveTicket { id: id.clone(), to: ColumnId::Done, position: None, owner: None, branch: None })?;
+        if !comment.is_empty() {
+            ops::apply(store, None, Op::AddNote { id: id.clone(), text: comment, author: Some(owner) })?;
+        }
+        worktree::retire(store, &id);
+        rendered_detail(store, &id)
+    })
+    .await
+}
+
+/// Request changes: send it back to doing carrying the feedback. Reversible, so no confirm — but the op refuses blank
+/// feedback, which surfaces as the usual 422 toast.
+pub async fn review_changes(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Form(form): Form<ReviewForm>,
+) -> Result<Html<String>, AppError> {
+    let id = TicketId(id);
+    let op = Op::RequestChanges { id: id.clone(), feedback: form.comment, by: app.ui_owner.clone() };
+    mutate_then_detail(&app, &headers, op, id).await
+}
+
+pub async fn discard_ticket(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Form(form): Form<ReviewForm>,
+) -> Result<Html<String>, AppError> {
+    let id = TicketId(id);
+    let comment = form.comment.trim();
+    let reason = if comment.is_empty() {
+        format!("discarded from the board by {}", app.ui_owner)
+    } else {
+        format!("discarded from the board by {}: {comment}", app.ui_owner)
+    };
+    let op = Op::DiscardTicket { id: id.clone(), reason };
     let version = client_version(&headers)?;
     blocking(&app, move |store| {
         ops::apply(store, Some(version), op)?;

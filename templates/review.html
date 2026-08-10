@@ -1,0 +1,86 @@
+{#- The review pane, swapped into the #detail modal in place of the ordinary ticket pane. Everything a human needs to
+    judge code-complete work — where the code is, whether it has landed, what the worker said — followed by the three
+    verdicts. Server-rendered like every other pane: the only client-side behaviour is htmx swapping and hx-confirm. -#}
+<div class="flex items-start justify-between gap-3">
+    <div class="min-w-0">
+        <span class="font-mono text-sm opacity-60">{{ review.id }}</span>
+        <h2 class="text-xl font-semibold leading-snug">{{ review.title }}</h2>
+    </div>
+    <form method="dialog"><button class="btn btn-sm btn-circle btn-ghost" aria-label="close">✕</button></form>
+</div>
+
+<div class="join mt-3">
+    <button class="join-item btn btn-xs" hx-get="/ui/ticket/{{ review.id }}" hx-target="#detail" hx-swap="innerHTML">Details</button>
+    <button class="join-item btn btn-xs btn-active btn-primary">Review</button>
+</div>
+
+<dl class="mt-4 flex flex-col gap-2 text-sm">
+    {% if let Some(branch) = review.branch %}
+    <div class="flex gap-2 items-baseline">
+        <dt class="opacity-60 shrink-0">Branch</dt>
+        <dd class="font-mono break-all">{{ branch }}</dd>
+    </div>
+    {% endif %}
+    {% if let Some(path) = review.worktree_path %}
+    {#- The worktree is kept for exactly this: the reviewer can open the code on disk rather than reading a diff. -#}
+    <div class="flex gap-2 items-baseline">
+        <dt class="opacity-60 shrink-0">Worktree</dt>
+        <dd class="font-mono break-all">{{ path }}
+            {% if review.worktree_dirty %}
+            <span class="badge badge-warning ml-1"
+                  title="the worktree has uncommitted changes — what you are reviewing is not all committed, and the board will keep the worktree rather than remove it">uncommitted changes</span>
+            {% endif %}
+        </dd>
+    </div>
+    {% endif %}
+    {% if let Some(landing) = review.landing %}
+    {#- The auto-lander's own verdict. Accept needs no such proof, so saying which case this is turns the button from a
+        guess into a decision. -#}
+    <div class="flex gap-2 items-baseline">
+        <dt class="opacity-60 shrink-0">Landing</dt>
+        <dd>{{ landing }}</dd>
+    </div>
+    {% endif %}
+</dl>
+
+{% if !review.notes.is_empty() %}
+<div class="mt-4">
+    <h3 class="font-semibold text-sm mb-1">Progress</h3>
+    <ul class="flex flex-col gap-2">
+        {% for note in review.notes %}
+        <li class="text-sm p-2 rounded bg-base-200">
+            <div class="text-xs opacity-60 mb-0.5">{{ note.at }}{% if let Some(author) = note.author %} — {{ author }}{% endif %}</div>
+            <div class="whitespace-pre-wrap">{{ note.text }}</div>
+        </li>
+        {% endfor %}
+    </ul>
+</div>
+{% endif %}
+
+<div class="divider"></div>
+
+{#- One form, three submit targets: hx-include pulls the same comment box into whichever verdict is pressed. -#}
+<form>
+    <label class="text-sm font-semibold" for="review-comment">Review</label>
+    <textarea id="review-comment" name="comment" rows="5" class="textarea w-full mt-1"
+              placeholder="Review notes / what needs to change…"></textarea>
+
+    <div class="flex flex-wrap gap-2 mt-3">
+        {#- Accept closes the card without the proof the auto-lander demands, so it carries the heavier confirm. -#}
+        <button class="btn btn-sm btn-primary" hx-post="/ui/ticket/{{ review.id }}/review/accept"
+                hx-include="closest form" hx-target="#detail" hx-swap="innerHTML"
+                hx-confirm="{{ review.accept_confirm }}"
+                title="close this ticket as done and unblock its dependents">Accept</button>
+
+        {#- No confirm: sending work back is the reversible verdict, and the round trip is the point of the feature. -#}
+        <button class="btn btn-sm btn-warning" hx-post="/ui/ticket/{{ review.id }}/review/changes"
+                hx-include="closest form" hx-target="#detail" hx-swap="innerHTML"
+                title="send this back to doing with your comment as the spec for the next round — needs a comment">
+            Request changes</button>
+
+        <button class="btn btn-sm btn-error btn-outline" hx-post="/ui/ticket/{{ review.id }}/discard"
+                hx-include="closest form" hx-target="#detail" hx-swap="innerHTML"
+                hx-confirm="{{ review.discard_confirm }}"
+                title="retire this work without landing it — dependents stay blocked">Discard</button>
+    </div>
+</form>

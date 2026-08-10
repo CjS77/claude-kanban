@@ -150,6 +150,9 @@ pub struct CardCtx {
     pub blocked: bool,
     /// A stub sitting in `doing` is having its spec written right now — the card renders pink while that lasts.
     pub refining: bool,
+    /// A reviewer sent this back: it sits in `doing` unclaimed, waiting for a worker. Badged so it is distinguishable
+    /// at a glance from a card nobody has started.
+    pub changes_requested: bool,
     /// A done ticket retired without landing: closed, but its dependents stay blocked.
     pub discarded: bool,
     /// The bound PR, rendered as a linked badge on cards still in flight (done cards drop it — the story is over).
@@ -275,6 +278,7 @@ fn card(t: &TicketView, view: &BoardView, heads: Option<&HashSet<String>>) -> Ca
         done,
         blocked: t.blocked,
         refining: t.ticket.status == Status::Stub && t.ticket.column.id() == ColumnId::Doing,
+        changes_requested: t.ticket.changes_requested,
         discarded: matches!(t.ticket.column, crate::store::model::Column::Done { discarded: true, .. }),
         pr: (!done).then(|| t.ticket.pr.as_ref().map(pr_ctx)).flatten(),
         branch_gone: t.ticket.column.id() == ColumnId::Review
@@ -372,6 +376,11 @@ pub struct TicketCtx {
     pub pr: Option<PrCtx>,
     /// Review tickets can be retired without landing: done with `discarded: true`, dependents stay blocked.
     pub can_discard: bool,
+    /// Whether the pane offers the Review tab: a review ticket that is ours to judge. External tickets are excluded —
+    /// their verdict belongs on the delegate's issue, and `Op::RequestChanges` would refuse them anyway.
+    pub can_review: bool,
+    /// A reviewer sent this back and the feedback is not yet addressed — the card and pane both say so.
+    pub changes_requested: bool,
     pub discarded: bool,
     /// The effective auto-merge grant, same as the card's — it fills the toggle button and raises the warning badge.
     pub auto_merge: bool,
@@ -446,6 +455,81 @@ fn epic_auto_merge_confirm(id: &str, title: &str, on: bool, count: usize) -> Str
     auto_merge_on_confirm(&target, subject)
 }
 
+/// The review pane (`templates/review.html`): everything a human needs to judge a review ticket, plus the three
+/// verdicts. Swapped into `#detail` in place of the ordinary pane.
+#[derive(Debug, Template)]
+#[template(path = "review.html")]
+pub struct ReviewTpl {
+    pub review: ReviewCtx,
+}
+
+#[derive(Debug)]
+pub struct ReviewCtx {
+    pub id: String,
+    pub title: String,
+    pub branch: Option<String>,
+    /// The worktree kept through review — where the reviewer can read the code on disk.
+    pub worktree_path: Option<String>,
+    /// That worktree has uncommitted changes: the work in front of the reviewer is not all committed.
+    pub worktree_dirty: bool,
+    /// The landing sweep's own verdict, from [`crate::land::explain`] — what Accept is really deciding over.
+    pub landing: Option<String>,
+    pub notes: Vec<NoteCtx>,
+    pub accept_confirm: String,
+    pub discard_confirm: String,
+}
+
+/// The review pane, for a review ticket that is ours to judge. `None` for anything else — a caller rendering this for a
+/// todo ticket, or for a delegated one whose verdict belongs on its issue, is a bug rather than an empty pane.
+///
+/// The three inputs the views layer cannot compute itself — the worktree path, whether it is dirty, and the landing
+/// verdict — are passed in by the handler, which is free to run subprocesses; views stay pure.
+#[must_use]
+pub fn review(
+    board: &Board,
+    id: &crate::store::model::TicketId,
+    worktree_path: Option<String>,
+    worktree_dirty: bool,
+    landing: Option<String>,
+) -> Option<ReviewTpl> {
+    let t = board.ticket(id)?;
+    if t.column.id() != ColumnId::Review || t.external.is_some() {
+        return None;
+    }
+    Some(ReviewTpl {
+        review: ReviewCtx {
+            id: t.id.to_string(),
+            title: t.title.clone(),
+            branch: t.column.branch().map(str::to_owned),
+            worktree_path,
+            worktree_dirty,
+            accept_confirm: review_accept_confirm(&t.id.to_string(), &t.title, landing.as_deref()),
+            discard_confirm: format!(
+                "Discard {} — {}? It closes as done without landing, and tickets depending on it stay blocked.",
+                t.id, t.title
+            ),
+            landing,
+            notes: t.notes.iter().map(|n| NoteCtx { at: human_time(n.at), author: n.author.clone(), text: n.text.clone() }).collect(),
+        },
+    })
+}
+
+/// What Accept asks before it closes the card. The hazard is specific and worth spelling out: unlike the automatic
+/// lander, Accept needs no proof the branch reached main, so it can close work that is not integrated and unblock
+/// dependents onto code that does not exist yet. The sweep's own verdict is quoted so the reviewer sees which case they
+/// are actually in rather than guessing.
+fn review_accept_confirm(id: &str, title: &str, landing: Option<&str>) -> String {
+    let mut s = format!(
+        "Accept {id} — {title}? It closes as done and unblocks every ticket depending on it, whether or not its branch \
+         has reached main — this is your judgement, not the auto-lander's proof."
+    );
+    if let Some(landing) = landing {
+        use std::fmt::Write;
+        let _ = write!(s, " Right now: {landing}.");
+    }
+    s
+}
+
 /// The diff pane (`templates/diff.html`): a review branch's changes against main, ready for htmx to swap into the modal.
 /// The per-file model comes from [`crate::diff::compute`]; this only tallies the summary line.
 #[derive(Debug, Template)]
@@ -499,6 +583,8 @@ pub fn detail(board: &Board, claims: &[Claim], id: &crate::store::model::TicketI
             can_diff,
             pr: t.pr.as_ref().map(pr_ctx),
             can_discard: t.column.id() == ColumnId::Review,
+            can_review: t.column.id() == ColumnId::Review && t.external.is_none(),
+            changes_requested: t.changes_requested,
             discarded: matches!(t.column, Column::Done { discarded: true, .. }),
             auto_merge,
             auto_merge_inherited,
