@@ -219,6 +219,7 @@ pub fn path_for(store: &Store, id: &TicketId) -> anyhow::Result<Option<PathBuf>>
 
 /// That worktree's path when it has uncommitted changes — the close-out guard for `kanban_move to=review`. Any question
 /// git cannot answer means "no evidence of dirt", because this gate must never block a close-out on its own confusion.
+#[must_use]
 pub fn dirty_worktree(store: &Store, id: &TicketId) -> Option<PathBuf> {
     let path = path_for(store, id).ok().flatten()?;
     let dirty = git(&path, &["status", "--porcelain"]).is_ok_and(|out| !out.is_empty());
