@@ -1325,6 +1325,32 @@ async fn the_review_pane_renders_for_a_review_ticket_and_not_otherwise() {
     assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
 
+/// Both panes lead with what you came to press. A card's body, its dependency list and its progress log all grow
+/// without bound, and the actions used to sit under all of it — so the longer a ticket had been worked, the further you
+/// had to scroll to act on it. Accept loses its confirm in the same breath: it is permission for a work loop to land
+/// the branch, withdrawable right up until the landing happens, so a dialog in front of the pane's headline verdict
+/// bought a second click and nothing else. Discard, the one that cannot be taken back, keeps its.
+#[tokio::test]
+async fn the_panes_put_their_actions_above_the_reading_matter() {
+    let (_dir, router, store) = test_app();
+    seed_ticket(&store, "Long-running");
+    to_review_with_branch(&store, "K-1", "k-1/long");
+    ops::apply(&store, None, Op::AddNote { id: TicketId("K-1".into()), text: "a note from the worker".into(), author: None }).unwrap();
+
+    let detail = body_text(router.clone().oneshot(get("/ui/ticket/K-1")).await.unwrap()).await;
+    let switch = detail.find("/ui/ticket/K-1/review").expect("the view switch");
+    let actions = detail.find("/ui/ticket/K-1/edit").expect("the action row");
+    let log = detail.find("a note from the worker").expect("the progress log");
+    assert!(switch < actions && actions < log, "the detail pane's actions sit under the switch, above the log: {detail}");
+
+    let pane = body_text(router.oneshot(get("/ui/ticket/K-1/review")).await.unwrap()).await;
+    let accept = pane.find("/ui/ticket/K-1/review/accept").expect("Accept");
+    let discard = pane.find("/ui/ticket/K-1/discard").expect("Discard");
+    assert!(accept < pane.find("k-1/long").expect("the branch"), "the verdicts lead the review pane: {pane}");
+    assert!(!pane[accept..discard].contains("hx-confirm"), "neither reversible verdict asks twice: {pane}");
+    assert!(pane[discard..].contains("hx-confirm"), "the irreversible one still does: {pane}");
+}
+
 /// A delegated ticket's verdict belongs on its issue: no tab, no pane, and the op behind the middle button refuses it.
 #[tokio::test]
 async fn an_external_review_ticket_gets_no_review_pane() {

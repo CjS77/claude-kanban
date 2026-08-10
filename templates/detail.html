@@ -33,15 +33,53 @@
           title="/kanban:work dispatches this ticket at this model and effort instead of the session's own">⚙ {{ run }}</span>{% endif %}
 </div>
 
-{#- Review tickets get a second view: the verdict pane. A plain join of two buttons, matching the status switch below —
-    it swaps #detail server-side, so there is no tab state to keep anywhere. -#}
+{#- Review tickets get a second view: the verdict pane. A plain join of two buttons — it swaps #detail server-side, so
+    there is no tab state to keep anywhere. Sized like the action row under it and three times as wide as a plain
+    button: it switches the whole pane, so it must not read as one more small action among the others. -#}
 {% if ticket.can_review %}
 <div class="join mt-3">
-    <button class="join-item btn btn-xs btn-active btn-primary">Details</button>
-    <button class="join-item btn btn-xs" hx-get="/ui/ticket/{{ ticket.id }}/review" hx-target="#detail" hx-swap="innerHTML"
+    <button class="join-item btn btn-sm w-40 btn-active btn-primary">Details</button>
+    <button class="join-item btn btn-sm w-40" hx-get="/ui/ticket/{{ ticket.id }}/review" hx-target="#detail" hx-swap="innerHTML"
             title="accept this work, send it back with feedback, or discard it">Review</button>
 </div>
 {% endif %}
+
+{#- The actions sit at the top, right under the view switch. They used to sit at the foot of the pane, which meant
+    scrolling past a body and a progress log of any length to reach the one thing you opened the card to press. -#}
+<div class="mt-3 flex flex-wrap gap-2">
+    {% if ticket.can_diff %}
+    {#- Purely local: the branch's own changes against main, rendered GitHub-style in a modal. No push, no gh — the
+        offline answer to "I only opened a PR to see the diff". Targets #diff-view; glue.js opens the modal. -#}
+    <button class="btn btn-sm" hx-get="/ui/ticket/{{ ticket.id }}/diff" hx-target="#diff-view" hx-swap="innerHTML"
+            title="the branch's changes against main — stays on this machine">
+        View diff <span class="htmx-indicator loading loading-spinner loading-xs"></span></button>
+    {% endif %}
+    {% if ticket.can_pr %}{% if let Some(branch) = ticket.branch %}
+    {#- The one action that leaves the machine — deliberate, explicit, and server-deduped (a second click finds the
+        open PR instead of pushing again). hx-disabled-elt guards the seconds the push takes. -#}
+    <button class="btn btn-sm btn-primary" hx-post="/ui/ticket/{{ ticket.id }}/create-pr" hx-target="#detail" hx-swap="innerHTML"
+            hx-disabled-elt="this" title="push {{ branch }} and open a GitHub PR — this leaves the machine">
+        Create PR <span class="htmx-indicator loading loading-spinner loading-xs"></span></button>
+    {% endif %}{% endif %}
+    {% if ticket.can_discard %}
+    {#- Retiring code-complete work that will never land. Deliberately NOT what the auto-lander does — discard is
+        always the human's call, and dependents stay blocked afterwards. -#}
+    <button class="btn btn-sm btn-warning btn-outline"
+            hx-post="/ui/ticket/{{ ticket.id }}/discard" hx-target="#detail" hx-swap="innerHTML"
+            hx-confirm="Discard {{ ticket.id }} — {{ ticket.title }}? It closes as done without landing, and tickets depending on it stay blocked.">Discard</button>
+    {% endif %}
+    {#- Auto-merge gets its own route and its own confirm rather than a checkbox on the edit form: that form's one
+        Save button would fire the dialog on every unrelated edit. Filled means on — see the badge row. -#}
+    <button class="btn btn-sm btn-warning {% if !ticket.auto_merge %}btn-outline{% endif %}"
+            hx-post="/ui/ticket/{{ ticket.id }}/auto-merge" hx-target="#detail" hx-swap="innerHTML"
+            hx-confirm="{{ ticket.auto_merge_confirm }}"
+            title="let /kanban:work land this ticket on main by itself, with no human review of the merge">
+        Auto-merge{% if ticket.auto_merge_inherited %} (epic){% endif %}</button>
+    <button class="btn btn-sm" hx-get="/ui/ticket/{{ ticket.id }}/edit" hx-target="#detail" hx-swap="innerHTML">Edit</button>
+    <button class="btn btn-sm btn-error btn-outline"
+            hx-post="/ui/ticket/{{ ticket.id }}/delete" hx-swap="none" data-close-modal
+            hx-confirm="Delete {{ ticket.id }} — {{ ticket.title }}? Other tickets' dependencies on it are removed too.">Delete</button>
+</div>
 
 {% if let Some(claim) = ticket.claim %}
 <div class="mt-3 p-3 rounded-lg bg-base-200 text-sm flex flex-col gap-1">
@@ -110,46 +148,11 @@
     <button type="submit" class="btn btn-sm">Note</button>
 </form>
 
-<div class="mt-5 flex flex-wrap items-center justify-between gap-3">
-    {# Status is the user's call, made here: draft/stub/review/ready, current one highlighted. #}
-    <div class="join" title="draft: still being defined · stub: for Claude to flesh out · review: awaiting your verdict · ready: eligible for pickup">
-        {% for status in ticket.statuses %}
-        <button class="join-item btn btn-xs {% if status.current %}btn-active btn-primary{% endif %}"
-                hx-post="/ui/ticket/{{ ticket.id }}/status" hx-vals='{"status": "{{ status.name }}"}' hx-target="#detail" hx-swap="innerHTML">{{ status.name }}</button>
-        {% endfor %}
-    </div>
-    <div class="flex gap-2">
-        {% if ticket.can_diff %}
-        {#- Purely local: the branch's own changes against main, rendered GitHub-style in a modal. No push, no gh — the
-            offline answer to "I only opened a PR to see the diff". Targets #diff-view; glue.js opens the modal. -#}
-        <button class="btn btn-sm" hx-get="/ui/ticket/{{ ticket.id }}/diff" hx-target="#diff-view" hx-swap="innerHTML"
-                title="the branch's changes against main — stays on this machine">
-            View diff <span class="htmx-indicator loading loading-spinner loading-xs"></span></button>
-        {% endif %}
-        {% if ticket.can_pr %}{% if let Some(branch) = ticket.branch %}
-        {#- The one action that leaves the machine — deliberate, explicit, and server-deduped (a second click finds the
-            open PR instead of pushing again). hx-disabled-elt guards the seconds the push takes. -#}
-        <button class="btn btn-sm btn-primary" hx-post="/ui/ticket/{{ ticket.id }}/create-pr" hx-target="#detail" hx-swap="innerHTML"
-                hx-disabled-elt="this" title="push {{ branch }} and open a GitHub PR — this leaves the machine">
-            Create PR <span class="htmx-indicator loading loading-spinner loading-xs"></span></button>
-        {% endif %}{% endif %}
-        {% if ticket.can_discard %}
-        {#- Retiring code-complete work that will never land. Deliberately NOT what the auto-lander does — discard is
-            always the human's call, and dependents stay blocked afterwards. -#}
-        <button class="btn btn-sm btn-warning btn-outline"
-                hx-post="/ui/ticket/{{ ticket.id }}/discard" hx-target="#detail" hx-swap="innerHTML"
-                hx-confirm="Discard {{ ticket.id }} — {{ ticket.title }}? It closes as done without landing, and tickets depending on it stay blocked.">Discard</button>
-        {% endif %}
-        {#- Auto-merge gets its own route and its own confirm rather than a checkbox on the edit form: that form's one
-            Save button would fire the dialog on every unrelated edit. Filled means on — see the badge row. -#}
-        <button class="btn btn-sm btn-warning {% if !ticket.auto_merge %}btn-outline{% endif %}"
-                hx-post="/ui/ticket/{{ ticket.id }}/auto-merge" hx-target="#detail" hx-swap="innerHTML"
-                hx-confirm="{{ ticket.auto_merge_confirm }}"
-                title="let /kanban:work land this ticket on main by itself, with no human review of the merge">
-            Auto-merge{% if ticket.auto_merge_inherited %} (epic){% endif %}</button>
-        <button class="btn btn-sm" hx-get="/ui/ticket/{{ ticket.id }}/edit" hx-target="#detail" hx-swap="innerHTML">Edit</button>
-        <button class="btn btn-sm btn-error btn-outline"
-                hx-post="/ui/ticket/{{ ticket.id }}/delete" hx-swap="none" data-close-modal
-                hx-confirm="Delete {{ ticket.id }} — {{ ticket.title }}? Other tickets' dependencies on it are removed too.">Delete</button>
-    </div>
+{# Status is the user's call, made here: draft/stub/review/ready, current one highlighted. It stays at the foot of the
+   pane on purpose — it defines what the ticket *is*, which is the thing you settle after reading it, not an action. #}
+<div class="join mt-5" title="draft: still being defined · stub: for Claude to flesh out · review: awaiting your verdict · ready: eligible for pickup">
+    {% for status in ticket.statuses %}
+    <button class="join-item btn btn-xs {% if status.current %}btn-active btn-primary{% endif %}"
+            hx-post="/ui/ticket/{{ ticket.id }}/status" hx-vals='{"status": "{{ status.name }}"}' hx-target="#detail" hx-swap="innerHTML">{{ status.name }}</button>
+    {% endfor %}
 </div>

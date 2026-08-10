@@ -343,6 +343,10 @@ nothing else: the ticket keeps its place in `review` wearing `accepted`, and `ka
 which rebases the branch onto the main branch and fast-forwards main into it. The card reaches `done` the only way any card does — the sweep
 proving the code arrived.
 
+That is also why Accept carries no confirm dialog while Discard does. What Accept grants is revocable — the approval can be withdrawn, and the
+landing itself refuses rather than guesses — so a dialog in front of the review pane's headline verdict only taxes the common case. Discard is
+the click with no undo, and it is the one that asks.
+
 **The rebase deliberately does not live in the binary.** It is the same boundary `land.rs` has always drawn: this binary asks git questions
 and never moves a ref, and the one path that writes to the integration branch (`worktree::finish --merge`) is a human's explicit CLI request.
 Resolving a rebase conflict is judgement work over the code, and there is no agent behind a browser click — a binary doing it would either

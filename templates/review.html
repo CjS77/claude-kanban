@@ -1,6 +1,7 @@
-{#- The review pane, swapped into the #detail modal in place of the ordinary ticket pane. Everything a human needs to
-    judge code-complete work — where the code is, whether it has landed, what the worker said — followed by the three
-    verdicts. Server-rendered like every other pane: the only client-side behaviour is htmx swapping and hx-confirm. -#}
+{#- The review pane, swapped into the #detail modal in place of the ordinary ticket pane. The three verdicts lead, since
+    giving one is why the pane was opened; under them sits everything a human needs to judge code-complete work — where
+    the code is, whether it has landed, what the worker said. Server-rendered like every other pane: the only
+    client-side behaviour is htmx swapping and Discard's hx-confirm. -#}
 <div class="flex items-start justify-between gap-3">
     <div class="min-w-0">
         <span class="font-mono text-sm opacity-60">{{ review.id }}</span>
@@ -10,8 +11,8 @@
 </div>
 
 <div class="join mt-3">
-    <button class="join-item btn btn-xs" hx-get="/ui/ticket/{{ review.id }}" hx-target="#detail" hx-swap="innerHTML">Details</button>
-    <button class="join-item btn btn-xs btn-active btn-primary">Review</button>
+    <button class="join-item btn btn-sm w-40" hx-get="/ui/ticket/{{ review.id }}" hx-target="#detail" hx-swap="innerHTML">Details</button>
+    <button class="join-item btn btn-sm w-40 btn-active btn-primary">Review</button>
 </div>
 
 {% if review.landing_blocked %}
@@ -32,7 +33,41 @@
 </div>
 {% endif %}
 
-<dl class="mt-4 flex flex-col gap-2 text-sm">
+{#- One form, three submit targets: hx-include pulls the same comment box into whichever verdict is pressed, so the
+    buttons can sit above it. They lead the pane, under the switch and under whatever state banner is showing — the
+    progress log below runs to any length, and the verdict is what the reviewer opened this pane to give. -#}
+<form class="mt-4">
+    <div class="flex flex-wrap gap-2">
+        {#- No confirm. Accept is permission for the work loop to land the branch, and that permission is withdrawable
+            right up until the landing happens — a dialog in front of the pane's own headline action bought nothing but
+            a second click. The irreversible verdict, Discard, keeps its. -#}
+        <button class="btn btn-sm btn-primary" hx-post="/ui/ticket/{{ review.id }}/review/accept"
+                hx-include="closest form" hx-target="#detail" hx-swap="innerHTML"
+                title="clear this work to land: /kanban:work rebases the branch onto main and fast-forwards main into it">
+            {% if review.landing_blocked %}Accept again{% else %}Accept{% endif %}</button>
+
+        {#- No confirm either: sending work back is the reversible verdict, and the round trip is the point. -#}
+        <button class="btn btn-sm btn-warning" hx-post="/ui/ticket/{{ review.id }}/review/changes"
+                hx-include="closest form" hx-target="#detail" hx-swap="innerHTML"
+                title="send this back to doing with your comment as the spec for the next round — needs a comment">
+            Request changes</button>
+
+        <button class="btn btn-sm btn-error btn-outline" hx-post="/ui/ticket/{{ review.id }}/discard"
+                hx-include="closest form" hx-target="#detail" hx-swap="innerHTML"
+                hx-confirm="{{ review.discard_confirm }}"
+                title="retire this work without landing it — dependents stay blocked">Discard</button>
+    </div>
+
+    <div class="mt-3">
+        <label class="text-sm font-semibold" for="review-comment">Review notes</label>
+        <textarea id="review-comment" name="comment" rows="4" class="textarea w-full mt-1"
+                  placeholder="Goes with whichever verdict you press — required for Request changes…"></textarea>
+    </div>
+</form>
+
+<div class="divider"></div>
+
+<dl class="flex flex-col gap-2 text-sm">
     {% if let Some(branch) = review.branch %}
     <div class="flex gap-2 items-baseline">
         <dt class="opacity-60 shrink-0">Branch</dt>
@@ -80,33 +115,3 @@
     </ul>
 </div>
 {% endif %}
-
-<div class="divider"></div>
-
-{#- One form, three submit targets: hx-include pulls the same comment box into whichever verdict is pressed. -#}
-<form>
-    <label class="text-sm font-semibold" for="review-comment">Review</label>
-    <textarea id="review-comment" name="comment" rows="5" class="textarea w-full mt-1"
-              placeholder="Review notes / what needs to change…"></textarea>
-
-    <div class="flex flex-wrap gap-2 mt-3">
-        {#- Accept moves main (via the work loop), so it keeps a confirm — but it is reversible right up until the
-            landing happens, which is why it is nothing like the scare text Discard carries. -#}
-        <button class="btn btn-sm btn-primary" hx-post="/ui/ticket/{{ review.id }}/review/accept"
-                hx-include="closest form" hx-target="#detail" hx-swap="innerHTML"
-                hx-confirm="{{ review.accept_confirm }}"
-                title="clear this work to land: /kanban:work rebases the branch onto main and fast-forwards main into it">
-            {% if review.landing_blocked %}Accept again{% else %}Accept{% endif %}</button>
-
-        {#- No confirm: sending work back is the reversible verdict, and the round trip is the point of the feature. -#}
-        <button class="btn btn-sm btn-warning" hx-post="/ui/ticket/{{ review.id }}/review/changes"
-                hx-include="closest form" hx-target="#detail" hx-swap="innerHTML"
-                title="send this back to doing with your comment as the spec for the next round — needs a comment">
-            Request changes</button>
-
-        <button class="btn btn-sm btn-error btn-outline" hx-post="/ui/ticket/{{ review.id }}/discard"
-                hx-include="closest form" hx-target="#detail" hx-swap="innerHTML"
-                hx-confirm="{{ review.discard_confirm }}"
-                title="retire this work without landing it — dependents stay blocked">Discard</button>
-    </div>
-</form>

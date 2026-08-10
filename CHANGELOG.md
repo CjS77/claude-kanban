@@ -5,6 +5,21 @@ All notable changes to this project are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- The ticket card leads with its actions. Both panes put their button row directly under the Details/Review switch
+  instead of at the foot: a card's body, dependency list and progress log all grow without bound, so the longer a
+  ticket had been worked, the further you had to scroll to press the one thing you opened it for. The status switch
+  (draft/stub/review/ready) stays at the foot — it settles what the ticket *is*, which is a decision you make after
+  reading it. The Details/Review switch itself is now the size of an action button and three times as wide, since it
+  swaps the entire pane and had been reading as one more small control among many.
+- **Accept no longer asks twice.** It is permission for a work loop to land the branch, and that permission can be
+  withdrawn right up until the landing happens, so a confirm dialog in front of the review pane's headline verdict
+  bought a second click and nothing else. Discard — the verdict that cannot be taken back — keeps its confirm, and
+  Request changes never had one.
+
 ## [3.2.0] - 2026-08-10
 
 ### Added

@@ -499,7 +499,6 @@ pub struct ReviewCtx {
     /// they have to act on.
     pub landing_blocked: bool,
     pub notes: Vec<NoteCtx>,
-    pub accept_confirm: String,
     pub discard_confirm: String,
 }
 
@@ -527,7 +526,6 @@ pub fn review(
             branch: t.column.branch().map(str::to_owned),
             worktree_path,
             worktree_dirty,
-            accept_confirm: review_accept_confirm(&t.id.to_string(), &t.title, landing.as_deref(), t.column.branch(), t.landing_blocked),
             accepted: t.accepted,
             landing_blocked: t.landing_blocked,
             discard_confirm: format!(
@@ -538,38 +536,6 @@ pub fn review(
             notes: t.notes.iter().map(|n| NoteCtx { at: human_time(n.at), author: n.author.clone(), text: n.text.clone() }).collect(),
         },
     })
-}
-
-/// What Accept asks before it fires. What it is really consenting to is **main moving**: a work loop will rebase this
-/// branch and fast-forward main into it with nobody looking at the merge, which is the same cost the auto-merge toggle
-/// spells out. It is not the irreversible click Discard is — the approval can be withdrawn right up until the landing
-/// happens — so the text names the cost without the scare text.
-///
-/// Three shapes, because the question genuinely differs. Re-accepting after a blocked landing is a *retry*, and saying
-/// so is what stops it reading as a no-op. A ticket with no branch has nothing to land at all. The sweep's own verdict
-/// is quoted throughout, so the reviewer sees which case they are in rather than guessing.
-fn review_accept_confirm(id: &str, title: &str, landing: Option<&str>, branch: Option<&str>, blocked: bool) -> String {
-    let mut s = match (branch, blocked) {
-        (Some(branch), true) => format!(
-            "Accept {id} — {title} again? The last landing attempt was refused and the progress log says why. This \
-             clears the flag and puts {branch} back in the work loop's hands to rebase onto main and fast-forward — so \
-             only press it if you have resolved what stopped it."
-        ),
-        (Some(branch), false) => format!(
-            "Accept {id} — {title}? It clears the work to land: a running /kanban:work loop will rebase {branch} onto \
-             the main branch and fast-forward main into it, with no further review of the merge, and the board closes \
-             the card once it can prove the code arrived. A conflict stops all of it and hands the ticket back to you."
-        ),
-        (None, _) => format!(
-            "Accept {id} — {title}? No branch is recorded, so there is nothing to land: the card simply waits in \
-             review, and only you can close it. Discard is probably what you want instead."
-        ),
-    };
-    if let Some(landing) = landing {
-        use std::fmt::Write;
-        let _ = write!(s, " Right now: {landing}.");
-    }
-    s
 }
 
 /// The diff pane (`templates/diff.html`): a review branch's changes against main, ready for htmx to swap into the modal.
