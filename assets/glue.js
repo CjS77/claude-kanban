@@ -9,7 +9,8 @@
  *   3. Drag & drop: a SortableJS instance per ticket list, re-created after every board swap; a drop POSTs the move.
  *   4. Error toasts: htmx refuses to swap non-2xx responses by default; whitelist the codes the server retargets at #toasts.
  *   5. Client-side markdown: [data-md-src] panes fetch raw markdown once and render it locally (marked + DOMPurify).
- *   6. Modal plumbing: open the detail (and diff) dialog when content lands in it; close/reset forms marked for it.
+ *   6. Modal plumbing: open the detail (and diff) dialog when content lands in it; close/reset forms marked for it;
+ *      jump the diff's TOC links inside the diff pane instead of letting the browser scroll the page.
  *   7. Epic options sync: the create-ticket form sits in the static page shell, so its epic <select> would go stale
  *      as epics come and go — after every swap it re-mirrors the list from the OOB-refreshed filter dropdown.
  *   8. Syntax highlighting: highlight.js over the diff pane's per-line code cells and the markdown panes' code blocks.
@@ -177,6 +178,23 @@
             const modal = document.getElementById("docs-modal");
             if (modal && !modal.open) modal.showModal();
         }
+    });
+
+    // The diff's TOC and body are separate scroll panes (assets/diff.css), so a plain `#f3` jump would move the wrong
+    // box — the browser scrolls every scrollable ancestor, dragging the modal and the board behind it. Scroll the file
+    // into view inside the diff body alone, and leave the URL hash untouched.
+    document.body.addEventListener("click", (e) => {
+        const link = e.target.closest?.(".diff-toc-item");
+        if (!link) return;
+        const file = document.getElementById(link.getAttribute("href").slice(1));
+        if (!file) return;
+        e.preventDefault();
+        const body = file.closest(".diff-body");
+        if (!body) return;
+        // The summary bar is sticky at the top of the pane, so land the file below it rather than under it.
+        const summary = body.querySelector(".diff-summary");
+        const offset = summary ? summary.getBoundingClientRect().height : 0;
+        body.scrollTop += file.getBoundingClientRect().top - body.getBoundingClientRect().top - offset;
     });
 
     document.body.addEventListener("htmx:afterRequest", (e) => {

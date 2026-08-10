@@ -2,8 +2,9 @@
     browser by highlight.js over each line's `language-*` class. Swapped into #diff-view by htmx; glue.js opens the modal
     and runs the highlighter. Styling is assets/diff.css (GitHub palette, theme-aware via prefers-color-scheme).
 
-    Layout: a sticky file-list TOC on the left (anchor links jump to each file section) beside the diff body; each file
-    is a <details> so clicking its header collapses the hunks underneath. Both are pure HTML/CSS — no new JavaScript. -#}
+    Layout: a file-list TOC on the left beside the diff body, each pane scrolling inside a fixed-height frame so the TOC
+    stays put however far the diff scrolls; each file is a <details> so clicking its header collapses the hunks
+    underneath. The anchor links are real hrefs, but glue.js intercepts them to scroll the diff pane alone. -#}
 {% if files.is_empty() %}
 <p class="diff-empty">No changes — <span class="font-mono">{{ branch }}</span> is even with <span class="font-mono">{{ main }}</span>.</p>
 {% else %}

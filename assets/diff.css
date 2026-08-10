@@ -7,7 +7,8 @@
  */
 .diff {
     display: flex;
-    align-items: flex-start;
+    align-items: stretch;
+    height: 78vh;
     font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
     font-size: 12px;
     color: var(--diff-fg);
@@ -131,14 +132,13 @@ tr.dl-del .diff-ln { background: var(--diff-del-ln-bg); }
     opacity: 0.7;
 }
 
-/* Layout: a sticky file-list TOC beside the scrolling diff body (see templates/diff.html). */
+/* Layout: a file-list TOC beside the diff body (see templates/diff.html). The .diff box is the fixed-height frame and
+ * each pane scrolls inside it, so a long diff scrolls under a TOC that stays put — the TOC is short enough that its own
+ * scrollbar rarely appears. Sticky positioning can't do this: it needs a scrolling ancestor to stick within, and the
+ * ancestor here is the modal, which would carry the TOC away with it. */
 .diff-toc {
     flex: 0 0 auto;
     width: 15rem;
-    align-self: flex-start;
-    position: sticky;
-    top: 0;
-    max-height: 80vh;
     overflow: auto;
     border-right: 1px solid var(--diff-border);
     background: var(--diff-bg);
@@ -191,6 +191,7 @@ tr.dl-del .diff-ln { background: var(--diff-del-ln-bg); }
 .diff-body {
     flex: 1 1 auto;
     min-width: 0;
+    overflow: auto;
 }
 
 /* Each file is a <details>; its <summary> header toggles the hunks and carries a caret that rotates when open. */
