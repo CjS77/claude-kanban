@@ -20,6 +20,11 @@
 //!    or blocks — anything.
 //! 3. **External tickets never land from local branch state.** Their `branch` is whatever the delegate created on the
 //!    far side and was never a local ref, so its absence proves nothing; only the PR route (rule 5) applies to them.
+//! 4. **Worktree retirement is a consequence of landing, never a cause of it.** A ticket's worktree now survives review
+//!    — the human reads the code on disk, and rework re-attaches to it — so landing is what finally removes it, via
+//!    [`crate::worktree::retire`] in [`land_and_retire`]. It runs after the board write, cannot fail the landing, and
+//!    keeps a dirty worktree rather than touching uncommitted work. Nothing here ever *asks* about a worktree before
+//!    deciding: the proof rules above are unchanged, and a missing or stubborn worktree never blocks a landing.
 //!
 //! Detection runs *outside* the store lock — git and gh are slow — and every landing goes through
 //! [`Op::LandTicket`], which re-checks its evidence under the lock and refuses harmlessly when the board moved.
@@ -267,15 +272,28 @@ fn waiting_on(t: &Ticket, board: &Board, main: &str, heads: &HashSet<String>, ob
 /// Apply one landing, tolerating the benign race: the board may have moved since the evidence was gathered, and
 /// [`Op::LandTicket`] refusing is the mechanism working, not a failure.
 fn land(store: &Store, t: &Ticket, reason: &str) -> bool {
-    let op = Op::LandTicket { id: t.id.clone(), expected_branch: t.column.branch().map(str::to_owned), reason: reason.to_owned() };
+    land_and_retire(store, &t.id, t.column.branch().map(str::to_owned), reason)
+}
+
+/// Land the ticket and, if that succeeded, retire its worktree — the single door both landing paths go through, so
+/// retirement can never be wired into one and forgotten in the other.
+///
+/// The order is the point: [`crate::worktree::retire`] runs only *after* [`ops::apply`] has returned, both because the
+/// store lock is per open file description (retiring under it would deadlock) and because retirement is a consequence
+/// of landing, never a cause of it. It cannot fail the landing — it returns nothing and swallows its own errors.
+fn land_and_retire(store: &Store, id: &TicketId, expected_branch: Option<String>, reason: &str) -> bool {
+    let op = Op::LandTicket { id: id.clone(), expected_branch, reason: reason.to_owned() };
     match ops::apply(store, None, op) {
-        Ok(_) => true,
+        Ok(_) => {
+            crate::worktree::retire(store, id);
+            true
+        }
         Err(OpError::Invalid(e)) => {
-            tracing::debug!(ticket = %t.id, "landing refused (board moved underneath the sweep): {e}");
+            tracing::debug!(ticket = %id, "landing refused (board moved underneath the sweep): {e}");
             false
         }
         Err(e) => {
-            tracing::warn!(ticket = %t.id, error = %e, "landing failed");
+            tracing::warn!(ticket = %id, error = %e, "landing failed");
             false
         }
     }
@@ -365,14 +383,8 @@ pub fn poll(store: &Store) -> anyhow::Result<usize> {
         }
         // Merge recorded and already pulled: land in this tick, not the next.
         if landable.is_some() {
-            let op = Op::LandTicket {
-                id,
-                expected_branch: t.column.branch().map(str::to_owned),
-                reason: format!("PR #{number} merged and pulled into {main}"),
-            };
-            if let Err(e) = ops::apply(store, None, op) {
-                tracing::debug!(error = %e, "landing after poll refused — the sweep will retry from fresh state");
-            }
+            let reason = format!("PR #{number} merged and pulled into {main}");
+            land_and_retire(store, &id, t.column.branch().map(str::to_owned), &reason);
         }
     }
     Ok(updated)

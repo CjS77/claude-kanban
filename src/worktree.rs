@@ -2,8 +2,17 @@
 //!
 //! Claude never works in the user's checkout. `start` gives a claimed ticket its own branch (`k-7/<slug>`) and its own
 //! worktree under the worktree root, with a per-worktree sparse checkout that excludes `.kanban/` — so no worktree can
-//! ever even *see* a board file, let alone conflict over one. `finish` removes the worktree and keeps the branch;
-//! integrating it is the user's explicit next step (or `--merge` in one motion).
+//! ever even *see* a board file, let alone conflict over one.
+//!
+//! A worktree outlives review. It is created by `start` and survives the move to `review` — so the human reviewing the
+//! card can read the code on disk, and a rework round re-attaches to it instead of rebuilding it — until the ticket
+//! reaches `done`, where [`retire`] removes it. `finish` is no longer that close-out: it stays the *deliberate* removal,
+//! for the human's CLI, for abandoning a checkout early, and for the pre-merge step of auto-merge. Both paths keep the
+//! branch; integrating it is the user's explicit next step (or `finish --merge` in one motion).
+//!
+//! The two differ in who they answer to. `finish` refuses a dirty worktree (unless `--force_discard`) because a human
+//! asked for the removal and deserves the refusal; [`retire`] never refuses and never fails — the ticket has already
+//! landed — so a dirty worktree is simply kept, with a note on the card saying where it is.
 //!
 //! Board writes from here still funnel through [`crate::ops`] ([`Op::StampWorktree`] / [`Op::ClearWorktreePath`]) under
 //! the same lock as everything else. Git operations deliberately happen *outside* that lock — they're slow — and the
@@ -180,19 +189,95 @@ pub fn finish(store: &Store, id: &TicketId, force_discard: bool, merge: bool) ->
     }
 
     if let Some(path) = &worktree {
-        let mut args = vec!["worktree", "remove"];
-        if force_discard {
-            args.push("--force");
-        }
-        let path_str = path.to_string_lossy().into_owned();
-        args.push(&path_str);
-        git(&repo, &args)?;
+        remove_worktree(&repo, path, force_discard)?;
     }
     git(&repo, &["worktree", "prune"])?;
 
     ops::apply(store, None, Op::ClearWorktreePath { id: id.clone() })?;
     tracing::info!(ticket = %id, branch = branch.as_deref().unwrap_or("-"), merged, "worktree finished");
     Ok(FinishReport { ticket: id.to_string(), branch, merged, removed: worktree })
+}
+
+/// `git worktree remove`, forcing past uncommitted changes only when told to. The branch is untouched either way.
+fn remove_worktree(repo: &Path, path: &Path, force: bool) -> anyhow::Result<()> {
+    let mut args = vec!["worktree", "remove"];
+    if force {
+        args.push("--force");
+    }
+    let path_str = path.to_string_lossy().into_owned();
+    args.push(&path_str);
+    git(repo, &args)?;
+    Ok(())
+}
+
+/// The ticket's live worktree on this machine, if git still has one registered for its branch.
+pub fn path_for(store: &Store, id: &TicketId) -> anyhow::Result<Option<PathBuf>> {
+    let repo = repo_root(store)?;
+    let Some(branch) = branch_for(store, &repo, id)? else { return Ok(None) };
+    Ok(live_worktree_for(&repo, &branch)?.filter(|p| p.exists()))
+}
+
+/// That worktree's path when it has uncommitted changes — the close-out guard for `kanban_move to=review`. Any question
+/// git cannot answer means "no evidence of dirt", because this gate must never block a close-out on its own confusion.
+pub fn dirty_worktree(store: &Store, id: &TicketId) -> Option<PathBuf> {
+    let path = path_for(store, id).ok().flatten()?;
+    let dirty = git(&path, &["status", "--porcelain"]).is_ok_and(|out| !out.is_empty());
+    dirty.then_some(path)
+}
+
+/// Retire a finished ticket's worktree: remove it when clean, keep it (with a note on the card) when dirty. The branch
+/// always survives.
+///
+/// Best-effort by design — the ticket has already reached `done`, and a git failure must never undo that, so every
+/// error path logs and returns rather than propagating. Call it only *after* [`ops::apply`] has returned: it takes the
+/// store lock itself, and the lock is per open file description, so nesting would block forever.
+pub fn retire(store: &Store, id: &TicketId) {
+    let Ok(repo) = repo_root(store) else { return };
+    if let Err(e) = git(&repo, &["worktree", "prune"]) {
+        tracing::warn!(ticket = %id, error = format!("{e:#}"), "pruning before retiring the worktree failed");
+    }
+    let branch = match branch_for(store, &repo, id) {
+        Ok(Some(branch)) => branch,
+        Ok(None) => return,
+        Err(e) => return tracing::warn!(ticket = %id, error = format!("{e:#}"), "could not resolve the branch to retire"),
+    };
+    let path = match live_worktree_for(&repo, &branch) {
+        Ok(Some(path)) if path.exists() => path,
+        Ok(_) => return,
+        Err(e) => return tracing::warn!(ticket = %id, error = format!("{e:#}"), "could not locate the worktree to retire"),
+    };
+
+    if git(&path, &["status", "--porcelain"]).is_ok_and(|out| !out.is_empty()) {
+        tracing::warn!(ticket = %id, path = %path.display(), "worktree has uncommitted changes — keeping it");
+        let text = format!(
+            "worktree kept at {} — it has uncommitted changes; remove it by hand once you have salvaged them",
+            path.display()
+        );
+        if let Err(e) = ops::apply(store, None, Op::AddNote { id: id.clone(), text, author: Some("kanban".into()) }) {
+            tracing::warn!(ticket = %id, error = %e, "and the kept-worktree warning could not be noted on the card either");
+        }
+        return;
+    }
+
+    if let Err(e) = remove_worktree(&repo, &path, false) {
+        return tracing::warn!(ticket = %id, error = format!("{e:#}"), "removing the retired worktree failed");
+    }
+    if let Err(e) = git(&repo, &["worktree", "prune"]) {
+        tracing::warn!(ticket = %id, error = format!("{e:#}"), "pruning after retiring the worktree failed");
+    }
+    if let Err(e) = ops::apply(store, None, Op::ClearWorktreePath { id: id.clone() }) {
+        tracing::warn!(ticket = %id, error = %e, "the retired worktree path could not be cleared from the card");
+    }
+    tracing::info!(ticket = %id, %branch, path = %path.display(), "worktree retired");
+}
+
+/// The ticket's branch: what the card records, else what the `<id>/*` naming scheme finds.
+fn branch_for(store: &Store, repo: &Path, id: &TicketId) -> anyhow::Result<Option<String>> {
+    let recorded = store.read_board()?.ticket(id).and_then(|t| t.column.branch().map(str::to_owned));
+    match recorded {
+        Some(branch) => Ok(Some(branch)),
+        None => existing_branch(repo, id),
+    }
 }
 
 /// Every registered ticket worktree joined with the live claims — plus claims whose worktree has vanished entirely.
