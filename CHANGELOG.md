@@ -5,6 +5,22 @@ All notable changes to this project are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- A ticket's worktree is kept through `review` instead of being removed at close-out, and is retired when the ticket
+  reaches `done` — landed, or discarded. Review is now something you can review *from*: the code is on disk to read,
+  and reworking a card re-attaches to the same checkout rather than rebuilding one. Retirement is best-effort and can
+  never fail a landing; a worktree holding uncommitted changes is kept, with a `kanban` note on the card naming the
+  path. The cost, accepted deliberately: worktrees live for the whole review period rather than seconds.
+- The close-out is `kanban_move to=review` and nothing else — agents no longer call `kanban_worktree_finish`, and the
+  dirty-worktree refusal that tool performed moves onto the move itself (MCP only; a human dragging the card in the
+  browser stays the override, as with discard). `kanban_worktree_finish` is unchanged and remains the *deliberate*
+  removal: the human's CLI, abandoning a checkout early, and the first step of any merge.
+- `merge.sh` removes a clean ticket worktree instead of refusing to run. It refused whenever the branch was checked
+  out in a linked worktree, which now describes every review ticket; it stops only when that worktree is dirty.
+
 ## [3.1.0] - 2026-08-08
 
 ### Added

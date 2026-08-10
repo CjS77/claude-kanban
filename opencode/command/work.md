@@ -79,8 +79,10 @@ loop after it):
    watches these appear live on the card.
 6. **Verify** — run the project's tests/build before calling anything done. A ticket whose tests fail is not done:
    note the failure and either fix it or release the ticket with a note explaining the blocker.
-7. **Finish** — `kanban_worktree_finish` (it refuses if you left uncommitted changes — commit them first; never
-   `force_discard` without explicit human approval). Never pass `merge` unless the user asked for it.
+7. **Commit everything** — the worktree is **kept** through review: the human reads the code there, and a rework round
+   re-attaches to it instantly. So there is no `kanban_worktree_finish` at close-out — the board removes the worktree
+   itself once the ticket lands. What you must do is leave nothing uncommitted: step 8's move refuses while the
+   worktree is dirty, and that worktree may sit on volatile /tmp where only commits survive.
 8. **Close out** — `kanban_move` the ticket to `review`. Done is not yours to declare: the board lands review tickets
    in `done` automatically once their branch (or PR) is merged into the **local** main branch, and dependencies
    unblock only then. Report the branch name prominently: integrating it is the user's explicit next step. With
@@ -103,8 +105,9 @@ tickets in flight; a refinement counts as one worker, an implementation counts a
    they run concurrently. Every subagent starts in the **main checkout** — never inside another ticket's worktree.
    - `implement` → the subagent runs `kanban_worktree_start` (tell it to supply a short kebab-case `slug`), `cd`s into
      the reported worktree and stays there, works the spec, commits logical chunks, `kanban_note`s progress, runs
-     the tests/build, and calls `kanban_worktree_finish` once everything is committed. It reports back: branch name,
-     what landed, and whether verification passed. It does NOT move the card — closing out is yours.
+     the tests/build, and commits everything. It must NOT call `kanban_worktree_finish` — the worktree is kept through
+     review and the board retires it on landing. It reports back: branch name, what landed, and whether verification
+     passed. It does NOT move the card — closing out is yours.
    - `refine` → the subagent researches the codebase (no worktree, no commits, no board writes) and returns the
      fleshed-out spec text, a sharper title if it found one, and any splits. You call `kanban_refine` with what it
      returned — a refine subagent makes no board writes.
@@ -185,8 +188,10 @@ Run it **after `kanban_move to=review` succeeds**, and only when all three of th
 `auto_merge: true`, the ticket is not `external`, and it has a recorded branch. Everything below happens in the **main
 checkout** — never inside a worktree, and never in parallel with another auto-merge.
 
-1. **Confirm the worktree is gone** — `git worktree list --porcelain`. If the branch is still checked out somewhere,
-   `kanban_worktree_finish` first (never `force_discard`); if that refuses because the tree is dirty, stop.
+1. **Remove the worktree** — `git worktree list --porcelain`. The worktree is kept through review, so the branch is
+   normally still checked out and this step normally runs: `kanban_worktree_finish` (never `force_discard`); if it
+   refuses because the tree is dirty, stop. Git will not let you check out a branch that is live in a worktree, so
+   skipping this fails the rebase two steps later.
 2. **Confirm the main checkout is on main and clean outside the board** — `git branch --show-current` names the
    configured main branch, and `git status --porcelain -- . ':(exclude).kanban'` comes back empty. That exclusion is
    required, not cosmetic: `.kanban/board.json` is tracked and you have just written to it by moving the ticket to
@@ -220,7 +225,7 @@ reach for `--force` or `--no-ff` to make a merge go through.
 
 | Situation | What to do |
 |---|---|
-| Worktree still present, or dirty so `kanban_worktree_finish` refuses | Stop before touching git. Note the worktree path so the human can finish it. |
+| Worktree dirty, so `kanban_worktree_finish` refuses | Stop before touching git. Note the worktree path so the human can finish it. (A worktree merely being *present* is normal now — step 1 removes it.) |
 | Rebase conflict you cannot resolve confidently | `git rebase --abort` **first** — never leave a half-rebase behind — then note which paths conflicted. |
 | `git merge --ff-only` refuses (main moved under you) | Retry steps 3–4 exactly once. Still refusing means main moved twice during one merge: stop and note it. |
 | Branch is already an ancestor of main | Benign — it was merged already. Skip to step 5 and let the sweep land it by ancestry. |
@@ -262,7 +267,8 @@ the user asks for the rework (or the ticket's notes clearly request it):
 2. `kanban_worktree_start` — it re-attaches to the existing `k-<n>/…` branch idempotently; your previous commits are
    all there.
 3. Address the feedback, commit, and — if the ticket has an open PR — push the branch so the PR updates.
-4. `kanban_worktree_finish`, then `kanban_move` back to `review`. The board takes it from there.
+4. `kanban_move` back to `review` — leave the worktree in place, exactly as at any other close-out. The board takes
+   it from there.
 
 ## Refining a stub
 

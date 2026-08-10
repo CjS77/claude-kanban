@@ -9,7 +9,7 @@ of the column is next up. Dragging a card to the top is how you tell Claude what
 |----------|----------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `todo`   | Ready to be worked. Claude takes the highest unblocked ticket.                                                                                           |
 | `doing`  | Claimed and in progress.                                                                                                                                 |
-| `review` | Code-complete but not landed: the worktree is finished (or the external work delivered), and the branch or PR is waiting to reach the local main branch. |
+| `review` | Code-complete but not landed: the branch or PR is waiting to reach the local main branch. **The worktree is kept**, so you can read the code on disk while you review it, and sending the ticket back for changes resumes instantly instead of rebuilding a checkout. The board removes the worktree when the ticket lands (or is discarded) — a worktree with uncommitted changes is kept, with a note on the card saying where it is. For an external ticket there was never a local worktree, so none of this applies. |
 | `done`   | Landed in the **local** main branch — or explicitly discarded (`discarded: true`).                                                                       |
 
 **Done means landed.** The board itself moves review tickets to done — automatically, and only on positive proof:
@@ -45,7 +45,10 @@ at all.
    takes the next. When the board runs dry the loop doesn't exit: it sleeps and polls again, so you can keep
    dropping tickets while it runs — interrupt it to stop. Your checkout is never touched; integrating the branch
    is your explicit step — merge it locally, or click **Create PR** on the review ticket's detail pane to push the
-   branch and open a GitHub PR via `gh`.
+   branch and open a GitHub PR via `gh`. The ticket's worktree stays on disk for as long as the card sits in
+   `review`, so `merge.sh` (and the loop's auto-merge) removes it as their first step — and refuses if you have
+   uncommitted work in there. The cost is disk: worktrees now live for the whole review period rather than seconds,
+   under `/tmp/claude-kanban` by default.
 4. **Done happens by itself.** Done means *landed in your local main branch*: the board watches review tickets
    and moves each to `done` the moment its branch — or its PR's merge commit, once you pull — reaches local main,
    with a note saying why. A PR merged only on GitHub shows "PR merged — pull main" until the merge arrives

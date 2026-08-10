@@ -22,8 +22,9 @@ reaches you if this definition does not pin one.
 4. `kanban_note` progress at meaningful moments: what landed, what's left, anything surprising. The human watches these
    appear live on the card.
 5. Run the project's tests and build before calling anything done. A ticket whose tests fail is not done.
-6. `kanban_worktree_finish` once everything is committed. It refuses if you left uncommitted changes — commit them
-   first, and never `force_discard` without explicit human approval.
+6. Make sure **everything is committed** — and do NOT call `kanban_worktree_finish`. The worktree is kept through
+   review so the human can read the code there and a rework round re-attaches to it; the board removes it once the
+   ticket lands. Uncommitted changes will make the orchestrator's close-out move refuse.
 
 Report back: the branch name, what landed, and whether verification passed. **Do not move the card** — closing out is
 the orchestrator's job.

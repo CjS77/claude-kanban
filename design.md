@@ -218,13 +218,21 @@ The lifecycle of a ticket, as the plugin's `/kanban:work` skill drives it — ea
    shared `.git`, so the worktree directory itself is expendable. Don't spam commits. Typically commit after every task, or logically
    sized sub-tasks. Board operations (`kanban_note`, `kanban_move`, …) issued from inside
    the worktree still land on the main checkout's board — see anchoring below.
-4. **Finish** — `worktree finish K-7` refuses if the worktree is dirty (`--force-discard` to override), removes the worktree, and runs
-   `git worktree prune`. The branch survives and its name is reported.
-5. **Close out** — the card moves to `review` (keeping `branch`) and the live claim is dropped. Integrating
-   `k-7/rate-limit-login` — a local merge, or push and PR — is your explicit next step, never a side effect; `worktree finish --merge`
-   exists for when you do want the merge in one motion (it targets the main branch and refuses if the checkout sits elsewhere). The move
-   to `done` is nobody's step: the board lands the ticket itself once the code reaches local main — see
-   [landing](#landing-how-review-becomes-done).
+4. **Close out** — the card moves to `review` (keeping `branch`) and the live claim is dropped. This move *is* the close-out: it refuses
+   while the worktree has uncommitted changes (the check `worktree finish` used to perform, moved to where the close-out now happens),
+   and it is the last step an agent takes. Integrating `k-7/rate-limit-login` — a local merge, or push and PR — is your explicit next
+   step, never a side effect. The move to `done` is nobody's step: the board lands the ticket itself once the code reaches local main —
+   see [landing](#landing-how-review-becomes-done).
+5. **Retire** — the worktree **survives review** and is removed only when the ticket reaches `done`, landed or discarded. That is what
+   makes review a place you can actually review from: the code is on disk to read, and sending the ticket back for changes re-attaches
+   to the same checkout rather than rebuilding one. Retirement is best-effort and never fails a landing; a worktree with uncommitted
+   changes is *kept*, with a note on the card naming the path, because the ticket is already done and there is nothing left to refuse.
+   `worktree finish` remains for deliberate removal — the human's CLI, abandoning a checkout early, and the first step of any merge,
+   since git will not check out a branch that is live in a worktree. `--merge` still exists for taking the merge in one motion (it
+   targets the main branch and refuses if the checkout sits elsewhere).
+
+   The honest cost: worktrees now live for the whole review period rather than seconds, under `/tmp/claude-kanban` by default. That is
+   the point of the change rather than a regression, and landing, discard and the review verdicts all retire them.
 
 **Subtasks stay in their parent's worktree — and v2 splits the notion in two.** A **companion** subtask (extra work done *now*, as part
 of the parent's session) is worked in the parent's worktree on the parent's branch — worktrees are never created from inside worktrees —
