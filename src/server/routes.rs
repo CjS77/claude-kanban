@@ -24,6 +24,7 @@ use crate::{
         derive,
         model::{ColumnId, Effort, EpicId, Status, TicketId},
     },
+    worktree,
 };
 
 // ---- error mapping ------------------------------------------------------------------------------------------------
@@ -557,7 +558,15 @@ pub async fn save_settings(State(app): State<AppState>, Form(form): Form<Setting
 pub async fn discard_ticket(State(app): State<AppState>, Path(id): Path<String>, headers: HeaderMap) -> Result<Html<String>, AppError> {
     let id = TicketId(id);
     let op = Op::DiscardTicket { id: id.clone(), reason: format!("discarded from the board by {}", app.ui_owner) };
-    mutate_then_detail(&app, &headers, op, id).await
+    let version = client_version(&headers)?;
+    blocking(&app, move |store| {
+        ops::apply(store, Some(version), op)?;
+        // Discarding is a terminal verdict like landing, so the worktree retires with the card — after the apply, and
+        // best-effort: it keeps a dirty worktree rather than throwing away work the human may still want.
+        worktree::retire(store, &id);
+        rendered_detail(store, &id)
+    })
+    .await
 }
 
 pub async fn delete_ticket(State(app): State<AppState>, Path(id): Path<String>, headers: HeaderMap) -> Result<StatusCode, AppError> {

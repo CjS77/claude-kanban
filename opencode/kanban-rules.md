@@ -8,10 +8,13 @@ claiming tickets.
 
 A local Kanban board shared with a human (who sees it live in a browser). The lifecycle of a ready ticket:
 kanban_claim → kanban_worktree_start → work in the worktree, committing as you go → kanban_note progress →
-kanban_worktree_finish → kanban_move to review. Done is not yours to declare: the board lands review tickets in done
-automatically once their branch or PR is merged into the local main branch — done means landed, and dependencies
-unblock only then (a discarded done ticket never unblocks anything). A review ticket can be claimed again for rework
-(PR feedback); its branch is kept and kanban_worktree_start re-attaches. Stubs are specs to write, not code to build:
+kanban_move to review. Do NOT call kanban_worktree_finish at close-out: the worktree is kept through review so the
+human can read the code and rework re-attaches instantly, and the board removes it once the ticket lands. kanban_move
+to review refuses while that worktree has uncommitted changes — commit them first. Done is not yours to declare: the
+board lands review tickets in done automatically once their branch or PR is merged into the local main branch — done
+means landed, and dependencies unblock only then (a discarded done ticket never unblocks anything). A review ticket
+can be claimed again for rework (PR feedback); its branch and worktree are kept and kanban_worktree_start
+re-attaches. Stubs are specs to write, not code to build:
 kanban_claim (the card sits pink in doing) → research → kanban_refine, which lands it back in todo at status=review
 for the human — no worktree. Only claim tickets kanban_next surfaces — ready (implement) or stub (refine), in todo,
 unblocked; never claim spontaneously outside an explicit work loop. Never touch draft tickets. Tickets you create

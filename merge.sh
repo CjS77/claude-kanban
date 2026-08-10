@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # merge.sh <branch> — rebase <branch> onto main, fast-forward main, delete the branch.
-# Refuses to run while the branch is still checked out in a linked worktree. On
-# rebase conflicts it stops mid-rebase so you can resolve them by hand.
+# Removes the branch's ticket worktree first when it is clean, and refuses only if
+# it has uncommitted changes. On rebase conflicts it stops mid-rebase so you can
+# resolve them by hand.
 set -euo pipefail
 
 branch="${1:?usage: merge.sh <branch>}"
@@ -11,13 +12,19 @@ if ! git show-ref --verify --quiet "refs/heads/${branch}"; then
     exit 1
 fi
 
-# Safeguard 1: bail if the branch is checked out in a worktree other than this one.
+# Safeguard 1: the branch is normally still checked out in its ticket worktree — worktrees are kept through review now,
+# so refusing here would refuse every review ticket. Remove it when it is clean; only uncommitted work stops the merge.
 this_wt=$(git rev-parse --show-toplevel)
 wt_path=$(git worktree list --porcelain | awk -v b="branch refs/heads/${branch}" '/^worktree /{w=substr($0,10)} $0==b{print w}')
 if [[ -n "${wt_path}" && "${wt_path}" != "${this_wt}" ]]; then
-    echo "error: branch '${branch}' is still checked out in worktree ${wt_path}" >&2
-    echo "remove it first: git worktree remove ${wt_path}" >&2
-    exit 1
+    if [[ -n "$(git -C "${wt_path}" status --porcelain)" ]]; then
+        echo "error: the worktree at ${wt_path} has uncommitted changes" >&2
+        echo "commit them there (or discard them) before merging '${branch}'" >&2
+        exit 1
+    fi
+    echo "removing the ticket worktree at ${wt_path}"
+    git worktree remove "${wt_path}"
+    git worktree prune
 fi
 
 git checkout "${branch}"

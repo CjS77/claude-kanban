@@ -33,11 +33,13 @@ const DEFAULT_AGENT: &str = "claude";
 /// together.
 pub const INSTRUCTIONS: &str ="A local Kanban board shared with a human (who sees it live in a browser). \
 The lifecycle of a ready ticket: kanban_claim → kanban_worktree_start → work in the worktree, committing as you go → \
-kanban_note progress → kanban_worktree_finish → kanban_move to review. \
+kanban_note progress → kanban_move to review. Do NOT call kanban_worktree_finish at close-out: the worktree is kept \
+through review so the human can read the code and rework re-attaches instantly, and the board removes it once the \
+ticket lands. kanban_move to review refuses while that worktree has uncommitted changes — commit them first. \
 Done is not yours to declare: the board lands review tickets in done automatically once their branch or PR is merged \
 into the local main branch — done means landed, and dependencies unblock only then (a discarded done ticket never \
-unblocks anything). A review ticket can be claimed again for rework (PR feedback); its branch is kept and \
-kanban_worktree_start re-attaches. \
+unblocks anything). A review ticket can be claimed again for rework (PR feedback); its branch and worktree are kept \
+and kanban_worktree_start re-attaches. \
 Stubs are specs to write, not code to build: kanban_claim (the card sits pink in doing) → research → kanban_refine, \
 which lands it back in todo at status=review for the human — no worktree. \
 Only claim tickets kanban_next surfaces — ready (implement) or stub (refine), in todo, unblocked; never claim \
@@ -452,15 +454,40 @@ impl KanbanServer {
 
     /// Move a ticket to a column at a position (0 = top; position is priority). Moving to review is the close-out for
     /// finished work: it keeps the branch (pass `branch` for a companion subtask worked on its parent's branch) and
-    /// drops the live claim. Done means *landed in local main* and normally happens automatically — the board lands
-    /// review tickets itself once their branch or PR merges.
+    /// drops the live claim, and it **refuses while the ticket's worktree has uncommitted changes** — commit them
+    /// first, because the worktree may live on volatile /tmp and only commits survive. The worktree itself is kept
+    /// through review; the board removes it when the ticket lands. Done means *landed in local main* and normally
+    /// happens automatically — the board lands review tickets itself once their branch or PR merges.
     #[tool]
     async fn kanban_move(&self, Parameters(p): Parameters<MoveParams>) -> Result<CallToolResult, ErrorData> {
         let to = p.to.parse().map_err(|e: String| ErrorData::invalid_params(e, None))?;
-        let op = Op::MoveTicket { id: TicketId(p.ticket), to, position: p.position, owner: None, branch: p.branch };
-        // Entering review is what arms the landing proof, and the close-out that follows may delete the branch minutes
-        // later — so the tip is observed here, not whenever the next sweep happens to run.
-        self.apply_then(Some(p.expected_version), op, move |store| crate::land::observe_entering_review(store, to)).await
+        let id = TicketId(p.ticket);
+        let op = Op::MoveTicket { id: id.clone(), to, position: p.position, owner: None, branch: p.branch };
+        let (guard_id, expected_version) = (id.clone(), p.expected_version);
+        let store = self.store.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            // The close-out's dirty check used to belong to `kanban_worktree_finish`, which no longer runs here — the
+            // worktree outlives review now. So the guarantee moves onto the move itself. Agents only: a human dragging
+            // the card in the browser is the override, exactly as discard is.
+            if to == ColumnId::Review
+                && let Some(path) = crate::worktree::dirty_worktree(&store, &guard_id)
+            {
+                return Err(OpError::Invalid(format!(
+                    "the worktree at {} has uncommitted changes — commit them there before closing {guard_id} out",
+                    path.display()
+                )));
+            }
+            let applied = ops::apply(&store, Some(expected_version), op);
+            if applied.is_ok() {
+                // Entering review is what arms the landing proof, and a later auto-merge may delete the branch minutes
+                // later — so the tip is observed here, not whenever the next sweep happens to run.
+                crate::land::observe_entering_review(&store, to);
+            }
+            applied
+        })
+        .await
+        .map_err(|e| ErrorData::internal_error(format!("task failed: {e}"), None))?;
+        Ok(shape_applied(result))
     }
 
     /// Create a ticket at the bottom of todo. Defaults to `status=review` — the human promotes it to ready.
@@ -551,9 +578,13 @@ impl KanbanServer {
         })
     }
 
-    /// Remove the ticket's worktree once the work is committed (refuses if dirty), keeping the branch. Close out by
-    /// moving the ticket to **review** with `kanban_move` afterwards — the board lands it in done once the branch or its
-    /// PR merges into local main. Merging or pushing the branch is the human's call — never do it unasked.
+    /// Remove the ticket's worktree deliberately (refuses if dirty), keeping the branch.
+    ///
+    /// **This is not the close-out.** A worktree is kept through review — so the human can read the code on disk and a
+    /// rework round re-attaches to it — and the board removes it by itself once the ticket lands. Close out with
+    /// `kanban_move` to **review** and nothing else. Reach for this tool only to remove a worktree on purpose before
+    /// then: the pre-merge step of auto-merge, or abandoning a checkout early. Merging or pushing the branch is the
+    /// human's call — never do it unasked.
     #[tool]
     async fn kanban_worktree_finish(&self, Parameters(p): Parameters<WorktreeFinishParams>) -> Result<CallToolResult, ErrorData> {
         let store = self.store.clone();
