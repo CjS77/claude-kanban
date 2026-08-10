@@ -1718,3 +1718,205 @@ mod tests {
         assert!(board.tickets.iter().all(|t| matches!(t.column, Column::Done { discarded: false, .. })));
     }
 }
+
+#[cfg(test)]
+mod review_round_tests {
+    use super::*;
+    use crate::store::derive;
+
+    fn scratch() -> (tempfile::TempDir, Store) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::at(dir.path().join(".kanban"));
+        store.init().unwrap();
+        (dir, store)
+    }
+
+    fn create(store: &Store, title: &str) -> TicketId {
+        let applied = apply(
+            store,
+            None,
+            Op::CreateTicket { title: title.into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![], status: Status::Ready, model: None, effort: None, auto_merge: false },
+        )
+        .unwrap();
+        TicketId(applied.created_ids[0].clone())
+    }
+
+    /// Drive a ticket to review on a branch, the way a worker's close-out does.
+    fn to_review(store: &Store, title: &str) -> TicketId {
+        let id = create(store, title);
+        apply(store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
+        apply(store, None, Op::StampWorktree { id: id.clone(), branch: "k-1/x".into(), path: "/tmp/wt".into() }).unwrap();
+        apply(store, None, Op::MoveTicket { id: id.clone(), to: ColumnId::Review, position: None, owner: None, branch: None }).unwrap();
+        id
+    }
+
+    #[test]
+    fn requesting_changes_sends_a_review_ticket_back_to_doing_with_its_feedback() {
+        let (_dir, store) = scratch();
+        let _first = create(&store, "something already in doing");
+        let id = to_review(&store, "the reviewed one");
+
+        apply(&store, None, Op::RequestChanges { id: id.clone(), feedback: "  naming is off  ".into(), by: "sam".into() }).unwrap();
+
+        let board = store.read_board().unwrap();
+        let t = board.ticket(&id).unwrap();
+        match &t.column {
+            Column::Doing { owner, branch } => {
+                assert_eq!(owner, "sam", "the reviewer holds the card until a worker takes it");
+                assert_eq!(branch.as_deref(), Some("k-1/x"), "the branch survives — the worker resumes on it");
+            }
+            other => panic!("expected doing, got {other:?}"),
+        }
+        assert!(t.changes_requested);
+
+        let note = t.notes.last().unwrap();
+        assert_eq!(note.author.as_deref(), Some("sam"));
+        assert_eq!(note.text, "changes requested: naming is off", "trimmed, and prefixed so the worker can find it");
+
+        assert_eq!(board.tickets_in(ColumnId::Doing).next().unwrap().id, id, "rework goes to the top of doing");
+        assert!(store.read_claims().unwrap().is_empty(), "no live claim — it is waiting for a worker, not held by one");
+    }
+
+    #[test]
+    fn request_changes_refuses_outside_review_external_tickets_and_empty_feedback() {
+        let (_dir, store) = scratch();
+
+        let todo = create(&store, "not started");
+        let err = apply(&store, None, Op::RequestChanges { id: todo, feedback: "x".into(), by: "sam".into() }).unwrap_err();
+        assert!(err.to_string().contains("not in review"), "{err}");
+
+        let id = to_review(&store, "blank feedback");
+        let err = apply(&store, None, Op::RequestChanges { id: id.clone(), feedback: "   ".into(), by: "sam".into() }).unwrap_err();
+        assert!(err.to_string().contains("say what has to change"), "{err}");
+
+        let ext = to_review(&store, "delegated");
+        apply(&store, None, Op::BindExternal { id: ext.clone(), external: Some(crate::store::model::External::github_issue(9)) }).unwrap();
+        let err = apply(&store, None, Op::RequestChanges { id: ext, feedback: "fix it".into(), by: "sam".into() }).unwrap_err();
+        assert!(err.to_string().contains("delegate's issue"), "{err}");
+    }
+
+    /// The claim relaxation: the card is owned by the reviewer and worked by nobody, so any agent may take it. Without
+    /// this, `owner != agent` would refuse every worker the rework was meant for.
+    #[test]
+    fn a_changes_requested_card_is_claimable_by_another_agent_and_the_claim_re_owns_it() {
+        let (_dir, store) = scratch();
+        let id = to_review(&store, "sent back");
+        apply(&store, None, Op::RequestChanges { id: id.clone(), feedback: "rename it".into(), by: "sam".into() }).unwrap();
+
+        apply(&store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
+
+        let board = store.read_board().unwrap();
+        match &board.ticket(&id).unwrap().column {
+            Column::Doing { owner, branch } => {
+                assert_eq!(owner, "claude", "the claim re-owns the card to the worker");
+                assert_eq!(branch.as_deref(), Some("k-1/x"), "still on its branch");
+            }
+            other => panic!("expected doing, got {other:?}"),
+        }
+        assert_eq!(store.read_claims().unwrap().len(), 1);
+    }
+
+    /// An ordinary claimed ticket is still protected — the relaxation opens exactly one state, not the general case.
+    #[test]
+    fn an_ordinary_doing_ticket_still_refuses_a_second_claimant() {
+        let (_dir, store) = scratch();
+        let id = create(&store, "someone else's");
+        apply(&store, None, Op::Claim { id: id.clone(), agent: "alice".into() }).unwrap();
+
+        let err = apply(&store, None, Op::Claim { id, agent: "bob".into() }).unwrap_err();
+        assert!(matches!(err, OpError::AlreadyClaimed { .. }), "{err}");
+    }
+
+    #[test]
+    fn moving_back_to_review_clears_the_changes_requested_flag() {
+        let (_dir, store) = scratch();
+        let id = to_review(&store, "round two");
+        apply(&store, None, Op::RequestChanges { id: id.clone(), feedback: "again".into(), by: "sam".into() }).unwrap();
+        apply(&store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
+
+        apply(&store, None, Op::MoveTicket { id: id.clone(), to: ColumnId::Review, position: None, owner: None, branch: None }).unwrap();
+
+        let board = store.read_board().unwrap();
+        assert!(!board.ticket(&id).unwrap().changes_requested, "reaching review IS the feedback being addressed");
+    }
+
+    #[test]
+    fn landing_and_discarding_clear_the_flag_too() {
+        let (_dir, store) = scratch();
+        for discard in [false, true] {
+            let id = to_review(&store, "terminal");
+            apply(&store, None, Op::RequestChanges { id: id.clone(), feedback: "f".into(), by: "sam".into() }).unwrap();
+            // Put it back in review and re-set the flag directly: the ordinary move clears it, so this is the only way
+            // to reach the state these two ops defend against — a hand-edited board, or a future path that forgets.
+            let board = store.read_board().unwrap();
+            let branch = board.ticket(&id).unwrap().column.branch().map(str::to_owned);
+            apply(&store, None, Op::MoveTicket { id: id.clone(), to: ColumnId::Review, position: None, owner: None, branch: branch.clone() }).unwrap();
+            store
+                .mutate(None, |b: &mut Board, _: &mut Vec<Claim>| -> Result<(), OpError> {
+                    b.tickets.iter_mut().find(|t| t.id == id).unwrap().changes_requested = true;
+                    Ok(())
+                })
+                .unwrap();
+
+            let op = if discard {
+                Op::DiscardTicket { id: id.clone(), reason: "no".into() }
+            } else {
+                Op::LandTicket { id: id.clone(), expected_branch: branch, reason: "merged".into() }
+            };
+            apply(&store, None, op).unwrap();
+
+            let board = store.read_board().unwrap();
+            assert!(!board.ticket(&id).unwrap().changes_requested, "finished work carries no outstanding feedback (discard={discard})");
+        }
+    }
+
+    /// The one place the flag deliberately survives: handing the ticket back does not make the feedback go away.
+    #[test]
+    fn releasing_a_rework_ticket_keeps_its_feedback_flag() {
+        let (_dir, store) = scratch();
+        let id = to_review(&store, "handed back");
+        apply(&store, None, Op::RequestChanges { id: id.clone(), feedback: "still wrong".into(), by: "sam".into() }).unwrap();
+        apply(&store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
+
+        apply(&store, None, Op::Release { id: id.clone() }).unwrap();
+
+        let board = store.read_board().unwrap();
+        let t = board.ticket(&id).unwrap();
+        assert!(t.changes_requested, "unaddressed feedback outlives a release");
+        assert!(matches!(t.column, Column::Todo));
+    }
+
+    /// Rework outranks fresh work: somebody is waiting on near-finished code whose branch already exists.
+    #[test]
+    fn next_ticket_prefers_rework_over_new_todo_work() {
+        let (_dir, store) = scratch();
+        let waiting = create(&store, "brand new work");
+        let sent_back = to_review(&store, "reviewed and returned");
+        apply(&store, None, Op::RequestChanges { id: sent_back.clone(), feedback: "tighten it".into(), by: "sam".into() }).unwrap();
+
+        let board = store.read_board().unwrap();
+        let claims = store.read_claims().unwrap();
+        assert_eq!(derive::next_ticket(&board, &claims).unwrap().id, sent_back);
+
+        // Once it is back in review, the queue returns to normal.
+        apply(&store, None, Op::Claim { id: sent_back.clone(), agent: "claude".into() }).unwrap();
+        apply(&store, None, Op::MoveTicket { id: sent_back, to: ColumnId::Review, position: None, owner: None, branch: None }).unwrap();
+        let board = store.read_board().unwrap();
+        let claims = store.read_claims().unwrap();
+        assert_eq!(derive::next_ticket(&board, &claims).unwrap().id, waiting);
+    }
+
+    /// A rework card that somebody is already working is not offered again — and an external one never is, which is what
+    /// keeps delegated tickets out of the rework queue by construction.
+    #[test]
+    fn a_claimed_or_external_rework_card_is_not_surfaced() {
+        let (_dir, store) = scratch();
+        let id = to_review(&store, "sent back");
+        apply(&store, None, Op::RequestChanges { id: id.clone(), feedback: "x".into(), by: "sam".into() }).unwrap();
+
+        apply(&store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
+        let board = store.read_board().unwrap();
+        let claims = store.read_claims().unwrap();
+        assert!(derive::next_ticket(&board, &claims).is_none(), "a claimed rework card is somebody's already");
+    }
+}

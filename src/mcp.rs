@@ -430,8 +430,7 @@ impl KanbanServer {
             let board = store.read_board()?;
             let claims = store.read_claims()?;
             Ok(if let Some(t) = derive::next_ticket(&board, &claims) {
-                let action =
-                    if t.changes_requested { "rework" } else if t.status == Status::Stub { "refine" } else { "implement" };
+                let action = action_for(t);
                 serde_json::json!({ "version": board.version, "ticket": t, "action": action,
                     "auto_merge": derive::auto_merge(t, &board) })
             } else {
@@ -686,6 +685,19 @@ impl KanbanServer {
         .await
         .map_err(|e| ErrorData::internal_error(format!("task failed: {e}"), None))?;
         Ok(shape_applied(result))
+    }
+}
+
+/// What the surfaced ticket needs, in precedence order. Rework wins over everything: a card a human sent back is
+/// already specced and already built — the newest `changes requested:` note is the only spec that round needs, whatever
+/// `status` says. `stub` then means the spec itself is the work.
+fn action_for(t: &crate::store::model::Ticket) -> &'static str {
+    if t.changes_requested {
+        "rework"
+    } else if t.status == Status::Stub {
+        "refine"
+    } else {
+        "implement"
     }
 }
 
@@ -995,5 +1007,40 @@ mod tests {
         let epics = ids(&shaped, "epics");
         assert_eq!(epics, ["EP-1", "EP-2"], "epics are never filtered — a derived column of done is legitimate");
         assert_eq!(shaped["epics"][1]["column"], "done", "and EP-2 is exactly that case");
+    }
+}
+
+#[cfg(test)]
+mod action_tests {
+    use super::*;
+    use crate::store::model::{Column, Status, Ticket, TicketId};
+
+    fn bare(status: Status, changes_requested: bool) -> Ticket {
+        Ticket {
+            id: TicketId("K-1".into()),
+            title: "t".into(),
+            epic: None,
+            status,
+            body: String::new(),
+            labels: vec![],
+            model: None,
+            effort: None,
+            auto_merge: false,
+            changes_requested,
+            depends_on: vec![],
+            notes: vec![],
+            external: None,
+            pr: None,
+            column: Column::Todo,
+        }
+    }
+
+    /// The precedence the work loop depends on: rework beats refine beats implement.
+    #[test]
+    fn rework_beats_refine_beats_implement() {
+        assert_eq!(action_for(&bare(Status::Ready, false)), "implement");
+        assert_eq!(action_for(&bare(Status::Stub, false)), "refine");
+        assert_eq!(action_for(&bare(Status::Ready, true)), "rework");
+        assert_eq!(action_for(&bare(Status::Stub, true)), "rework", "feedback outranks even an unwritten spec");
     }
 }

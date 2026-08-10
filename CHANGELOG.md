@@ -7,6 +7,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Review rounds: a human reviewing a ticket can send it back instead of only accepting or discarding it. The card
+  returns to the top of `doing` carrying a new `changes_requested` flag, with its feedback as the newest
+  `changes requested:` note and its branch and worktree untouched, and `kanban_next` surfaces it as a new
+  `action: "rework"` — ranked **above** todo work, because somebody is waiting on near-finished code whose worktree
+  already exists. The flag clears on reaching `review`, landing or discarding, but deliberately survives a release:
+  feedback does not stop existing because a worker handed the ticket back. Claiming is relaxed for exactly that state
+  (the card is owned by the reviewer and worked by nobody), and external tickets are refused throughout — a delegated
+  ticket's review feedback belongs on its issue, which is what keeps minesweeper's tickets out of the rework queue by
+  construction. `changes_requested` is additive and serde-defaults to false, so existing boards read unchanged and the
+  schema stays at 2.
+
 ### Changed
 
 - A ticket's worktree is kept through `review` instead of being removed at close-out, and is retired when the ticket

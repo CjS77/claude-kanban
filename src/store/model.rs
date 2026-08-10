@@ -764,6 +764,38 @@ mod tests {
         assert_eq!(serde_json::from_value::<Ticket>(v).unwrap(), set);
     }
 
+    /// Same contract as `auto_merge`: a board written before review rounds existed parses, reads false, and never grows
+    /// the key by being read and rewritten. No schema bump, so an older binary against the same repo is unsurprised.
+    #[test]
+    fn changes_requested_stays_off_the_wire_when_false() {
+        let bare = r#"{ "id": "K-1", "title": "x", "status": "ready", "column": { "id": "todo" } }"#;
+        let t: Ticket = serde_json::from_str(bare).unwrap();
+        assert!(!t.changes_requested, "absent means no outstanding feedback");
+
+        let v = serde_json::to_value(&t).unwrap();
+        assert!(v.get("changes_requested").is_none(), "false stays off the wire");
+
+        let sent_back = Ticket { changes_requested: true, ..t };
+        let v = serde_json::to_value(&sent_back).unwrap();
+        assert_eq!(v["changes_requested"], true);
+        assert_eq!(serde_json::from_value::<Ticket>(v).unwrap(), sent_back);
+    }
+
+    /// A whole pre-existing board reads clean and needs no migration — the field is additive, not a schema change.
+    #[test]
+    fn a_pre_review_rounds_board_reads_off_and_needs_no_migration() {
+        let json = r#"{
+            "schema": 2, "version": 3, "columns": [], "epics": [],
+            "tickets": [{ "id": "K-1", "title": "x", "status": "ready", "column": { "id": "review", "branch": "k-1/x" } }]
+        }"#;
+        let mut board: Board = serde_json::from_str(json).unwrap();
+        assert!(!board.tickets[0].changes_requested);
+
+        let changed = migrate(&mut board).unwrap();
+        assert!(!changed, "an additive field is not a migration");
+        assert_eq!(board.schema, CURRENT_SCHEMA, "and the schema stays where it was");
+    }
+
     /// The dangerous flag must be invisible until someone asks for it: off is the absence of the key, on both a ticket
     /// and an epic, so no existing board grows the field by being read and rewritten.
     #[test]

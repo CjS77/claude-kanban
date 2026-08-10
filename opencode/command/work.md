@@ -45,8 +45,10 @@ external daemon and **you write no code for ready tickets**:
   the ticket stays in doing for the human to sort out, like every other minesweeper failure.
 - **Hands off after the handoff.** The serve poller tracks the issue from here: a PR moves the card to review, the
   merge reaching local main lands it. Delegated review tickets are not rework candidates for you — PR feedback is the
-  daemon's job. When idling, do mention delegated tickets that have sat in `doing` across several polls with no PR and
-  no flag: a daemon paused on API limits is invisible to the board, and only the human can go look.
+  daemon's job, and the board enforces it: `Op::RequestChanges` refuses an external ticket outright, so a delegated
+  card can never carry `changes_requested` and `action: "rework"` can never name one. When idling, do mention delegated
+  tickets that have sat in `doing` across several polls with no PR and no flag: a daemon paused on API limits is
+  invisible to the board, and only the human can go look.
 
 ## The loop
 
@@ -54,7 +56,8 @@ Repeat until the user stops you (or you've done the one requested ticket — a t
 loop after it):
 
 1. **Pick** — call `kanban_board` (remember the `version`), then `kanban_next`. Its `action` field says what the ticket
-   needs: `implement` (a ready ticket — steps 2–8) or `refine` (a stub — see **Refining a stub** below). If nothing is
+   needs: `implement` (a ready ticket — steps 2–8), `refine` (a stub — see **Refining a stub** below), or `rework` (a
+   ticket a human sent back with feedback — see **Rework** below). If nothing is
    eligible, go idle instead of ending the loop — see **Idling** below. `kanban_next` first auto-lands any review
    tickets whose branches have reached local main, so **use the `version` it returns** for the claim — the sweep may
    have advanced the board.
@@ -258,17 +261,24 @@ eligible (and, in the parallel loop, nothing is in flight):
 Only the user ends an idling loop — by interrupting or saying stop. The exceptions never reach idling at all: a
 ticket-id argument or `--one` means one ticket, so finish it, report, and end.
 
-## Rework (a review ticket got feedback)
+## Rework (`action: "rework"`)
 
-A ticket in `review` is code-complete but unlanded — PR feedback or human review can send it back. Only do this when
-the user asks for the rework (or the ticket's notes clearly request it):
+A ticket in `review` is code-complete but unlanded, and the human reviewing it can press **Request changes** instead of
+accepting. That sends the card back to the top of `doing`, unclaimed, with its branch and worktree untouched — and
+`kanban_next` then hands it to you as `action: "rework"`, **ahead of any todo work**. You don't wait to be asked: the
+dispatch is the ask. Somebody is blocked on near-finished code, and its worktree already exists.
 
-1. `kanban_claim` the ticket — review tickets are claimable; the claim keeps the recorded branch.
-2. `kanban_worktree_start` — it re-attaches to the existing `k-<n>/…` branch idempotently; your previous commits are
-   all there.
-3. Address the feedback, commit, and — if the ticket has an open PR — push the branch so the PR updates.
-4. `kanban_move` back to `review` — leave the worktree in place, exactly as at any other close-out. The board takes
-   it from there.
+1. `kanban_claim` the ticket. The card is owned by the reviewer but worked by nobody, so the claim simply re-owns it to
+   you — this is the one `doing` state any agent may claim.
+2. `kanban_worktree_start` — it re-attaches to the existing `k-<n>/…` branch and the worktree that was kept through
+   review; your previous commits are all there.
+3. **The newest `changes requested:` note is the spec for this round.** Read it, address exactly it, commit — and if the
+   ticket has an open PR, push the branch so the PR updates.
+4. `kanban_move` back to `review`, which clears the flag. Leave the worktree in place, exactly as at any other
+   close-out. The board takes it from there.
+
+The same path still serves the older case — a review ticket the *user* asks you to rework, with no flag set. Claim it
+and follow steps 2-4 identically.
 
 ## Refining a stub
 
@@ -305,6 +315,9 @@ A stub is a spec to write, not code to build. When `kanban_next` says `action: "
   actually gates `kanban_next`, a note is prose nobody's scheduler reads. It replaces the whole list, so read the ticket
   first and send the set you want. Dangling ids and cycles are refused, and drafts are off-limits.
 - If genuinely stuck, `kanban_note` why, `kanban_release` the ticket (it returns to the top of todo), clean up with
-  `kanban_worktree_finish`, and move to the next ticket.
+  `kanban_worktree_finish`, and move to the next ticket. A ticket released mid-rework keeps its `changes_requested`
+  flag on purpose — the feedback did not stop existing because you handed the card back.
+- **Never press a human's verdict for them.** Accept, Request changes and Discard are the reviewer's, made in the
+  browser. You address feedback; you never decide that it was addressed well enough.
 - At the end of the loop, summarise: tickets completed, branches created (and PRs, with `--push`), tickets released
   or split, and what the board looks like now.
