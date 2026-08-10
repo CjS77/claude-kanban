@@ -81,7 +81,30 @@ pub fn auto_merge(ticket: &Ticket, board: &Board) -> bool {
 /// `None` when nothing is eligible either way.
 #[must_use]
 pub fn next_ticket<'a>(board: &'a Board, claims: &[Claim]) -> Option<&'a Ticket> {
-    rework_ticket(board, claims).or_else(|| todo_ticket(board, claims))
+    landable_ticket(board, claims).or_else(|| rework_ticket(board, claims)).or_else(|| todo_ticket(board, claims))
+}
+
+/// The highest review ticket a human has accepted and nobody is landing yet — the work loop's first duty, ahead of any
+/// implementation.
+///
+/// It ranks first for two reasons. Landing is the only action that makes *other* work possible: it is what unblocks
+/// dependents, and `worktree start` bases a fresh branch on the main checkout's `HEAD`, so landing before starting means
+/// the next ticket's worktree already contains the accepted work instead of colliding with it later. And it is minutes
+/// of git against a human who has already pressed Accept and is waiting for the card to move.
+///
+/// `landing_blocked` is excluded deliberately: that flag means the last attempt needed hands the loop does not have, so
+/// re-offering it would just reproduce the same conflict forever. Only a human — accepting again, or sending it back —
+/// puts it back in reach. An in-flight landing is excluded for as long as it is believable ([`claims::LANDING_STALE_AFTER`]),
+/// which is what stops two concurrent loops rebasing the same branch onto a moving main.
+fn landable_ticket<'a>(board: &'a Board, claims: &[Claim]) -> Option<&'a Ticket> {
+    let now = Utc::now();
+    board.tickets_in(ColumnId::Review).find(|t| {
+        t.accepted
+            && !t.landing_blocked
+            && t.external.is_none()
+            && t.column.branch().is_some()
+            && !claims::landing_in_flight(claims, &t.id, now)
+    })
 }
 
 /// The highest ticket a reviewer sent back for changes and nobody has picked up yet: in `doing`, `changes_requested`,
@@ -202,6 +225,12 @@ pub struct ClaimView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<PathBuf>,
     pub worktree_missing: bool,
+    /// This record is an in-flight landing, not ownership. The card must say "landing…" rather than putting an owner on
+    /// a review ticket, which has none by construction.
+    pub landing: bool,
+    /// …and that landing has been in flight longer than anyone believes, so the loop may take it again. Surfaced rather
+    /// than hidden: a landing that stalled is exactly the thing a human wants to see on the board.
+    pub landing_stale: bool,
 }
 
 impl From<&Claim> for ClaimView {
@@ -211,6 +240,8 @@ impl From<&Claim> for ClaimView {
             since: c.since,
             path: c.path.clone(),
             worktree_missing: c.path.as_ref().is_some_and(|p| !p.exists()),
+            landing: c.is_landing(),
+            landing_stale: c.is_landing() && Utc::now() - c.since >= claims::LANDING_STALE_AFTER,
         }
     }
 }
@@ -250,6 +281,8 @@ mod tests {
             effort: None,
             auto_merge: false,
             changes_requested: false,
+            accepted: false,
+            landing_blocked: false,
             depends_on: vec![],
             notes: vec![],
             external: None,
@@ -304,7 +337,7 @@ mod tests {
         b.tickets[0].status = Status::Draft;
         b.tickets[1].depends_on = vec![TicketId("K-1".into())];
         b.tickets[3].external = Some(crate::store::model::External::github_issue(1));
-        let claims = vec![Claim { ticket: TicketId("K-3".into()), agent: "claude".into(), since: Utc::now(), path: None }];
+        let claims = vec![Claim { ticket: TicketId("K-3".into()), agent: "claude".into(), since: Utc::now(), path: None, kind: claims::ClaimKind::Work }];
         assert_eq!(next_ticket(&b, &claims).unwrap().id.0, "K-5");
     }
 
@@ -324,7 +357,7 @@ mod tests {
         b.tickets[1].depends_on = vec![TicketId("K-1".into()), TicketId("K-6".into())];
         b.tickets[3].external = Some(crate::store::model::External::github_issue(1));
         b.tickets[5].status = Status::Review;
-        let claims = vec![Claim { ticket: TicketId("K-3".into()), agent: "claude".into(), since: Utc::now(), path: None }];
+        let claims = vec![Claim { ticket: TicketId("K-3".into()), agent: "claude".into(), since: Utc::now(), path: None, kind: claims::ClaimKind::Work }];
 
         let why: Vec<(String, String)> = ineligible(&b, &claims).into_iter().map(|(id, why)| (id.0, why)).collect();
         assert_eq!(why.len(), 5, "only the eligible K-5 is absent: {why:?}");
@@ -420,6 +453,7 @@ mod tests {
             agent: "claude".into(),
             since: Utc::now(),
             path: Some(PathBuf::from("/nonexistent/worktree/K-1")),
+            kind: claims::ClaimKind::Work,
         }];
         let view = board_view(&b, &claims);
         let claim = view.tickets[0].claim.as_ref().unwrap();

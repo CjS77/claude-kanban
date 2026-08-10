@@ -137,6 +137,8 @@ mod tests {
             effort: None,
             auto_merge: false,
             changes_requested: false,
+            accepted: false,
+            landing_blocked: false,
             depends_on: deps.iter().map(|d| TicketId((*d).into())).collect(),
             notes: vec![],
             external: None,

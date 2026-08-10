@@ -231,6 +231,10 @@ impl std::str::FromStr for Effort {
 }
 
 /// A unit of work.
+// Not a state machine: `auto_merge`, `changes_requested`, `accepted` and `landing_blocked` are independent facts about
+// a ticket, each with its own lifecycle, and collapsing them into an enum would invent transitions that do not exist
+// (a ticket can be accepted *and* have auto-merge, or be blocked while carrying neither).
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Ticket {
     pub id: TicketId,
@@ -266,6 +270,24 @@ pub struct Ticket {
     /// [`crate::store::derive::next_ticket`] should still see rework waiting.
     #[serde(default, skip_serializing_if = "is_false")]
     pub changes_requested: bool,
+    /// A human reviewed this ticket and approved it: the work loop may now rebase its branch onto the main branch and
+    /// fast-forward main into it (`kanban_next` surfaces it as `action: "land"`). The card stays in `review` until the
+    /// landing sweep proves the code actually arrived — accepting is *permission to land*, never the landing itself,
+    /// which is what keeps `done` meaning landed.
+    ///
+    /// Cleared by any column change, by landing, by discarding and by a rework round: an approval describes one
+    /// reviewed tree, and every one of those replaces it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub accepted: bool,
+    /// The work loop tried to land this ticket and git said no: the rebase conflicted, the worktree was dirty, the main
+    /// checkout was somewhere else. The card stays in `review` wearing a danger flag and stops being offered for
+    /// landing — retrying the same conflict forever helps nobody — and the newest `kanban` note says exactly what
+    /// failed. The one shape of this workflow that needs a human's hands rather than another agent's turn.
+    ///
+    /// Cleared by any column change, by landing, by discarding, by a rework round — and by **Accept**, which is how a
+    /// human who has resolved the conflict by hand re-arms the landing without leaving the pane.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub landing_blocked: bool,
     /// Until every ticket named here is `done`, this ticket is *blocked*: visible in `todo`, skipped by `kanban_next`.
     /// Must form a DAG with the other tickets; checked on load.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -781,6 +803,22 @@ mod tests {
         assert_eq!(serde_json::from_value::<Ticket>(v).unwrap(), sent_back);
     }
 
+    /// And once more for the flag Accept raises when its merge cannot proceed — same additive contract, same schema.
+    #[test]
+    fn landing_blocked_stays_off_the_wire_when_false() {
+        let bare = r#"{ "id": "K-1", "title": "x", "status": "ready", "column": { "id": "review" } }"#;
+        let t: Ticket = serde_json::from_str(bare).unwrap();
+        assert!(!t.landing_blocked, "absent means Accept has not tried and failed");
+
+        let v = serde_json::to_value(&t).unwrap();
+        assert!(v.get("landing_blocked").is_none(), "false stays off the wire");
+
+        let flagged = Ticket { landing_blocked: true, ..t };
+        let v = serde_json::to_value(&flagged).unwrap();
+        assert_eq!(v["landing_blocked"], true);
+        assert_eq!(serde_json::from_value::<Ticket>(v).unwrap(), flagged);
+    }
+
     /// A whole pre-existing board reads clean and needs no migration — the field is additive, not a schema change.
     #[test]
     fn a_pre_review_rounds_board_reads_off_and_needs_no_migration() {
@@ -910,6 +948,8 @@ mod tests {
             effort: None,
             auto_merge: false,
             changes_requested: false,
+            accepted: false,
+            landing_blocked: false,
             depends_on: vec![],
             notes: vec![],
             external: None,

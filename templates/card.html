@@ -1,8 +1,10 @@
 {#- A ticket card. The left border carries the epic's colour; clicking opens the detail pane; dragging is SortableJS's
     business (it suppresses the click after a real drag). A stub in doing is being refined: pink, mixed from the theme's
-    own card colour so it reads in light and dark alike. -#}
+    own card colour so it reads in light and dark alike — and a review ticket whose accept could not merge is washed the
+    same way in red, because that one is stuck until the human goes to the branch. The two states cannot co-occur (one
+    is a stub in doing, the other a ticket in review), so the later rule never has to win a fight. -#}
 <article class="card bg-base-100 shadow-sm border-l-4 cursor-pointer select-none {% if card.done %}opacity-60{% endif %}"
-         style="border-left-color: {{ card.color }}{% if card.refining %}; background-color: color-mix(in oklab, var(--color-base-100) 72%, #ec4899){% endif %}"
+         style="border-left-color: {{ card.color }}{% if card.refining %}; background-color: color-mix(in oklab, var(--color-base-100) 72%, #ec4899){% endif %}{% if card.landing_blocked %}; background-color: color-mix(in oklab, var(--color-base-100) 70%, #ef4444){% endif %}"
          data-id="{{ card.id }}"
          hx-get="/ui/ticket/{{ card.id }}" hx-target="#detail" hx-trigger="click" hx-swap="innerHTML">
     <div class="card-body p-3 gap-1">
@@ -18,6 +20,10 @@
                       title="{{ pr.title }}" onclick="event.stopPropagation()">{{ pr.label }}</a>{% endif %}
                 {% if card.branch_gone %}<span class="badge badge-warning badge-xs"
                       title="the recorded branch no longer exists locally and nothing proves it landed — drag to done if it did, or discard it from the detail pane">branch gone</span>{% endif %}
+                {% if card.landing_blocked %}<span class="badge badge-error badge-xs"
+                      title="a landing attempt hit something only you can resolve — the newest 'landing blocked:' note says what git refused. It will not be tried again until you accept it once more, or send it back for changes">⚠ landing blocked</span>{% endif %}
+                {% if card.accepted %}<span class="badge badge-neutral badge-xs"
+                      title="you cleared this to land — /kanban:work rebases its branch onto main and fast-forwards main into it, then the board moves the card to done">✓ accepted</span>{% endif %}
                 {% if card.changes_requested %}<span class="badge badge-warning badge-xs"
                       title="a reviewer sent this back — it is waiting for a worker, not being worked on">changes requested</span>{% endif %}
                 {% if card.auto_merge %}<span class="badge badge-warning badge-xs"
@@ -43,7 +49,13 @@
         {% endif %}
         {% if let Some(claim) = card.claim %}
         <div class="text-xs mt-1 flex flex-col gap-0.5">
-            {% if claim.worktree_missing %}
+            {% if claim.landing %}
+            {#- Not ownership: a review ticket has no owner. A quiet marker, deliberately unlike both the green
+                working-on-this pulse and the red danger badge — it is a job in progress, not a state to act on. -#}
+            <span class="text-warning" title="rebasing this branch onto main and fast-forwarding main into it">
+                ⟳ {{ claim.agent }} is landing this{% if claim.landing_stale %} — stalled, it will be retried{% endif %}
+            </span>
+            {% else if claim.worktree_missing %}
             <span class="text-warning">⚠ worktree missing — restore with <code>worktree start</code></span>
             {% else %}
             <span class="text-success flex items-center gap-1.5">

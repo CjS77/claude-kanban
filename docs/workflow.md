@@ -43,9 +43,9 @@ at all.
 3. **Run `/kanban:work`** in Claude Code. Claude claims the top eligible ticket, works it in its own worktree on
    its own branch, notes progress on the card, and moves it to `review` — code-complete, waiting to land — then
    takes the next. When the board runs dry the loop doesn't exit: it sleeps and polls again, so you can keep
-   dropping tickets while it runs — interrupt it to stop. Your checkout is never touched; integrating the branch
-   is your explicit step — merge it locally, or click **Create PR** on the review ticket's detail pane to push the
-   branch and open a GitHub PR via `gh`. The ticket's worktree stays on disk for as long as the card sits in
+   dropping tickets while it runs — interrupt it to stop. Nothing moves your main branch unless you ask: integrating
+   is your step — press **Accept** on the review card and the loop lands it for you, merge it by hand, or click
+   **Create PR** on the detail pane to push the branch and open a GitHub PR via `gh`. The ticket's worktree stays on disk for as long as the card sits in
    `review`, so `merge.sh` (and the loop's auto-merge) removes it as their first step — and refuses if you have
    uncommitted work in there. The cost is disk: worktrees now live for the whole review period rather than seconds,
    under `/tmp/claude-kanban` by default.
@@ -63,18 +63,28 @@ at all.
 A card in `review` carries a **Review** tab beside its details, with the branch, the worktree still on disk, the
 progress log, a comment box, and three verdicts:
 
-- **Accept** — closes the card as `done` and unblocks everything depending on it. This is the one to understand:
-  unlike the automatic lander it demands **no proof the branch reached main**, so accepting work that never landed
-  unblocks dependents onto code that doesn't exist. The pane shows the lander's own verdict — *"branch k-7/foo
-  exists but main does not contain its work yet"* — and the confirm repeats it, so you can see which case you're in.
-  When the branch really has landed, you don't need this button: the board closes the card by itself.
+- **Accept** — clears the work to land. It doesn't close the card: it marks the ticket `accepted`, and a running
+  `/kanban:work` loop then picks it up ahead of all other work, rebases its branch onto your main branch and
+  fast-forwards main into it. The card moves to `done` the moment the board can prove the code arrived — the same
+  proof every other landing needs. So Accept is your permission for main to move, and nothing unblocks until it
+  actually has. The card shows **✓ accepted** while it waits, and **⟳ … is landing this** while a loop has it.
+
+  If the rebase hits a conflict the agent can't resolve confidently, it aborts — main and the branch untouched — and
+  hands the ticket back: the card stays in review, shaded red with a **⚠ landing blocked** badge, and the newest
+  progress note says which files collided. Resolve it on the branch yourself and press **Accept again** (the button
+  says so), or send it back with **Request changes**. Until you do one of those, no loop will retry it.
+
+  Two things worth knowing. Accept does nothing on its own if no work loop is running — the ticket just waits, which
+  is what `.kanban/merge.sh <branch>` is still there for. And the pane shows the lander's own verdict — *"branch
+  k-7/foo exists but main does not contain its work yet"* — so you can see where the code actually is.
 - **Request changes** — sends the card back to the top of `doing` with your comment as the spec for the next round.
   Its branch and worktree stay exactly as they were, and a running `/kanban:work` loop picks it up ahead of any new
   work. Feedback is required; the button won't send an empty round trip.
 - **Discard** — retires work that will never land. The card closes but its dependents stay blocked, which is the
   point of the difference from Accept. Your comment is folded into the reason.
 
-All three are yours alone: agents address feedback, they never decide it was addressed well enough. Delegated
+All three are yours alone: agents address feedback and land what you approve, but they never decide the work was good
+enough. Delegated
 (external) tickets have no Review tab — their verdict belongs on the issue the daemon is working from.
 
 Dependencies (`depends_on`) block a ticket until they're all done — and since done means landed, a dependent's

@@ -159,6 +159,12 @@ pub struct CardCtx {
     pub pr: Option<PrCtx>,
     /// A review ticket whose recorded branch no longer exists locally and nothing proves it landed — the human's call.
     pub branch_gone: bool,
+    /// The human has cleared this to land; the work loop has not got to it yet.
+    pub accepted: bool,
+    /// A landing attempt hit something only a human can resolve. The card wears a danger badge *and* a red wash: unlike
+    /// every other flag here this one is a dead end until somebody goes to the branch, so it is meant to be seen across
+    /// the board.
+    pub landing_blocked: bool,
     /// The *effective* auto-merge grant — the ticket's own flag or its epic's. A card wearing it will move main with
     /// nobody watching, so it gets a warning badge.
     pub auto_merge: bool,
@@ -206,6 +212,11 @@ pub struct ClaimCtx {
     pub since: String,
     pub path: Option<String>,
     pub worktree_missing: bool,
+    /// An in-flight landing rather than ownership — the card says "landing this", never "has this".
+    pub landing: bool,
+    /// That landing has outlived its staleness cutoff, so the loop may take it again. Said out loud on the card so a
+    /// stalled landing reads as stalled rather than as busy forever.
+    pub landing_stale: bool,
 }
 
 #[derive(Debug)]
@@ -284,6 +295,8 @@ fn card(t: &TicketView, view: &BoardView, heads: Option<&HashSet<String>>) -> Ca
         branch_gone: t.ticket.column.id() == ColumnId::Review
             && t.ticket.external.is_none()
             && t.ticket.column.branch().is_some_and(|b| heads.is_some_and(|h| !h.contains(b))),
+        accepted: t.ticket.accepted,
+        landing_blocked: t.ticket.landing_blocked,
         // Already derived once per board render, by `derive::board_view` — the card has no `Board` to ask again.
         auto_merge: t.auto_merge_effective,
         auto_merge_inherited: t.auto_merge_effective && !t.ticket.auto_merge,
@@ -320,6 +333,8 @@ fn claim_ctx(c: &ClaimView) -> ClaimCtx {
         since: human_time(c.since),
         path: c.path.as_ref().map(|p| p.display().to_string()),
         worktree_missing: c.worktree_missing,
+        landing: c.landing,
+        landing_stale: c.landing_stale,
     }
 }
 
@@ -381,6 +396,10 @@ pub struct TicketCtx {
     pub can_review: bool,
     /// A reviewer sent this back and the feedback is not yet addressed — the card and pane both say so.
     pub changes_requested: bool,
+    /// Cleared to land, waiting on a work loop — the same badge the card wears.
+    pub accepted: bool,
+    /// A landing attempt was refused: the same danger flag the card wears, so the pane you opened from it agrees.
+    pub landing_blocked: bool,
     pub discarded: bool,
     /// The effective auto-merge grant, same as the card's — it fills the toggle button and raises the warning badge.
     pub auto_merge: bool,
@@ -474,6 +493,11 @@ pub struct ReviewCtx {
     pub worktree_dirty: bool,
     /// The landing sweep's own verdict, from [`crate::land::explain`] — what Accept is really deciding over.
     pub landing: Option<String>,
+    /// Already cleared to land, waiting on a work loop.
+    pub accepted: bool,
+    /// A landing attempt was refused and is waiting on the human. Outranks `accepted` on the pane: it is the state
+    /// they have to act on.
+    pub landing_blocked: bool,
     pub notes: Vec<NoteCtx>,
     pub accept_confirm: String,
     pub discard_confirm: String,
@@ -503,7 +527,9 @@ pub fn review(
             branch: t.column.branch().map(str::to_owned),
             worktree_path,
             worktree_dirty,
-            accept_confirm: review_accept_confirm(&t.id.to_string(), &t.title, landing.as_deref()),
+            accept_confirm: review_accept_confirm(&t.id.to_string(), &t.title, landing.as_deref(), t.column.branch(), t.landing_blocked),
+            accepted: t.accepted,
+            landing_blocked: t.landing_blocked,
             discard_confirm: format!(
                 "Discard {} — {}? It closes as done without landing, and tickets depending on it stay blocked.",
                 t.id, t.title
@@ -514,15 +540,31 @@ pub fn review(
     })
 }
 
-/// What Accept asks before it closes the card. The hazard is specific and worth spelling out: unlike the automatic
-/// lander, Accept needs no proof the branch reached main, so it can close work that is not integrated and unblock
-/// dependents onto code that does not exist yet. The sweep's own verdict is quoted so the reviewer sees which case they
-/// are actually in rather than guessing.
-fn review_accept_confirm(id: &str, title: &str, landing: Option<&str>) -> String {
-    let mut s = format!(
-        "Accept {id} — {title}? It closes as done and unblocks every ticket depending on it, whether or not its branch \
-         has reached main — this is your judgement, not the auto-lander's proof."
-    );
+/// What Accept asks before it fires. What it is really consenting to is **main moving**: a work loop will rebase this
+/// branch and fast-forward main into it with nobody looking at the merge, which is the same cost the auto-merge toggle
+/// spells out. It is not the irreversible click Discard is — the approval can be withdrawn right up until the landing
+/// happens — so the text names the cost without the scare text.
+///
+/// Three shapes, because the question genuinely differs. Re-accepting after a blocked landing is a *retry*, and saying
+/// so is what stops it reading as a no-op. A ticket with no branch has nothing to land at all. The sweep's own verdict
+/// is quoted throughout, so the reviewer sees which case they are in rather than guessing.
+fn review_accept_confirm(id: &str, title: &str, landing: Option<&str>, branch: Option<&str>, blocked: bool) -> String {
+    let mut s = match (branch, blocked) {
+        (Some(branch), true) => format!(
+            "Accept {id} — {title} again? The last landing attempt was refused and the progress log says why. This \
+             clears the flag and puts {branch} back in the work loop's hands to rebase onto main and fast-forward — so \
+             only press it if you have resolved what stopped it."
+        ),
+        (Some(branch), false) => format!(
+            "Accept {id} — {title}? It clears the work to land: a running /kanban:work loop will rebase {branch} onto \
+             the main branch and fast-forward main into it, with no further review of the merge, and the board closes \
+             the card once it can prove the code arrived. A conflict stops all of it and hands the ticket back to you."
+        ),
+        (None, _) => format!(
+            "Accept {id} — {title}? No branch is recorded, so there is nothing to land: the card simply waits in \
+             review, and only you can close it. Discard is probably what you want instead."
+        ),
+    };
     if let Some(landing) = landing {
         use std::fmt::Write;
         let _ = write!(s, " Right now: {landing}.");
@@ -585,6 +627,8 @@ pub fn detail(board: &Board, claims: &[Claim], id: &crate::store::model::TicketI
             can_discard: t.column.id() == ColumnId::Review,
             can_review: t.column.id() == ColumnId::Review && t.external.is_none(),
             changes_requested: t.changes_requested,
+            accepted: t.accepted,
+            landing_blocked: t.landing_blocked,
             discarded: matches!(t.column, Column::Done { discarded: true, .. }),
             auto_merge,
             auto_merge_inherited,

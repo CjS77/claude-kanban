@@ -56,8 +56,9 @@ Repeat until the user stops you (or you've done the one requested ticket — a t
 loop after it):
 
 1. **Pick** — call `kanban_board` (remember the `version`), then `kanban_next`. Its `action` field says what the ticket
-   needs: `implement` (a ready ticket — steps 2–8), `refine` (a stub — see **Refining a stub** below), or `rework` (a
-   ticket a human sent back with feedback — see **Rework** below). If nothing is
+   needs: `land` (a review ticket a human accepted — see **Landing a branch** below, and do **not** claim it), `implement`
+   (a ready ticket — steps 2–8), `refine` (a stub — see **Refining a stub** below), or `rework` (a ticket a human sent
+   back with feedback — see **Rework** below). If nothing is
    eligible, go idle instead of ending the loop — see **Idling** below. `kanban_next` first auto-lands any review
    tickets whose branches have reached local main, so **use the `version` it returns** for the claim — the sweep may
    have advanced the board.
@@ -92,7 +93,8 @@ loop after it):
    `--push`: `git push -u origin <branch>` and `gh pr create` (title from the ticket, body summarising the work and
    linking the ticket id), then include the PR URL in the report — you don't record the PR on the board, the server's
    poller discovers it by branch. **Then, if `kanban_next` reported `auto_merge: true` for this ticket, land the branch
-   yourself — see **Auto-merge** below.** Without that flag the branch is the user's to integrate, as always.
+   yourself — see **Landing a branch** below.** Without that flag the branch waits in review for the user to accept it,
+   which is what puts it back in front of this loop as `action: "land"`.
 
 ## The parallel loop (max_workers > 1)
 
@@ -119,8 +121,8 @@ tickets in flight; a refinement counts as one worker, an implementation counts a
    done itself once the merge reaches local main); reported failure or an unusable result → `kanban_note` what
    happened and `kanban_release` the ticket. If the subagent died leaving the worktree dirty, leave the worktree for
    the human — never `force_discard`. A ticket whose `kanban_next` payload said `auto_merge: true` gets landed here,
-   by you, once the move to `review` succeeds — see **Auto-merge** below. Subagents never merge: the merge runs in the
-   main checkout, one ticket at a time, and you are the only session that owns it.
+   by you, once the move to `review` succeeds — see **Landing a branch** below. Subagents never merge, and neither does
+   an `action: "land"` ticket get delegated: landings run in the main checkout, one at a time, in this session.
 4. **Top up** — after each close-out, pick and claim the next eligible ticket while others are still running.
    Between close-outs, while tickets are in flight and fewer than `max_workers` are running, don't only wait for a
    completion: re-poll the board on a fixed 60-second cadence. Workers are active, so the human is likely at the
@@ -174,33 +176,40 @@ a session on that model and run `/kanban:work <ticket-id>` there; a ticket-id ar
 this harness maps down, a model it cannot switch to, a fallback you chose — `kanban_note` what was requested versus
 what actually ran, and say so in the end-of-loop summary. A dial that lies about being applied is worse than no dial.
 
-## Auto-merge
+## Landing a branch
 
-A ticket can also carry `auto_merge`: standing permission for the loop that finishes it to land its branch, instead of
-handing the branch back for the user to integrate. `kanban_next` returns the **effective** answer beside `action` —
-`auto_merge: true|false`, the ticket's own flag OR its epic's. Read it there, not off the ticket: the ticket carries
-only its own say, so an epic-level grant is invisible on the card.
+Landing is the rebase-and-fast-forward that puts a reviewed branch into the main branch. **One procedure, two ways in:**
 
-This is the same shape of dial as `model`/`effort` — the board stores the preference, the loop honours it — and the
-merge lives here rather than in the binary on purpose. `src/land.rs` only ever *proves* that code landed, it never
-causes it; the binary's one path that writes to main (`kanban_worktree_finish merge=true`) is explicitly
-human-approved; and resolving a rebase conflict needs judgement that has to sit with an agent reading the code, not
-with a store operation.
+- **`action: "land"`** — a human pressed **Accept** on the review card, which does not close it: accepting is
+  *permission to land*, and `kanban_next` then hands you the ticket ahead of all other work, with its `branch` beside
+  the action. This is the common case.
+- **`auto_merge: true`** — standing permission, granted in advance on the ticket or its epic, to land the branch you
+  have just finished without a human looking at it. `kanban_next` returns the **effective** answer beside `action` —
+  the ticket's own flag OR its epic's. Read it there, not off the ticket: an epic-level grant is invisible on the
+  card. Run it **after `kanban_move to=review` succeeds**, and only when the ticket is not `external` and has a
+  recorded branch.
 
-Run it **after `kanban_move to=review` succeeds**, and only when all three of these hold: `kanban_next` reported
-`auto_merge: true`, the ticket is not `external`, and it has a recorded branch. Everything below happens in the **main
-checkout** — never inside a worktree, and never in parallel with another auto-merge.
+Either way the merge lives here rather than in the binary, on purpose. `src/land.rs` only ever *proves* that code
+landed, it never causes it; the binary's one path that writes to main (`kanban_worktree_finish merge=true`) is
+explicitly human-approved; and resolving a rebase conflict needs judgement that has to sit with an agent reading the
+code, not with a store operation or a browser click. That is exactly why **Accept** hands the work to you instead of
+doing it itself.
 
+Everything below happens in the **main checkout** — never inside a worktree, and never in parallel with another
+landing.
+
+0. **Take the landing** — `kanban_start_landing`. Not `kanban_claim`: claiming a review ticket is the *rework* path and
+   would drag the card into `doing`. This marks the card "landing…" for the human without giving it an owner, and it is
+   the interlock in the parallel loop — if it refuses because another worker holds it, that ticket is not yours, so
+   move on to the next one.
 1. **Remove the worktree** — `git worktree list --porcelain`. The worktree is kept through review, so the branch is
    normally still checked out and this step normally runs: `kanban_worktree_finish` (never `force_discard`); if it
    refuses because the tree is dirty, stop. Git will not let you check out a branch that is live in a worktree, so
    skipping this fails the rebase two steps later.
 2. **Confirm the main checkout is on main and clean outside the board** — `git branch --show-current` names the
    configured main branch, and `git status --porcelain -- . ':(exclude).kanban'` comes back empty. That exclusion is
-   required, not cosmetic: `.kanban/board.json` is tracked and you have just written to it by moving the ticket to
-   `review`, so an unqualified `git status` is dirty essentially every time you reach this step. Checking out over it
-   is safe — worktrees are sparse-excluded from `.kanban/`, so no ticket branch ever carries a commit touching it, and
-   the modification simply carries across the checkouts.
+   required, not cosmetic: `.kanban/board.json` is tracked and the board is written constantly, so an unqualified
+   `git status` is dirty essentially every time you reach this step.
 3. **Rebase** — `git checkout <branch>`, then `git rebase --autostash <main>`. Resolve conflicts **only** where the
    intent is unambiguous. Anything you would have to guess at is a failure, not a judgement call.
    `--autostash` is not optional here, and it is the other half of step 2's exclusion: `git checkout` tolerates a dirty
@@ -210,7 +219,7 @@ checkout** — never inside a worktree, and never in parallel with another auto-
 4. **Fast-forward** — `git checkout <main>`, then `git merge --ff-only <branch>`. Never `--no-ff`, never `--force`.
 5. **Let the board land it, and only then delete the branch** — call `kanban_next` (its landing sweep runs first),
    confirm the ticket reached `done`, and *after* that `git branch -d <branch>`. This ordering is load-bearing; the
-   next paragraph says why.
+   next paragraph says why. The landing marker retires with the card, so a success needs no cleanup call.
 6. **Note what happened** — `kanban_note` on the ticket: what merged into main, and, if step 3 resolved conflicts,
    exactly which files conflicted and how you resolved each one. A silently resolved rebase conflict is the worst
    possible outcome of this feature, and the note is the only thing that makes it reviewable afterwards.
@@ -219,22 +228,25 @@ checkout** — never inside a worktree, and never in parallel with another auto-
 strongest rule: the branch tip is an ancestor of main (`git merge-base --is-ancestor`), which needs nothing but the
 repo in front of it. Delete the branch first and that rule is simply unavailable — the sweep falls back to the tip
 recorded in `.kanban/land-state.json`, which the move into `review` takes for you, so the fallback is armed rather
-than hypothetical. It is still the weaker proof: machine-local, by patch-id, and losable to a gc. Auto-merge should
+than hypothetical. It is still the weaker proof: machine-local, by patch-id, and losable to a gc. A landing should
 never have to depend on that sidecar file when keeping the branch a few seconds longer makes rule 1 answer.
 
-**When it doesn't work.** Every failure ends the same way: **the ticket stays in `review`, `kanban_note` names the
-failure on the card, and the loop moves on to the next ticket.** Never discard it, never drag it to `done`, never
-reach for `--force` or `--no-ff` to make a merge go through.
+**When it doesn't work.** Every failure ends the same way: **the ticket stays in `review`, `kanban_block_landing`
+names the failure on the card, and the loop moves on to the next ticket.** That tool flags the card red for the human
+and takes it out of the landing queue until they accept it again — so it is the end of your involvement with that
+ticket, not something to retry. Never discard it, never drag it to `done`, never reach for `--force` or `--no-ff` to
+make a merge go through.
 
 | Situation | What to do |
 |---|---|
-| Worktree dirty, so `kanban_worktree_finish` refuses | Stop before touching git. Note the worktree path so the human can finish it. (A worktree merely being *present* is normal now — step 1 removes it.) |
-| Rebase conflict you cannot resolve confidently | `git rebase --abort` **first** — never leave a half-rebase behind — then note which paths conflicted. |
-| `git merge --ff-only` refuses (main moved under you) | Retry steps 3–4 exactly once. Still refusing means main moved twice during one merge: stop and note it. |
+| Worktree dirty, so `kanban_worktree_finish` refuses | Stop before touching git. `kanban_block_landing` with the worktree path so the human can finish it. (A worktree merely being *present* is normal — step 1 removes it.) |
+| Rebase conflict you cannot resolve confidently | `git rebase --abort` **first** — never leave a half-rebase behind — then `kanban_block_landing` naming which paths conflicted. |
+| `git checkout <branch>` refuses over `.kanban/board.json` | The project commits its board and main has moved it since the branch point. Don't force it: `kanban_block_landing` saying so. Committing the board on main first is the human's call. |
+| `git merge --ff-only` refuses (main moved under you) | Retry steps 3–4 exactly once. Still refusing means main moved twice during one landing: `kanban_block_landing`. |
 | Branch is already an ancestor of main | Benign — it was merged already. Skip to step 5 and let the sweep land it by ancestry. |
 | Branch no longer exists | Leave it alone: the sweep's observed-tip path may still land it, and otherwise the existing "branch gone" flag is the right outcome. |
 | No branch recorded on the ticket | Nothing to merge. For a companion subtask this means its close-out omitted `kanban_move branch=…`; its parent's branch may well land it anyway. |
-| The ticket is `external` | Never auto-merged, whatever the flag says. Its branch was never a local ref — the same principle that stops the sweep landing external tickets from local branch state. |
+| The ticket is `external` | Never landed from here, whatever the flags say. Its branch was never a local ref — the same principle that stops the sweep landing external tickets from local branch state. |
 
 If the ticket has an open PR, the local merge still lands the card (by ancestry) and leaves the PR open on GitHub —
 nothing here closes it. Say so in the end-of-loop report so the user knows a PR is now stale.
@@ -299,9 +311,11 @@ A stub is a spec to write, not code to build. When `kanban_next` says `action: "
 - A ticket's `model`/`effort` is the human's instruction, not a suggestion to weigh. Honour it or report that you
   couldn't — never substitute your own judgement about what a ticket deserves, and never set these fields on tickets
   you create unless the user asked for them.
-- `auto_merge` is the human's permission to move their integration branch, and there is no undo once main has moved.
-  Never set it on tickets you create unless the user explicitly asked for it, and never merge a ticket that isn't
-  flagged — a branch without the flag is reported and left for the user, exactly as before.
+- `auto_merge` and **Accept** are both the human's permission to move their integration branch, and there is no undo
+  once main has moved. Never set `auto_merge` on tickets you create unless the user explicitly asked for it, and never
+  land a branch that carries neither — an unaccepted, unflagged branch is reported and left in review for them.
+- Never press a review verdict for the human. Accept, Request changes and Discard are theirs, in the browser; your part
+  begins after they have accepted, when `kanban_next` hands you the landing.
 - Every mutating kanban tool needs `expected_version` from your latest `kanban_board` read (or the `version`
   `kanban_next` returns — its landing sweep may have advanced the board). On a version conflict, re-read the board
   and retry the operation against the new state.

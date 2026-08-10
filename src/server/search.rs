@@ -262,6 +262,8 @@ mod tests {
             effort: None,
             auto_merge: false,
             changes_requested: false,
+            accepted: false,
+            landing_blocked: false,
             depends_on: vec![],
             notes: vec![],
             external: None,

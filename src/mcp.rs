@@ -43,6 +43,11 @@ and kanban_worktree_start re-attaches. A human can also send a review ticket bac
 unclaimed, kanban_next surfaces it as action \"rework\" ahead of any todo work, and the newest \"changes requested:\" \
 note is the spec for that round — address it in the existing worktree and move it to review again. Accepting, \
 requesting changes and discarding are the human's verdicts, made in the browser; never press one for them. \
+Accepting does not close a ticket — it clears the branch to land, and kanban_next then surfaces it as action \
+\"land\" ahead of everything else. Take it with kanban_start_landing, never kanban_claim (claiming a review ticket is \
+the rework path), rebase the branch onto the main branch and fast-forward main into it, then call kanban_next and let \
+its sweep move the card. Resolve a rebase conflict only where the intent is unambiguous; anything you would have to \
+guess at goes back to the human with kanban_block_landing, after git rebase --abort. \
 Stubs are specs to write, not code to build: kanban_claim (the card sits pink in doing) → research → kanban_refine, \
 which lands it back in todo at status=review for the human — no worktree. \
 Only claim tickets kanban_next surfaces — ready (implement) or stub (refine), in todo, unblocked; never claim \
@@ -109,6 +114,29 @@ pub struct ReleaseParams {
     /// The ticket id to give back, e.g. "K-7".
     pub ticket: String,
     /// The board version from your latest `kanban_board` read.
+    pub expected_version: u64,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct StartLandingParams {
+    /// The accepted review ticket you are about to land, e.g. "K-7".
+    pub ticket: String,
+    /// Who is landing it. Defaults to "claude".
+    pub agent: Option<String>,
+    /// The board version from your latest `kanban_board` or `kanban_next` read.
+    pub expected_version: u64,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct BlockLandingParams {
+    /// The ticket whose landing you could not finish, e.g. "K-7".
+    pub ticket: String,
+    /// What stopped it, in words the human can act on — name the conflicting paths, or the exact refusal git gave.
+    /// This becomes the newest note on the card and is the only thing they have to go on.
+    pub reason: String,
+    /// The board version from your latest `kanban_board` or `kanban_next` read.
     pub expected_version: u64,
 }
 
@@ -399,15 +427,22 @@ impl KanbanServer {
     /// The next thing to work on, and what it needs. Returns the full ticket plus the action, or explains that nothing
     /// is eligible:
     ///
+    /// - `"land"` — a human accepted this review ticket and cleared its branch to land. **Do not claim it** (claiming a
+    ///   review ticket is the rework path and would drag it into doing): call `kanban_start_landing` to take the
+    ///   in-flight marker, then follow *Landing a branch* in the work command — rebase the branch onto the main branch,
+    ///   fast-forward main into it, and let the sweep move the card. Ranked **first**: it is minutes of work, it is what
+    ///   unblocks dependents, and a fresh worktree is branched off the main checkout's HEAD, so landing first keeps the
+    ///   next ticket from starting on a stale main. The answer carries `branch`.
     /// - `"rework"` — a human reviewed this ticket and sent it back. It is sitting in doing, unclaimed, with its branch
     ///   and worktree intact: claim it, `kanban_worktree_start` (which re-attaches), treat the newest
-    ///   `changes requested:` note as the spec for this round, then move it to review again. Ranked **above** todo work.
+    ///   `changes requested:` note as the spec for this round, then move it to review again. Ranked above todo work.
     /// - `"implement"` — a ready ticket in todo: build it.
     /// - `"refine"` — a stub: write its spec, don't build it.
     ///
-    /// Eligibility is otherwise the same throughout: unblocked, unclaimed, non-external. First auto-lands any review
-    /// tickets whose branches have provably reached the local main branch (offline git, no network), so use the
-    /// `version` this tool returns for your next mutation — the sweep may have advanced it.
+    /// Eligibility is otherwise the same throughout: unblocked, unclaimed, non-external. A ticket whose landing is
+    /// already in flight, or whose last landing attempt was blocked and is waiting on a human, is never surfaced. First
+    /// auto-lands any review tickets whose branches have provably reached the local main branch (offline git, no
+    /// network), so use the `version` this tool returns for your next mutation — the sweep may have advanced it.
     ///
     /// `auto_merge` is the *effective* answer — the ticket's own flag or its epic's — and is the field `/kanban:work`
     /// reads to decide whether to land the branch itself. Read it here, not off the ticket: the ticket carries only its
@@ -432,7 +467,7 @@ impl KanbanServer {
             Ok(if let Some(t) = derive::next_ticket(&board, &claims) {
                 let action = action_for(t);
                 serde_json::json!({ "version": board.version, "ticket": t, "action": action,
-                    "auto_merge": derive::auto_merge(t, &board) })
+                    "branch": t.column.branch(), "auto_merge": derive::auto_merge(t, &board) })
             } else {
                 let todo = derive::ineligible(&board, &claims);
                 serde_json::json!({ "version": board.version, "ticket": null, "reason": nothing_eligible(&todo, &stalled),
@@ -462,6 +497,39 @@ impl KanbanServer {
     #[tool]
     async fn kanban_release(&self, Parameters(p): Parameters<ReleaseParams>) -> Result<CallToolResult, ErrorData> {
         self.apply(Some(p.expected_version), Op::Release { id: TicketId(p.ticket) }).await
+    }
+
+    /// Take the in-flight landing marker on an accepted review ticket, then land it: rebase its branch onto the main
+    /// branch and fast-forward main into it, per *Landing a branch* in the work command. Call this **instead of**
+    /// `kanban_claim` — claiming a review ticket is the rework path and would drag the card into doing, while this
+    /// leaves it in review with no owner and simply shows "landing this" on the card.
+    ///
+    /// It is also the interlock between concurrent work loops: it refuses when another loop already holds the landing,
+    /// when a human has not accepted the ticket, and when the last attempt was blocked and is still waiting on them. A
+    /// refusal means the ticket is not yours — take the next one rather than retrying.
+    ///
+    /// The marker retires with the landing itself, so a successful land needs no cleanup: merge, then call
+    /// `kanban_next`, whose sweep proves the landing and moves the card. If you cannot finish, say so with
+    /// `kanban_block_landing` — never leave it hanging. (A marker whose agent died is ignored after 15 minutes, so a
+    /// crash costs one stalled card, not a stuck one.)
+    #[tool]
+    async fn kanban_start_landing(&self, Parameters(p): Parameters<StartLandingParams>) -> Result<CallToolResult, ErrorData> {
+        let op = Op::StartLanding { id: TicketId(p.ticket), agent: p.agent.unwrap_or_else(|| DEFAULT_AGENT.into()) };
+        self.apply(Some(p.expected_version), op).await
+    }
+
+    /// Give a landing back to the human: flags the card with a danger badge, shades it red on the board, records
+    /// `reason` as the newest note, and drops the in-flight marker. The ticket stays in review and is **not** offered
+    /// for landing again until a human accepts it once more (having fixed whatever it was) or sends it back for
+    /// changes — so this ends your involvement with that ticket; move on to the next one.
+    ///
+    /// Use it for anything you cannot resolve with confidence: a rebase conflict whose intent is ambiguous, a worktree
+    /// with uncommitted changes, a main checkout on the wrong branch or holding the user's own work, a fast-forward
+    /// that main moved out from under. **Abort the rebase first** — `git rebase --abort` — and never leave a repository
+    /// mid-rebase behind you; then name the conflicting paths here so the human knows where to look.
+    #[tool]
+    async fn kanban_block_landing(&self, Parameters(p): Parameters<BlockLandingParams>) -> Result<CallToolResult, ErrorData> {
+        self.apply(Some(p.expected_version), Op::BlockLanding { id: TicketId(p.ticket), reason: p.reason }).await
     }
 
     /// Move a ticket to a column at a position (0 = top; position is priority). Moving to review is the close-out for
@@ -688,11 +756,17 @@ impl KanbanServer {
     }
 }
 
-/// What the surfaced ticket needs, in precedence order. Rework wins over everything: a card a human sent back is
-/// already specced and already built — the newest `changes requested:` note is the only spec that round needs, whatever
-/// `status` says. `stub` then means the spec itself is the work.
+/// What the surfaced ticket needs, in precedence order. Landing wins over everything: a human has already approved it,
+/// it is minutes of git, and until it lands its dependents stay blocked and the next worktree branches off a stale main.
+/// Rework comes next — a card a human sent back is already specced and already built, so the newest `changes requested:`
+/// note is the only spec that round needs, whatever `status` says. `stub` then means the spec itself is the work.
+///
+/// The column is what separates landing from the rest: `accepted` only ever means anything in `review`, and
+/// [`derive::next_ticket`] has already applied the full eligibility rules by the time this names the answer.
 fn action_for(t: &crate::store::model::Ticket) -> &'static str {
-    if t.changes_requested {
+    if t.column.id() == crate::store::model::ColumnId::Review {
+        "land"
+    } else if t.changes_requested {
         "rework"
     } else if t.status == Status::Stub {
         "refine"
@@ -899,6 +973,8 @@ mod tests {
             effort: None,
             auto_merge: false,
             changes_requested: false,
+            accepted: false,
+            landing_blocked: false,
             depends_on: vec![],
             notes: vec![],
             external: None,
@@ -1027,6 +1103,8 @@ mod action_tests {
             effort: None,
             auto_merge: false,
             changes_requested,
+            accepted: false,
+            landing_blocked: false,
             depends_on: vec![],
             notes: vec![],
             external: None,

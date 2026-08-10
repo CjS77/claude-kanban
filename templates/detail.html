@@ -13,6 +13,10 @@
     <span class="badge badge-outline" title="workflow column">{{ ticket.column }}</span>
     {% if ticket.discarded %}<span class="badge badge-neutral" title="retired without landing — tickets depending on this stay blocked">discarded</span>{% endif %}
     {% if ticket.blocked %}<span class="badge badge-error">blocked</span>{% endif %}
+    {% if ticket.landing_blocked %}<span class="badge badge-error"
+          title="a landing attempt hit something only you can resolve — the newest 'landing blocked:' entry in the progress log says what git refused">⚠ landing blocked</span>{% endif %}
+    {% if ticket.accepted %}<span class="badge badge-neutral"
+          title="cleared to land — /kanban:work rebases this branch onto main and fast-forwards main into it, and the board moves the card to done once it proves the code arrived">✓ accepted</span>{% endif %}
     {% if ticket.changes_requested %}<span class="badge badge-warning"
           title="a reviewer sent this back — the feedback is the newest 'changes requested:' entry in the progress log">changes requested</span>{% endif %}
     {% if ticket.auto_merge %}<span class="badge badge-warning"
@@ -41,7 +45,11 @@
 
 {% if let Some(claim) = ticket.claim %}
 <div class="mt-3 p-3 rounded-lg bg-base-200 text-sm flex flex-col gap-1">
-    {% if claim.worktree_missing %}
+    {% if claim.landing %}
+    <span class="text-warning font-medium" title="rebasing this branch onto main and fast-forwarding main into it">
+        ⟳ {{ claim.agent }} is landing this{% if claim.landing_stale %} — stalled, it will be retried{% endif %}
+    </span>
+    {% else if claim.worktree_missing %}
     <span class="text-warning font-medium">⚠ worktree missing — restore with <code>claude-kanban worktree start {{ ticket.id }}</code></span>
     {% else %}
     <span class="text-success font-medium flex items-center gap-1.5">
@@ -49,7 +57,7 @@
         {{ claim.agent }} is working on this
     </span>
     {% endif %}
-    <span class="opacity-70">claimed {{ claim.since }}</span>
+    <span class="opacity-70">{% if claim.landing %}landing started{% else %}claimed{% endif %} {{ claim.since }}</span>
     {% if let Some(path) = claim.path %}<span class="font-mono text-xs opacity-70 break-all">{{ path }}</span>{% endif %}
 </div>
 {% endif %}

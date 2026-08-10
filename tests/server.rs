@@ -1370,8 +1370,11 @@ async fn request_changes_sends_the_card_back_to_doing_with_the_comment_as_a_note
     assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
 
+/// Accept is **permission to land**, not the landing. The card must stay in review, and — the assertion that inverted
+/// when this design replaced the closes-it-immediately one — its dependents must stay blocked. Unblocking on a human's
+/// word alone was the hazard the old Accept carried; now nothing unblocks until the code is provably in main.
 #[tokio::test]
-async fn accept_closes_the_card_as_done_kept_with_the_comment_as_a_note() {
+async fn accept_arms_the_landing_and_leaves_the_card_in_review() {
     let (_dir, router, store) = test_app();
     seed_ticket(&store, "Good enough");
     ops::apply(
@@ -1383,21 +1386,83 @@ async fn accept_closes_the_card_as_done_kept_with_the_comment_as_a_note() {
     to_review_with_branch(&store, "K-1", "k-1/good");
 
     let version = store.read_board().unwrap().version;
-    let res = router.oneshot(post("/ui/ticket/K-1/review/accept", version, "comment=ship+it")).await.unwrap();
+    let res = router.clone().oneshot(post("/ui/ticket/K-1/review/accept", version, "comment=ship+it")).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
+    let pane = body_text(res).await;
+    assert!(pane.contains("Accepted and waiting to land"), "the answer is the review pane, saying what it waits for: {pane}");
 
     let board = store.read_board().unwrap();
     let t = board.ticket(&TicketId("K-1".into())).unwrap();
-    assert!(
-        matches!(t.column, claude_kanban::store::model::Column::Done { discarded: false, .. }),
-        "accept closes it as kept, not discarded: {:?}",
-        t.column
-    );
+    assert_eq!(t.column.id(), ColumnId::Review, "accepting never moves the card — done still means landed");
+    assert!(t.accepted);
+    assert!(!t.landing_blocked);
     assert_eq!(t.notes.last().unwrap().text, "ship it");
     assert_eq!(t.notes.last().unwrap().author.as_deref(), Some("tester"));
+    assert!(t.notes.iter().any(|n| n.text.contains("accepted by tester")), "the verdict itself is on the record: {:?}", t.notes);
 
-    // The whole hazard the confirm warns about: dependents unblock on a human's word, not on proof.
-    assert!(!claude_kanban::store::derive::blocked(board.ticket(&TicketId("K-2".into())).unwrap(), &board));
+    // The old hazard, gone: a dependent waits for the code to actually reach main, not for a reviewer's opinion.
+    assert!(claude_kanban::store::derive::blocked(board.ticket(&TicketId("K-2".into())).unwrap(), &board));
+
+    // And the card now advertises itself for landing.
+    let html = body_text(router.oneshot(get("/ui/board")).await.unwrap()).await;
+    assert!(html.contains("✓ accepted"), "{html}");
+}
+
+/// The work loop's whole view of an accepted ticket: `kanban_next` hands it over as `land`, the marker is an interlock,
+/// and a blocked landing takes it back out of reach until a human acts.
+#[tokio::test]
+async fn an_accepted_ticket_is_offered_for_landing_until_it_is_taken_or_blocked() {
+    let (_dir, _router, store) = test_app();
+    seed_ticket(&store, "Cleared to land");
+    to_review_with_branch(&store, "K-1", "k-1/land");
+    let id = TicketId("K-1".into());
+
+    let next = |store: &Store| {
+        let (board, claims) = (store.read_board().unwrap(), store.read_claims().unwrap());
+        claude_kanban::store::derive::next_ticket(&board, &claims).map(|t| t.id.clone())
+    };
+    assert_eq!(next(&store), None, "an unaccepted review ticket is nobody's to land");
+
+    ops::apply(&store, None, Op::AcceptReview { id: id.clone(), by: "tester".into() }).unwrap();
+    assert_eq!(next(&store), Some(id.clone()), "accepted: the loop's first duty");
+
+    ops::apply(&store, None, Op::StartLanding { id: id.clone(), agent: "claude".into() }).unwrap();
+    assert_eq!(next(&store), None, "in flight: a second loop is not handed the same branch");
+
+    ops::apply(&store, None, Op::BlockLanding { id: id.clone(), reason: "conflicts in src/a.rs".into() }).unwrap();
+    assert_eq!(next(&store), None, "blocked: retrying the same conflict forever helps nobody");
+    let note = store.read_board().unwrap().ticket(&id).unwrap().notes.last().unwrap().text.clone();
+    assert_eq!(note, "landing blocked: conflicts in src/a.rs", "the human is told exactly where to look");
+
+    // Only the human puts it back — and accepting again is that act.
+    ops::apply(&store, None, Op::AcceptReview { id: id.clone(), by: "tester".into() }).unwrap();
+    assert_eq!(next(&store), Some(id));
+}
+
+/// The two states the board has to make visible: a landing under way, and one that gave up.
+#[tokio::test]
+async fn the_board_shows_a_landing_in_flight_and_a_blocked_one() {
+    let (_dir, router, store) = test_app();
+    seed_ticket(&store, "Landing now");
+    seed_ticket(&store, "Landing refused");
+    to_review_with_branch(&store, "K-1", "k-1/now");
+    to_review_with_branch(&store, "K-2", "k-2/refused");
+    for id in ["K-1", "K-2"] {
+        ops::apply(&store, None, Op::AcceptReview { id: TicketId(id.into()), by: "tester".into() }).unwrap();
+    }
+    ops::apply(&store, None, Op::StartLanding { id: TicketId("K-1".into()), agent: "claude".into() }).unwrap();
+    ops::apply(&store, None, Op::BlockLanding { id: TicketId("K-2".into()), reason: "conflicts in Cargo.toml".into() }).unwrap();
+
+    let html = body_text(router.clone().oneshot(get("/ui/board")).await.unwrap()).await;
+    assert!(html.contains("claude is landing this"), "an in-flight landing is visible, not idle-looking: {html}");
+    assert!(!html.contains("claude is working on this"), "…but it is not ownership — a review ticket has no owner: {html}");
+    assert!(html.contains("⚠ landing blocked"), "{html}");
+    assert!(html.contains("#ef4444"), "a blocked landing shades the card red: {html}");
+
+    // The review pane leads with the danger and offers the retry wording.
+    let pane = body_text(router.oneshot(get("/ui/ticket/K-2/review")).await.unwrap()).await;
+    assert!(pane.contains("A landing attempt could not finish"), "{pane}");
+    assert!(pane.contains("Accept again"), "the button says what pressing it now means: {pane}");
 }
 
 #[tokio::test]

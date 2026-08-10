@@ -14,7 +14,7 @@ use chrono::Utc;
 use serde_json::{Value, json};
 
 use crate::store::{
-    Claim, Store, StoreError, find_claim,
+    Claim, ClaimKind, Store, StoreError, find_claim, landing_in_flight,
     model::{Board, Column, ColumnId, Effort, Epic, EpicId, Note, Status, Ticket, TicketId},
     remove_claim, upsert_claim,
 };
@@ -93,6 +93,17 @@ pub enum Op {
     /// the worktree are untouched — the worker re-attaches to them and picks up where it left off. Always a human
     /// action, like [`Op::DiscardTicket`]; no agent-facing tool constructs this.
     RequestChanges { id: TicketId, feedback: String, by: String },
+    /// A human's review verdict of "yes": mark a review ticket approved, so the work loop may land its branch. The
+    /// column is deliberately untouched — accepting is *permission to land*, and `done` still means landed.
+    AcceptReview { id: TicketId, by: String },
+    /// A work loop is rebasing and fast-forwarding this ticket's branch right now: take the in-flight marker. Refuses
+    /// when the ticket is not landable or another landing is already in hand, which is what makes it the interlock
+    /// between concurrent loops rather than a decoration.
+    StartLanding { id: TicketId, agent: String },
+    /// A landing attempt hit something only a human can resolve: raise the danger flag, record `reason` on the card,
+    /// and drop the in-flight marker. The column is deliberately untouched — the ticket stays in `review`, in the
+    /// human's hands. One op rather than three writes so all of it lands under the same version check.
+    BlockLanding { id: TicketId, reason: String },
     /// Record (or clear) the ticket's bound GitHub PR — the Create PR button on creation, the serve poller on discovery
     /// and on state transitions. Pure data recording; refuses nothing.
     SetPr { id: TicketId, pr: Option<crate::store::model::PrRef> },
@@ -250,6 +261,9 @@ impl Op {
             Op::LandTicket { .. } => "land_ticket",
             Op::DiscardTicket { .. } => "discard_ticket",
             Op::RequestChanges { .. } => "request_changes",
+            Op::AcceptReview { .. } => "accept_review",
+            Op::StartLanding { .. } => "start_landing",
+            Op::BlockLanding { .. } => "block_landing",
             Op::SetPr { .. } => "set_pr",
             Op::StampWorktree { .. } => "stamp_worktree",
             Op::ClearWorktreePath { .. } => "clear_worktree_path",
@@ -298,6 +312,9 @@ fn transition(op: Op, board: &mut Board, claims: &mut Vec<Claim>) -> Result<OpOu
         Op::LandTicket { id, expected_branch, reason } => land_ticket(board, claims, &id, expected_branch.as_deref(), &reason),
         Op::DiscardTicket { id, reason } => discard_ticket(board, claims, &id, &reason),
         Op::RequestChanges { id, feedback, by } => request_changes(board, &id, &feedback, &by),
+        Op::AcceptReview { id, by } => accept_review(board, claims, &id, &by),
+        Op::StartLanding { id, agent } => start_landing(board, claims, &id, &agent),
+        Op::BlockLanding { id, reason } => block_landing(board, claims, &id, &reason),
         Op::SetPr { id, pr } => set_pr(board, &id, pr),
         Op::StampWorktree { id, branch, path } => stamp_worktree(board, claims, &id, &branch, &path),
         Op::ClearWorktreePath { id } => Ok(clear_worktree_path(claims, &id)),
@@ -339,6 +356,8 @@ fn create_ticket(board: &mut Board, new: NewTicket) -> OpOutput {
         effort,
         auto_merge,
         changes_requested: false,
+        accepted: false,
+        landing_blocked: false,
         depends_on,
         notes: vec![],
         external: None,
@@ -440,10 +459,19 @@ fn move_ticket(
     branch: Option<String>,
 ) -> Result<OpOutput, OpError> {
     let ticket = ticket_mut(board, id)?;
+    let from = ticket.column.id();
     ticket.column = next_column_state(&ticket.column, to, owner, branch, id)?;
     if to == ColumnId::Review {
         // Reaching review IS the feedback being addressed — the next round starts clean.
         ticket.changes_requested = false;
+    }
+    if to != from {
+        // An approval and a failed landing both describe the ticket *as it sat in review*; any real column change
+        // leaves both behind. A reorder inside review is not a change, and must not quietly clear a flag the human
+        // still has to act on, nor an approval they already gave.
+        ticket.accepted = false;
+        ticket.landing_blocked = false;
+        crate::store::remove_landing(claims, id);
     }
     if matches!(to, ColumnId::Review | ColumnId::Done) {
         remove_claim(claims, id);
@@ -504,6 +532,8 @@ fn land_ticket(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, expect
     }
     ticket.column = Column::Done { branch: branch.clone(), completed_at: Utc::now(), discarded: false };
     ticket.changes_requested = false; // finished work carries no outstanding feedback
+    ticket.accepted = false; // an approval to land is spent the moment the landing is proved
+    ticket.landing_blocked = false; // …and nothing is blocking a landing that has already happened
     ticket.notes.push(Note { at: Utc::now(), author: Some("kanban".into()), text: reason.to_owned() });
     remove_claim(claims, id); // review tickets are unclaimed by construction, but never leave a ghost behind
     reposition(board, id, ColumnId::Done, None);
@@ -518,6 +548,8 @@ fn discard_ticket(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, rea
     };
     ticket.column = Column::Done { branch: branch.clone(), completed_at: Utc::now(), discarded: true };
     ticket.changes_requested = false; // retired work carries no outstanding feedback either
+    ticket.accepted = false; // nor an approval to land work that will never land
+    ticket.landing_blocked = false; // and nothing is waiting to be landed once the work is retired
     ticket.notes.push(Note { at: Utc::now(), author: Some("kanban".into()), text: reason.to_owned() });
     remove_claim(claims, id);
     reposition(board, id, ColumnId::Done, None);
@@ -542,9 +574,76 @@ fn request_changes(board: &mut Board, id: &TicketId, feedback: &str, by: &str) -
 
     ticket.column = Column::Doing { owner: by.to_owned(), branch: branch.clone() };
     ticket.changes_requested = true;
+    // A rework round withdraws the approval and supersedes whatever could not be landed: the branch is about to grow
+    // commits, so both describe a tree that will not exist by the time anyone accepts again.
+    ticket.accepted = false;
+    ticket.landing_blocked = false;
     ticket.notes.push(Note { at: Utc::now(), author: Some(by.to_owned()), text: format!("changes requested: {feedback}") });
     reposition(board, id, ColumnId::Doing, Some(0));
     Ok(OpOutput::plain(json!({ "id": id, "column": ColumnId::Doing, "changes_requested": true })))
+}
+
+/// The human's "yes": the review ticket is approved and the work loop may land its branch.
+///
+/// Clearing `landing_blocked` here is the deliberate part. A ticket whose landing failed is out of the loop's reach on
+/// purpose, so *something* has to put it back — and the human who just resolved the conflict by hand, looking at the
+/// pane, pressing the same button they pressed the first time, is exactly the right something. Without it the flag
+/// would be a dead end reachable only by sending perfectly good work back for rework.
+fn accept_review(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, by: &str) -> Result<OpOutput, OpError> {
+    let ticket = ticket_mut(board, id)?;
+    if !matches!(ticket.column, Column::Review { .. }) {
+        return Err(OpError::Invalid(format!("{id} is not in review — only code-complete work can be accepted")));
+    }
+    if ticket.external.is_some() {
+        return Err(OpError::Invalid(format!("{id} is external — its verdict belongs on the delegate's issue, not here")));
+    }
+    let retry = ticket.landing_blocked;
+    ticket.accepted = true;
+    ticket.landing_blocked = false;
+    ticket.notes.push(Note { at: Utc::now(), author: Some(by.to_owned()), text: format!("accepted by {by} — cleared to land") });
+    // A re-accept re-arms the landing, so the abandoned attempt's marker must not outlive it.
+    crate::store::remove_landing(claims, id);
+    Ok(OpOutput::plain(json!({ "id": id, "accepted": true, "retry": retry })))
+}
+
+/// Take the in-flight landing marker, or refuse. Every refusal here is a loop being told "not yours": the ticket is not
+/// approved, it is already flagged for a human, or another loop got there first.
+fn start_landing(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, agent: &str) -> Result<OpOutput, OpError> {
+    let ticket = board.ticket(id).ok_or_else(|| OpError::NotFound(id.to_string()))?;
+    let Column::Review { branch } = &ticket.column else {
+        return Err(OpError::Invalid(format!("{id} is not in review — only a review ticket's branch gets landed")));
+    };
+    let branch = branch.clone().ok_or_else(|| OpError::Invalid(format!("{id} has no branch recorded — there is nothing to land")))?;
+    if ticket.external.is_some() {
+        return Err(OpError::External(id.clone()));
+    }
+    // Two ways to be cleared to land, and the interlock has to cover both: a human pressed Accept, or they granted
+    // standing permission with `auto_merge` (the effective answer, so an epic-level grant counts).
+    if !ticket.accepted && !crate::store::derive::auto_merge(ticket, board) {
+        return Err(OpError::Invalid(format!("{id} has not been accepted — a human clears work to land, never a work loop")));
+    }
+    if ticket.landing_blocked {
+        return Err(OpError::Invalid(format!("{id}'s landing is blocked and waiting on a human — accept it again once it is resolved")));
+    }
+    if landing_in_flight(claims, id, Utc::now()) {
+        let agent = find_claim(claims, id).map_or_else(String::new, |c| c.agent.clone());
+        return Err(OpError::AlreadyClaimed { id: id.clone(), agent });
+    }
+    upsert_claim(claims, Claim { ticket: id.clone(), agent: agent.to_owned(), since: Utc::now(), path: None, kind: ClaimKind::Landing });
+    Ok(OpOutput::plain(json!({ "id": id, "branch": branch, "landing": true })))
+}
+
+/// A landing attempt's refusal, recorded: the danger flag, the reason as a `kanban` note, and the in-flight marker
+/// dropped. Only a review ticket can wear it — the flag means "this is what stopped it landing from here".
+fn block_landing(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, reason: &str) -> Result<OpOutput, OpError> {
+    let ticket = ticket_mut(board, id)?;
+    if !matches!(ticket.column, Column::Review { .. }) {
+        return Err(OpError::Invalid(format!("{id} is not in review — only a review ticket's landing can be blocked")));
+    }
+    ticket.landing_blocked = true;
+    ticket.notes.push(Note { at: Utc::now(), author: Some("kanban".into()), text: format!("landing blocked: {reason}") });
+    crate::store::remove_landing(claims, id);
+    Ok(OpOutput::plain(json!({ "id": id, "landing_blocked": true })))
 }
 
 fn set_pr(board: &mut Board, id: &TicketId, pr: Option<crate::store::model::PrRef>) -> Result<OpOutput, OpError> {
@@ -604,8 +703,11 @@ fn claim(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, agent: &str)
         return Err(OpError::Invalid(format!("{id} is blocked — its dependencies ({deps}) are not all done")));
     }
     ticket.column = Column::Doing { owner: agent.to_owned(), branch: ticket.column.branch().map(str::to_owned) };
+    // A rework claim takes the ticket out of review, which is the only state either of these described.
+    ticket.accepted = false;
+    ticket.landing_blocked = false;
     let refining = ticket.status == Status::Stub;
-    upsert_claim(claims, Claim { ticket: id.clone(), agent: agent.to_owned(), since: Utc::now(), path: None });
+    upsert_claim(claims, Claim { ticket: id.clone(), agent: agent.to_owned(), since: Utc::now(), path: None, kind: ClaimKind::Work });
     Ok(OpOutput::plain(json!({ "id": id, "owner": agent, "refining": refining })))
 }
 
@@ -662,7 +764,7 @@ fn delegate(
     ticket.external = Some(external);
     ticket.notes.push(Note { at: Utc::now(), author: Some("kanban".into()), text: note });
     let since = find_claim(claims, id).map_or_else(Utc::now, |c| c.since);
-    upsert_claim(claims, Claim { ticket: id.clone(), agent: agent.to_owned(), since, path: None });
+    upsert_claim(claims, Claim { ticket: id.clone(), agent: agent.to_owned(), since, path: None, kind: ClaimKind::Work });
     Ok(OpOutput::plain(json!({ "id": id, "owner": agent, "external": ticket.external })))
 }
 
@@ -703,13 +805,15 @@ fn mirror_sub_issues(
                 effort: None,
                 auto_merge: false,
                 changes_requested: false,
+                accepted: false,
+                landing_blocked: false,
                 depends_on: vec![],
                 notes: vec![],
                 external: Some(crate::store::model::External::github_issue(child.number)),
                 pr: None,
                 column: Column::Doing { owner: agent.to_owned(), branch: None },
             });
-            upsert_claim(claims, Claim { ticket: id.clone(), agent: agent.to_owned(), since: Utc::now(), path: None });
+            upsert_claim(claims, Claim { ticket: id.clone(), agent: agent.to_owned(), since: Utc::now(), path: None, kind: ClaimKind::Work });
             (child.number, id)
         })
         .collect();
@@ -863,6 +967,8 @@ fn build_refined_ticket(spec: NewTicketSpec, id: TicketId, default_epic: Option<
         effort: spec.effort,
         auto_merge: spec.auto_merge,
         changes_requested: false,
+        accepted: false,
+        landing_blocked: false,
         depends_on,
         notes: vec![],
         external: None,
@@ -885,7 +991,7 @@ fn stamp_worktree(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, bra
     ticket.column = Column::Doing { owner: owner.clone(), branch: Some(branch.to_owned()) };
     // Upsert defensively: the claim normally exists (Claim created it), but a hand-cleared sidecar shouldn't wedge `start`.
     let since = find_claim(claims, id).map_or_else(Utc::now, |c| c.since);
-    upsert_claim(claims, Claim { ticket: id.clone(), agent: owner, since, path: Some(path.to_owned()) });
+    upsert_claim(claims, Claim { ticket: id.clone(), agent: owner, since, path: Some(path.to_owned()), kind: ClaimKind::Work });
     Ok(OpOutput::plain(json!({ "id": id, "branch": branch, "path": path })))
 }
 
@@ -1868,6 +1974,141 @@ mod review_round_tests {
             let board = store.read_board().unwrap();
             assert!(!board.ticket(&id).unwrap().changes_requested, "finished work carries no outstanding feedback (discard={discard})");
         }
+    }
+
+    /// `landing_blocked`'s whole lifecycle: only a review ticket can wear it, a reorder inside review keeps it (the human
+    /// still has to act), any real column change drops it, and so does a rework round.
+    #[test]
+    fn the_landing_blocked_flag_survives_a_reorder_and_nothing_else() {
+        let (_dir, store) = scratch();
+        let id = to_review(&store, "would not land");
+        let blocked = |store: &Store| store.read_board().unwrap().ticket(&id).unwrap().landing_blocked;
+        let block = |store: &Store| apply(store, None, Op::BlockLanding { id: id.clone(), reason: "conflicts in src/x.rs".into() });
+
+        block(&store).unwrap();
+        assert!(blocked(&store));
+        let last = store.read_board().unwrap().ticket(&id).unwrap().notes.last().unwrap().text.clone();
+        assert_eq!(last, "landing blocked: conflicts in src/x.rs", "the reason lands with the flag, under one version");
+
+        // Dragged within the review column: the failure still describes the ticket exactly.
+        apply(&store, None, Op::MoveTicket { id: id.clone(), to: ColumnId::Review, position: Some(0), owner: None, branch: None }).unwrap();
+        assert!(blocked(&store), "a reorder is not a change of state");
+
+        // Claimed back for rework: the branch is about to move, so the old failure describes nothing.
+        apply(&store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
+        assert!(!blocked(&store));
+
+        // And the review verdict that sends it back clears it in one step.
+        apply(&store, None, Op::MoveTicket { id: id.clone(), to: ColumnId::Review, position: None, owner: None, branch: None }).unwrap();
+        block(&store).unwrap();
+        apply(&store, None, Op::RequestChanges { id: id.clone(), feedback: "rebase it".into(), by: "sam".into() }).unwrap();
+        assert!(!blocked(&store));
+
+        // Nothing outside review can be flagged: the flag means "this is what stopped it landing from here".
+        let todo = create(&store, "not in review");
+        let err = apply(&store, None, Op::BlockLanding { id: todo, reason: "x".into() }).unwrap_err();
+        assert!(matches!(err, OpError::Invalid(_)), "{err}");
+    }
+
+    /// Accepting is permission to land, not the landing: the card must stay exactly where it was, wearing the approval.
+    #[test]
+    fn accepting_arms_the_landing_and_leaves_the_card_in_review() {
+        let (_dir, store) = scratch();
+        let id = to_review(&store, "good work");
+        apply(&store, None, Op::AcceptReview { id: id.clone(), by: "sam".into() }).unwrap();
+
+        let board = store.read_board().unwrap();
+        let t = board.ticket(&id).unwrap();
+        assert!(matches!(t.column, Column::Review { .. }), "accepting never moves the card: {:?}", t.column);
+        assert!(t.accepted);
+        assert_eq!(t.notes.last().unwrap().text, "accepted by sam — cleared to land");
+
+        // Only review work can be accepted, and never somebody else's.
+        let todo = create(&store, "not in review");
+        assert!(matches!(apply(&store, None, Op::AcceptReview { id: todo, by: "sam".into() }), Err(OpError::Invalid(_))));
+        let ext = to_review(&store, "delegated");
+        apply(&store, None, Op::BindExternal { id: ext.clone(), external: Some(crate::store::model::External::github_issue(7)) }).unwrap();
+        assert!(matches!(apply(&store, None, Op::AcceptReview { id: ext, by: "sam".into() }), Err(OpError::Invalid(_))));
+    }
+
+    /// The dead end that must not be one: a blocked landing is out of the loop's reach until a human puts it back, and
+    /// pressing Accept again is that act.
+    #[test]
+    fn accepting_again_clears_a_blocked_landing_and_re_arms_it() {
+        let (_dir, store) = scratch();
+        let id = to_review(&store, "conflicted once");
+        apply(&store, None, Op::AcceptReview { id: id.clone(), by: "sam".into() }).unwrap();
+        apply(&store, None, Op::StartLanding { id: id.clone(), agent: "claude".into() }).unwrap();
+        apply(&store, None, Op::BlockLanding { id: id.clone(), reason: "conflicts in f".into() }).unwrap();
+
+        // Blocked: the loop cannot take it, and the abandoned attempt left no marker behind.
+        assert!(store.read_claims().unwrap().is_empty(), "a blocked landing drops its in-flight marker");
+        let err = apply(&store, None, Op::StartLanding { id: id.clone(), agent: "claude".into() }).unwrap_err();
+        assert!(matches!(err, OpError::Invalid(ref e) if e.contains("blocked")), "{err}");
+
+        // The human resolves it by hand and presses Accept again.
+        let out = apply(&store, None, Op::AcceptReview { id: id.clone(), by: "sam".into() }).unwrap();
+        assert_eq!(out.result["retry"], true, "the op says it was a retry, so the UI can word it as one");
+        let t = store.read_board().unwrap().ticket(&id).unwrap().clone();
+        assert!(t.accepted && !t.landing_blocked);
+        apply(&store, None, Op::StartLanding { id, agent: "claude".into() }).unwrap();
+    }
+
+    /// The interlock. Two loops asking for the same landing must not both get it, and the marker must never make a
+    /// review ticket look owned.
+    #[test]
+    fn a_landing_marker_is_taken_once_and_is_not_ownership() {
+        let (_dir, store) = scratch();
+        let id = to_review(&store, "landable");
+
+        // Unaccepted work is nobody's to land: the human clears it, never a work loop.
+        let err = apply(&store, None, Op::StartLanding { id: id.clone(), agent: "claude".into() }).unwrap_err();
+        assert!(matches!(err, OpError::Invalid(ref e) if e.contains("not been accepted")), "{err}");
+
+        apply(&store, None, Op::AcceptReview { id: id.clone(), by: "sam".into() }).unwrap();
+        let out = apply(&store, None, Op::StartLanding { id: id.clone(), agent: "claude".into() }).unwrap();
+        assert_eq!(out.result["branch"], "k-1/x", "the taker is told which branch to rebase");
+
+        let claim = store.read_claims().unwrap().into_iter().next().unwrap();
+        assert!(claim.is_landing(), "a landing record is not ownership");
+        assert!(matches!(store.read_board().unwrap().ticket(&id).unwrap().column, Column::Review { .. }), "and the card stays put");
+
+        // A second loop is refused by name, so it can move on to other work instead of racing the branch.
+        let err = apply(&store, None, Op::StartLanding { id: id.clone(), agent: "other".into() }).unwrap_err();
+        assert!(matches!(err, OpError::AlreadyClaimed { ref agent, .. } if agent == "claude"), "{err}");
+
+        // Landing the ticket retires the marker with it — the success path needs no cleanup call at all.
+        apply(&store, None, Op::LandTicket { id: id.clone(), expected_branch: Some("k-1/x".into()), reason: "merged".into() }).unwrap();
+        assert!(store.read_claims().unwrap().is_empty());
+        let t = store.read_board().unwrap().ticket(&id).unwrap().clone();
+        assert!(!t.accepted, "an approval to land is spent once the landing is proved");
+    }
+
+    /// Crash recovery: nothing cleared the marker because the agent died. After the cutoff the ticket has to become
+    /// landable again, or one crash wedges it forever.
+    #[test]
+    fn a_stale_landing_marker_stops_holding_the_ticket() {
+        let (_dir, store) = scratch();
+        let id = to_review(&store, "abandoned mid-landing");
+        apply(&store, None, Op::AcceptReview { id: id.clone(), by: "sam".into() }).unwrap();
+        apply(&store, None, Op::StartLanding { id: id.clone(), agent: "claude".into() }).unwrap();
+
+        let board = store.read_board().unwrap();
+        let claims = store.read_claims().unwrap();
+        assert!(crate::store::derive::next_ticket(&board, &claims).is_none(), "in flight: not offered to a second loop");
+
+        // Wind the marker back past the cutoff, exactly as a crashed agent's would drift.
+        store
+            .mutate(None, |_: &mut Board, claims: &mut Vec<Claim>| -> Result<(), OpError> {
+                claims[0].since = Utc::now() - crate::store::LANDING_STALE_AFTER - chrono::TimeDelta::seconds(1);
+                Ok(())
+            })
+            .unwrap();
+
+        let board = store.read_board().unwrap();
+        let claims = store.read_claims().unwrap();
+        assert_eq!(crate::store::derive::next_ticket(&board, &claims).map(|t| t.id.clone()), Some(id.clone()), "landable again");
+        apply(&store, None, Op::StartLanding { id, agent: "second".into() }).unwrap();
     }
 
     /// The one place the flag deliberately survives: handing the ticket back does not make the feedback go away.

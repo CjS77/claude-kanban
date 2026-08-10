@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
 # merge.sh <branch> — rebase <branch> onto main, fast-forward main, delete the branch.
+#
+# DEPRECATED. The normal way to land a branch is now the board: press Accept on the
+# review card, which clears the work to land, and a running `/kanban:work` loop does
+# exactly what this script does — with an agent that can actually resolve a rebase
+# conflict, and with the card flagged for you when it cannot.
+#
+# It is kept, and still shipped into every project, for the case that flow does not
+# cover: landing a branch with no work loop running, or from a session that only
+# speaks MCP. Accept alone never moves main.
+#
 # Removes the branch's ticket worktree first when it is clean, and refuses only if
 # it has uncommitted changes. On rebase conflicts it stops mid-rebase so you can
 # resolve them by hand.

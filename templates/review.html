@@ -14,6 +14,24 @@
     <button class="join-item btn btn-xs btn-active btn-primary">Review</button>
 </div>
 
+{% if review.landing_blocked %}
+{#- The one state on this pane another click cannot fix on its own. Washed red like the card, and deliberately above
+    everything else — the reason itself is the newest entry in the progress log below. The colour is an inline
+    color-mix rather than a DaisyUI alert variant: `alert-error` is not in the committed Tailwind build. -#}
+<div class="mt-4 p-3 rounded-lg text-sm flex items-start gap-2"
+     style="background-color: color-mix(in oklab, var(--color-base-100) 70%, #ef4444)">
+    <span class="badge badge-error badge-sm shrink-0">⚠</span>
+    <span>A landing attempt could not finish, so nothing moved and the ticket stayed here. The newest progress note
+        says what git refused — resolve it on the branch and press Accept again, which re-arms the landing, or send it
+        back with Request changes.</span>
+</div>
+{% elif review.accepted %}
+<div class="mt-4 p-3 rounded-lg text-sm bg-base-200">
+    ✓ Accepted and waiting to land. A running <code>/kanban:work</code> loop rebases this branch onto the main branch
+    and fast-forwards it in; the card moves to done once the board can prove the code arrived. Nothing else to do.
+</div>
+{% endif %}
+
 <dl class="mt-4 flex flex-col gap-2 text-sm">
     {% if let Some(branch) = review.branch %}
     <div class="flex gap-2 items-baseline">
@@ -33,9 +51,15 @@
         </dd>
     </div>
     {% endif %}
+    {#- What Accept will hand to the loop, from the same gate the loop's own eligibility check applies — so the button
+        is never a surprise. Absent means there is nothing landable here and Accept is a bare judgement call. -#}
+    <div class="flex gap-2 items-baseline">
+        <dt class="opacity-60 shrink-0">On accept</dt>
+        <dd>{% if let Some(branch) = review.branch %}<span class="font-mono break-all">{{ branch }}</span> is cleared to land — the work loop rebases it onto the main branch and fast-forwards
+            {% else %}nothing to land — no branch is recorded, so the card just waits for the board to close it{% endif %}</dd>
+    </div>
     {% if let Some(landing) = review.landing %}
-    {#- The auto-lander's own verdict. Accept needs no such proof, so saying which case this is turns the button from a
-        guess into a decision. -#}
+    {#- The lander's own verdict on whether the code is already in main.  -#}
     <div class="flex gap-2 items-baseline">
         <dt class="opacity-60 shrink-0">Landing</dt>
         <dd>{{ landing }}</dd>
@@ -66,11 +90,13 @@
               placeholder="Review notes / what needs to change…"></textarea>
 
     <div class="flex flex-wrap gap-2 mt-3">
-        {#- Accept closes the card without the proof the auto-lander demands, so it carries the heavier confirm. -#}
+        {#- Accept moves main (via the work loop), so it keeps a confirm — but it is reversible right up until the
+            landing happens, which is why it is nothing like the scare text Discard carries. -#}
         <button class="btn btn-sm btn-primary" hx-post="/ui/ticket/{{ review.id }}/review/accept"
                 hx-include="closest form" hx-target="#detail" hx-swap="innerHTML"
                 hx-confirm="{{ review.accept_confirm }}"
-                title="close this ticket as done and unblock its dependents">Accept</button>
+                title="clear this work to land: /kanban:work rebases the branch onto main and fast-forwards main into it">
+            {% if review.landing_blocked %}Accept again{% else %}Accept{% endif %}</button>
 
         {#- No confirm: sending work back is the reversible verdict, and the round trip is the point of the feature. -#}
         <button class="btn btn-sm btn-warning" hx-post="/ui/ticket/{{ review.id }}/review/changes"

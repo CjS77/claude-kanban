@@ -26,7 +26,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub use claims::{Claim, find as find_claim, remove as remove_claim, upsert as upsert_claim};
+pub use claims::{Claim, ClaimKind, LANDING_STALE_AFTER, find as find_claim, landing_in_flight, remove as remove_claim, remove_landing, upsert as upsert_claim};
 use model::Board;
 
 /// Write a seed file, keeping whatever is already there — `init` seeds defaults, it never overrules a choice.
@@ -400,6 +400,8 @@ mod tests {
             effort: None,
             auto_merge: false,
             changes_requested: false,
+            accepted: false,
+            landing_blocked: false,
             depends_on: vec![],
             notes: vec![],
             external: None,
@@ -642,7 +644,7 @@ mod tests {
                 let mut t = some_ticket("K-1");
                 t.depends_on = vec![TicketId("K-99".into())];
                 board.tickets.push(t);
-                claims.push(Claim { ticket: TicketId("K-1".into()), agent: "x".into(), since: chrono::Utc::now(), path: None });
+                claims.push(Claim { ticket: TicketId("K-1".into()), agent: "x".into(), since: chrono::Utc::now(), path: None, kind: ClaimKind::Work });
                 Ok::<_, StoreError>(())
             })
             .unwrap_err();
@@ -658,7 +660,7 @@ mod tests {
         assert!(!store.claims_path().exists(), "an untouched sidecar is not created");
         store
             .mutate(None, |_, claims| {
-                claims.push(Claim { ticket: TicketId("K-1".into()), agent: "claude".into(), since: chrono::Utc::now(), path: None });
+                claims.push(Claim { ticket: TicketId("K-1".into()), agent: "claude".into(), since: chrono::Utc::now(), path: None, kind: ClaimKind::Work });
                 Ok::<_, StoreError>(())
             })
             .unwrap();

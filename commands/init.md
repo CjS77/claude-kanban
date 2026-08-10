@@ -32,7 +32,9 @@ plugin, so it ends with a working board every time — including when there alre
    reimplement it from memory here. The one thing worth repeating because it bites hardest: **run `serve` in the
    background**, since it blocks until stopped and a foreground call wedges the session.
 
-4. **Tell the user to commit** `.kanban/board.json`, `.kanban/config.json`, and `.kanban/merge.sh` — the last is the
-   manual land helper (`.kanban/merge.sh <branch>` rebases a branch onto main, fast-forwards, and deletes it). Mention
+4. **Tell the user to commit** `.kanban/board.json`, `.kanban/config.json`, and `.kanban/merge.sh` — the last is a
+   deprecated fallback for landing a branch by hand (`.kanban/merge.sh <branch>` rebases onto main, fast-forwards, and
+   deletes it) when no `/kanban:work` loop is running; normally they press **Accept** on the review card instead, which
+   clears the branch to land and the loop does the rest. Mention
    the ⚙ gear in the board's header edits the config later. The rest of `.kanban/` (claims, locks, pid files, landing
    observations) is machine-local and the seeded `.gitignore` already covers it.

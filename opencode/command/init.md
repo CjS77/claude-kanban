@@ -32,8 +32,10 @@ plugin, so it ends with a working board every time — including when there alre
    **`serve` blocks until stopped and this harness has no background shell** — start it detached with `nohup … &` as
    that command shows, never in the foreground.
 
-4. **Tell the user to commit** `.kanban/board.json`, `.kanban/config.json`, and `.kanban/merge.sh` — the last is the
-   manual land helper (`.kanban/merge.sh <branch>` rebases a branch onto main, fast-forwards, and deletes it). Mention
+4. **Tell the user to commit** `.kanban/board.json`, `.kanban/config.json`, and `.kanban/merge.sh` — the last is a
+   deprecated fallback for landing a branch by hand (`.kanban/merge.sh <branch>` rebases onto main, fast-forwards, and
+   deletes it) when no `/kanban:work` loop is running; normally they press **Accept** on the review card instead, which
+   clears the branch to land and the loop does the rest. Mention
    the ⚙ gear in the board's header edits the config later, and that the workflow rules load into sessions once
    `.kanban/` exists (restart opencode after the first init to pick them up). The rest of `.kanban/` (claims, locks,
    pid files, landing observations) is machine-local and the seeded `.gitignore` already covers it.

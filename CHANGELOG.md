@@ -9,6 +9,31 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- **Accept clears the work to land.** The Review pane's Accept button no longer closes a card on the reviewer's word:
+  it marks the ticket `accepted` and leaves it in `review`, and `kanban_next` then surfaces it to `/kanban:work` as a
+  new `action: "land"` — ranked **first**, ahead of rework and any new work — which rebases the branch onto the main
+  branch and fast-forwards main into it. The card reaches `done` the only way any card does, with the landing sweep
+  proving the code arrived. This removes the feature's sharpest edge: accepting used to unblock dependents onto code
+  that was nowhere near main, and now nothing unblocks until the code is provably there.
+
+  The rebase stays out of the binary deliberately. `src/land.rs` asks git questions and moves no refs; resolving a
+  conflict is judgement work over the code, and there is no agent behind a browser click. Handing it to the work loop
+  puts the job where somebody can read the diff — and makes it the *same* procedure `auto_merge` already used, now
+  documented once as *Landing a branch* with two ways in: permission granted ahead of time, or given after the fact.
+
+  When a landing cannot finish, the agent aborts the rebase and calls a new `kanban_block_landing`: the ticket stays
+  in `review` wearing `landing_blocked` — a red card with a `⚠` badge — and the newest note names what git refused and
+  which paths collided. A blocked ticket is no longer offered for landing, so no loop retries the same conflict; only
+  a human puts it back, by resolving it and pressing **Accept again**, which clears the flag and re-arms the landing.
+  Both flags are additive and serde-default to false, so existing boards read unchanged and the schema stays at 2.
+
+  An in-flight landing is visible and interlocked. `kanban_start_landing` takes a marker that renders as a quiet
+  "⟳ … is landing this" and refuses when the ticket is not cleared to land, is flagged, or another worker holds it —
+  so two parallel loops cannot rebase the same branch onto a moving main. It lives in the claims sidecar under a new
+  `ClaimKind` rather than on the ticket: it is machine-local live state, it must never put an owner on a review ticket,
+  and ops can write that file transactionally with the board, which is what lets the marker retire with the landing
+  itself. A marker whose agent died is ignored after 15 minutes, so a crash costs one stalled card rather than a stuck
+  one, and the board says "stalled, it will be retried" instead of hiding it.
 - A **Review** pane on the ticket card, reached by a Details/Review switch on any non-external review ticket: the
   branch, the worktree still on disk (badged when it holds uncommitted changes), the landing sweep's own verdict, the
   progress log, a comment box, and the three verdicts — **Accept**, **Request changes**, **Discard**. Accept closes
@@ -29,6 +54,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   schema stays at 2.
 
 ### Changed
+
+- `.kanban/merge.sh` is **deprecated**, though still shipped and still working. Pressing Accept and letting the work
+  loop land the branch does the same thing with an agent that can resolve a conflict, and flags the card when it
+  cannot. The script is kept for the case that flow doesn't cover: landing a branch with no loop running, or from a
+  session that only speaks MCP — Accept alone never moves main.
 
 - A ticket's worktree is kept through `review` instead of being removed at close-out, and is retired when the ticket
   reaches `done` — landed, or discarded. Review is now something you can review *from*: the code is on disk to read,

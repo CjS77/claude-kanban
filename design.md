@@ -335,6 +335,48 @@ The **Discard button** is the one path to `done` that isn't a landing: `discarde
 retired work never satisfies a dependency, because the code it promised does not exist. The sweep never discards; ambiguity always
 escalates to the human rather than resolving itself.
 
+### Accept: permission to land, not the landing
+
+The Review pane's **Accept** button used to close a card as `done` on the reviewer's word alone — no proof the branch had reached main, so
+accepting work that never landed unblocked its dependents onto code that did not exist. That hazard is gone. Accept now records approval and
+nothing else: the ticket keeps its place in `review` wearing `accepted`, and `kanban_next` surfaces it to a work loop as `action: "land"`,
+which rebases the branch onto the main branch and fast-forwards main into it. The card reaches `done` the only way any card does — the sweep
+proving the code arrived.
+
+**The rebase deliberately does not live in the binary.** It is the same boundary `land.rs` has always drawn: this binary asks git questions
+and never moves a ref, and the one path that writes to the integration branch (`worktree::finish --merge`) is a human's explicit CLI request.
+Resolving a rebase conflict is judgement work over the code, and there is no agent behind a browser click — a binary doing it would either
+guess or refuse everything. Handing the job to the work loop puts it where somebody can actually read the diff, and makes Accept's promise
+honest: the branch *will* land, by the same procedure `auto_merge` already used, with a human's approval attached.
+
+The failure story is the point of the feature. Any conflict the agent cannot resolve unambiguously ends with `git rebase --abort` and
+`kanban_block_landing`: the ticket stays in `review` wearing `landing_blocked` — a red card with a `⚠` badge — and the newest `kanban` note
+names what git refused and which paths collided. A blocked ticket stops being offered for landing, because retrying the same conflict on
+every poll helps nobody; only a human puts it back, by resolving it and pressing **Accept again**, which clears the flag and re-arms the
+landing. That re-arm is why Accept clears `landing_blocked` rather than merely setting `accepted`: without it the flag would be a dead end
+escapable only by sending good work back for rework.
+
+Both flags follow `changes_requested`'s contract exactly — additive, `skip_serializing_if`, schema still 2, absent means false — and clear
+together on any real column change, on landing, on discarding, and on a rework round. A reorder *inside* `review` clears neither: dragging a
+card up the column is not a change of state, and must not silently drop a flag a human still has to act on.
+
+### The landing marker: making an in-flight landing visible
+
+A landing is short but not instant, and a card being rebased right now must not look idle — nor may it be handed to a second work loop, which
+would rebase the same branch onto a moving main. So taking a landing (`kanban_start_landing`) records a marker, and it is a real interlock:
+the op refuses when the ticket is not cleared to land, when it is flagged and waiting on a human, and when another worker already holds it.
+
+The marker lives in the **claims sidecar**, not on the ticket, and is distinguished by a new `ClaimKind`. Three reasons. It is machine-local,
+ephemeral live state, which is exactly what that gitignored file already models. It must not be a *claim*: a review ticket has no owner, and
+`Op::Claim` is defined as the rework path, so it renders as a quiet "⟳ claude is landing this" rather than putting an owner on a review card.
+And ops can write that file transactionally alongside the board — which is what lets the marker retire with the landing that ends it, so the
+success path needs no cleanup call and cannot leak one by forgetting.
+
+Crash safety is the obvious objection to any in-progress flag, and the answer is deliberately the dumbest one that works: a marker older than
+`LANDING_STALE_AFTER` (15 minutes) is ignored, and the ticket becomes landable again. No pids, no heartbeats, no lock files to leak. A
+landing is seconds of git, so anything still marked after that window has died; the cost of being wrong is one duplicated rebase attempt,
+which `--ff-only` makes a no-op. The board says "stalled, it will be retried" rather than hiding it.
+
 ### Auto-merge: evidence for the sweep, not a bypass of it
 
 A ticket (or its epic — the value is derived, `epic.auto_merge || ticket.auto_merge`) can carry `auto_merge`, and then `/kanban:work`
@@ -348,7 +390,9 @@ rule 1 needs nothing but the repo. Delete it first and rule 1 is gone, leaving o
 the move into review now records, so the fallback is armed rather than hypothetical, but it is still a fallback: it proves the landing by
 patch-id, it is machine-local, and a repo whose objects have been gc'd can lose it. Keep to the strongest proof available.
 
-**The merge lives in `commands/work.md`, not in the binary**, and that is a deliberate boundary rather than an omission. `land.rs` only asks
+**The merge lives in `commands/work.md`, not in the binary**, and that is a deliberate boundary rather than an omission — the same one
+**Accept** above leans on, and the two now share one procedure (*Landing a branch*) with two ways in: standing permission granted ahead of
+time, or a human's approval given after the fact. `land.rs` only asks
 questions of git (`is_ancestor`, `cherry`) and writes the board; the sole path that writes to the integration branch
 (`worktree::finish(merge: true)`) is guarded and documented as needing explicit human approval; `pr.rs` states its own mechanics are
 "deliberately dumb: no LLM". Resolving a rebase conflict is judgement work, and a store operation is structurally the wrong place for it.
