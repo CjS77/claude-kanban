@@ -72,6 +72,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - `merge.sh` removes a clean ticket worktree instead of refusing to run. It refused whenever the branch was checked
   out in a linked worktree, which now describes every review ticket; it stops only when that worktree is dirty.
 
+### Fixed
+
+- The diff view's file list stays in place while the diff scrolls. The modal was one scroll box, so a long diff carried
+  the "sticky" TOC off the top with it; the two panes now scroll independently inside a fixed-height frame, and a click
+  on a file entry moves the diff pane alone rather than every scrollable ancestor.
+
 ## [3.1.0] - 2026-08-08
 
 ### Added
