@@ -5,7 +5,7 @@ All notable changes to this project are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.3.0] - 2026-08-15
 
 ### Added
 
@@ -310,6 +310,7 @@ First tagged release, covering the plugin's initial publication.
 - The create-ticket epic dropdown stays in sync with the board.
 - Markdown panes that arrive as top-level swap elements render.
 
+[3.3.0]: https://github.com/CjS77/claude-kanban/compare/v3.2.0...v3.3.0
 [3.2.0]: https://github.com/CjS77/claude-kanban/compare/v3.1.0...v3.2.0
 [3.1.0]: https://github.com/CjS77/claude-kanban/compare/v3.0.0...v3.1.0
 [3.0.0]: https://github.com/CjS77/claude-kanban/compare/v2.7.0...v3.0.0
