@@ -220,7 +220,86 @@ tr.dl-del .diff-ln { background: var(--diff-del-ln-bg); }
     transform: rotate(90deg);
 }
 
+/* Inline review comments (glue.js job 9): the line-number gutters of real code rows are the click target, and the
+ * comment itself lands in a row inserted directly beneath the line it is about — the editor first, then the saved text.
+ * Nothing here is persisted; the comments drain into the review pane's comment box and travel with the verdict. */
+tr.dl-add .diff-ln,
+tr.dl-del .diff-ln,
+tr.dl-ctx .diff-ln {
+    cursor: pointer;
+}
+
+tr.dl-add .diff-ln:hover,
+tr.dl-del .diff-ln:hover,
+tr.dl-ctx .diff-ln:hover {
+    background: var(--diff-comment-hover);
+    color: #ffffff;
+}
+
+tr.diff-comment td {
+    padding: 8px 10px;
+    white-space: normal;
+    background: var(--diff-header-bg);
+    border-top: 1px solid var(--diff-border);
+    border-bottom: 1px solid var(--diff-border);
+}
+
+.diff-comment-box {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    max-width: 64rem;
+}
+
+.diff-comment-input {
+    flex: 1 1 auto;
+    font: inherit;
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--diff-border);
+    background: var(--diff-bg);
+    color: var(--diff-fg);
+    resize: vertical;
+}
+
+.diff-comment-actions {
+    display: flex;
+    flex: 0 0 auto;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.diff-comment-save,
+.diff-comment-cancel,
+.diff-comment-del {
+    font: inherit;
+    padding: 3px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--diff-border);
+    background: var(--diff-bg);
+    color: var(--diff-fg);
+    cursor: pointer;
+}
+
+.diff-comment-save {
+    background: var(--diff-add-ln-bg);
+}
+
+/* The reviewer's own text, kept as typed — the bullet it becomes indents any wrapped lines under the reference. */
+.diff-comment-text {
+    flex: 1 1 auto;
+    padding: 3px 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.diff-comment-del {
+    line-height: 1;
+    padding: 2px 8px;
+}
+
 :root {
+    --diff-comment-hover: #0969da;
     --diff-bg: #ffffff;
     --diff-fg: #1f2328;
     --diff-border: #d0d7de;
@@ -237,6 +316,7 @@ tr.dl-del .diff-ln { background: var(--diff-del-ln-bg); }
 
 @media (prefers-color-scheme: dark) {
     :root {
+        --diff-comment-hover: #1f6feb;
         --diff-bg: #0d1117;
         --diff-fg: #e6edf3;
         --diff-border: #30363d;

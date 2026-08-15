@@ -35,8 +35,11 @@
 
 {#- One form, three submit targets: hx-include pulls the same comment box into whichever verdict is pressed, so the
     buttons can sit above it. They lead the pane, under the switch and under whatever state banner is showing — the
-    progress log below runs to any length, and the verdict is what the reviewer opened this pane to give. -#}
-<form class="mt-4">
+    progress log below runs to any length, and the verdict is what the reviewer opened this pane to give.
+
+    data-ticket is the inline-comment hook: glue.js matches comments buffered in the diff pane to this form and drains
+    them into the comment box below, so whichever verdict is pressed carries them. -#}
+<form class="mt-4" data-ticket="{{ review.id }}">
     <div class="flex flex-wrap gap-2">
         {#- No confirm. Accept is permission for the work loop to land the branch, and that permission is withdrawable
             right up until the landing happens — a dialog in front of the pane's own headline action bought nothing but
@@ -59,7 +62,16 @@
     </div>
 
     <div class="mt-3">
-        <label class="text-sm font-semibold" for="review-comment">Review notes</label>
+        <div class="flex items-baseline justify-between gap-2">
+            <label class="text-sm font-semibold" for="review-comment">Review notes</label>
+            {% if review.can_diff %}
+            {#- The diff is reachable from the detail pane too, but the reviewer's flow starts here — and the diff is
+                where inline comments are written, so the way in belongs beside the box they land in. -#}
+            <button type="button" class="btn btn-xs" hx-get="/ui/ticket/{{ review.id }}/diff" hx-target="#diff-view" hx-swap="innerHTML"
+                    title="the branch's changes against main — click a line number there to comment on it">
+                View diff <span class="htmx-indicator loading loading-spinner loading-xs"></span></button>
+            {% endif %}
+        </div>
         <textarea id="review-comment" name="comment" rows="4" class="textarea w-full mt-1"
                   placeholder="Goes with whichever verdict you press — required for Request changes…"></textarea>
     </div>

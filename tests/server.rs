@@ -711,6 +711,18 @@ async fn the_view_diff_button_and_endpoint_work_without_a_remote() {
     assert!(diff.contains("id=\"f0\"") && diff.contains("href=\"#f0\""), "each file has an anchor the TOC links to: {diff}");
     assert!(diff.contains("<details"), "each file is a collapsible <details>: {diff}");
 
+    // Inline comments (K-46) anchor on these three attributes alone: the ticket, the file, and the line. Nothing reads
+    // them back server-side, so this is the only place their absence would ever be noticed.
+    assert!(diff.contains("data-ticket=\"K-1\""), "the diff names the ticket its comments belong to: {diff}");
+    assert!(diff.contains("data-path=\"f.rs\""), "each file carries its path for the comment reference: {diff}");
+    assert!(diff.contains("data-new=\"2\""), "added lines carry their new-file line number: {diff}");
+    assert!(diff.contains("data-old=\"1\""), "deleted lines carry their old-file line number: {diff}");
+
+    // The review pane is where the comments land, so it offers its own way into the diff and says which ticket it is.
+    let review = body_text(router.clone().oneshot(get("/ui/ticket/K-1/review")).await.unwrap()).await;
+    assert!(review.contains("data-ticket=\"K-1\""), "the verdict form names its ticket: {review}");
+    assert!(review.contains("View diff"), "the review pane offers the diff its comments are written in: {review}");
+
     // A todo ticket has no branch: no button, and the endpoint refuses with a toast rather than an empty modal.
     seed_ticket(&store, "Still todo");
     let html = body_text(router.clone().oneshot(get("/ui/ticket/K-2")).await.unwrap()).await;

@@ -482,6 +482,8 @@ pub struct ReviewTpl {
     pub review: ReviewCtx,
 }
 
+// Not a state machine: each bool is an independent display flag with its own banner or button.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug)]
 pub struct ReviewCtx {
     pub id: String,
@@ -500,13 +502,16 @@ pub struct ReviewCtx {
     pub landing_blocked: bool,
     pub notes: Vec<NoteCtx>,
     pub discard_confirm: String,
+    /// Whether the pane offers its own View diff button — `diff::eligible`, the same predicate the detail pane uses.
+    /// The reviewer's flow starts here, and the diff is where inline comments are written.
+    pub can_diff: bool,
 }
 
 /// The review pane, for a review ticket that is ours to judge. `None` for anything else — a caller rendering this for a
 /// todo ticket, or for a delegated one whose verdict belongs on its issue, is a bug rather than an empty pane.
 ///
-/// The three inputs the views layer cannot compute itself — the worktree path, whether it is dirty, and the landing
-/// verdict — are passed in by the handler, which is free to run subprocesses; views stay pure.
+/// The four inputs the views layer cannot compute itself — the worktree path, whether it is dirty, the landing verdict,
+/// and diff eligibility — are passed in by the handler, which is free to run subprocesses; views stay pure.
 #[must_use]
 pub fn review(
     board: &Board,
@@ -514,6 +519,7 @@ pub fn review(
     worktree_path: Option<String>,
     worktree_dirty: bool,
     landing: Option<String>,
+    can_diff: bool,
 ) -> Option<ReviewTpl> {
     let t = board.ticket(id)?;
     if t.column.id() != ColumnId::Review || t.external.is_some() {
@@ -534,6 +540,7 @@ pub fn review(
             ),
             landing,
             notes: t.notes.iter().map(|n| NoteCtx { at: human_time(n.at), author: n.author.clone(), text: n.text.clone() }).collect(),
+            can_diff,
         },
     })
 }
@@ -543,6 +550,9 @@ pub fn review(
 #[derive(Debug, Template)]
 #[template(path = "diff.html")]
 pub struct DiffTpl {
+    /// Whose diff this is — stamped on the pane so glue.js can file inline comments against the right ticket's review
+    /// pane. Nothing server-side reads it back.
+    pub ticket_id: String,
     pub branch: String,
     pub main: String,
     pub files: Vec<crate::diff::FileDiff>,
@@ -552,11 +562,11 @@ pub struct DiffTpl {
 }
 
 #[must_use]
-pub fn diff(branch: String, main: String, files: Vec<crate::diff::FileDiff>) -> DiffTpl {
+pub fn diff(ticket_id: String, branch: String, main: String, files: Vec<crate::diff::FileDiff>) -> DiffTpl {
     let files_changed = files.len();
     let added = files.iter().map(|f| f.added).sum();
     let deleted = files.iter().map(|f| f.deleted).sum();
-    DiffTpl { branch, main, files, files_changed, added, deleted }
+    DiffTpl { ticket_id, branch, main, files, files_changed, added, deleted }
 }
 
 pub fn detail(board: &Board, claims: &[Claim], id: &crate::store::model::TicketId, can_pr: bool, can_diff: bool) -> Option<DetailTpl> {

@@ -436,6 +436,8 @@ impl KanbanServer {
     /// - `"rework"` — a human reviewed this ticket and sent it back. It is sitting in doing, unclaimed, with its branch
     ///   and worktree intact: claim it, `kanban_worktree_start` (which re-attaches), treat the newest
     ///   `changes requested:` note as the spec for this round, then move it to review again. Ranked above todo work.
+    ///   That note may carry `- path:line — comment` bullets: they were written against the reviewed diff, so each one
+    ///   names the exact line it is about. A bullet marked `(old line)` numbers the file *before* the branch's changes.
     /// - `"implement"` — a ready ticket in todo: build it.
     /// - `"refine"` — a stub: write its spec, don't build it.
     ///

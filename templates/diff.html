@@ -4,11 +4,15 @@
 
     Layout: a file-list TOC on the left beside the diff body, each pane scrolling inside a fixed-height frame so the TOC
     stays put however far the diff scrolls; each file is a <details> so clicking its header collapses the hunks
-    underneath. The anchor links are real hrefs, but glue.js intercepts them to scroll the diff pane alone. -#}
+    underneath. The anchor links are real hrefs, but glue.js intercepts them to scroll the diff pane alone.
+
+    The data-* attributes are the inline-comment feature's anchors: glue.js reads the ticket off the root, the path off
+    the file, and the line number off the clicked row, then writes `path:line — comment` into the review pane's comment
+    box. They exist for that alone — nothing server-side reads them back. -#}
 {% if files.is_empty() %}
 <p class="diff-empty">No changes — <span class="font-mono">{{ branch }}</span> is even with <span class="font-mono">{{ main }}</span>.</p>
 {% else %}
-<div class="diff">
+<div class="diff" data-ticket="{{ ticket_id }}">
     <nav class="diff-toc" aria-label="Changed files">
         <div class="diff-toc-head">
             {{ files_changed }} file{% if files_changed != 1 %}s{% endif %}
@@ -30,7 +34,7 @@
             <span class="diff-add">+{{ added }}</span> <span class="diff-del">−{{ deleted }}</span>
         </div>
         {% for file in files %}
-        <details class="diff-file" id="f{{ loop.index0 }}" open>
+        <details class="diff-file" id="f{{ loop.index0 }}" data-path="{{ file.path }}" open>
             <summary class="diff-file-header">
                 {% if let Some(old) = file.old_path %}<span class="diff-old">{{ old }}</span> <span>→</span> {% endif %}
                 <span class="diff-path">{{ file.path }}</span>
@@ -47,7 +51,7 @@
                     <td class="diff-code">{{ hunk.header }}</td>
                 </tr>
                 {% for line in hunk.lines %}
-                <tr class="{{ line.css }}">
+                <tr class="{{ line.css }}"{% if let Some(n) = line.old_no %} data-old="{{ n }}"{% endif %}{% if let Some(n) = line.new_no %} data-new="{{ n }}"{% endif %}>
                     <td class="diff-ln">{% if let Some(n) = line.old_no %}{{ n }}{% endif %}</td>
                     <td class="diff-ln">{% if let Some(n) = line.new_no %}{{ n }}{% endif %}</td>
                     <td class="diff-code"><code class="hl{% if let Some(l) = file.lang %} language-{{ l }}{% endif %}">{{ line.text }}</code></td>

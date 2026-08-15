@@ -7,6 +7,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- **Inline comments in the diff.** Click any line number in the diff pane and write a note against that line. The
+  comments collect per ticket and drain into the Review pane's comment box as `path:line — text` bullets, so whichever
+  verdict you press carries them: a Request changes note now tells the agent *where* to look, not just what to fix.
+  Deleted lines are quoted by their old-file number and say so, since they have no counterpart in the new file to
+  point at.
+
+  There is deliberately no server side to this. No new routes, no new ops, no stored review state: the diff stays
+  stateless, the ticket note remains the record, and `changes requested:` is already the rework spec `kanban_next`
+  hands the agent — the line references only tell it where to read. Once drained the bullets are ordinary text in the
+  box, so they can be reworded or deleted before the verdict goes out, and nothing reaches the agent unseen. Coming
+  back to a line already commented on replaces its bullet rather than stacking a second one under the same reference,
+  so the box never carries two contradictory remarks about one line. The Review pane also grew its own **View diff**
+  button, since that is where the flow starts and where the comments land.
+
 ### Changed
 
 - The ticket card leads with its actions. Both panes put their button row directly under the Details/Review switch

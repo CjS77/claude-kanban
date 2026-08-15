@@ -484,7 +484,7 @@ pub async fn ticket_diff(State(app): State<AppState>, Path(id): Path<String>) ->
     let id = TicketId(id);
     blocking(&app, move |store| {
         let diff = diff::compute(store, &id).map_err(|e| AppError::bad_request(format!("{e:#}")))?;
-        Ok(Html(views::diff(diff.branch, diff.main, diff.files).render()?))
+        Ok(Html(views::diff(id.to_string(), diff.branch, diff.main, diff.files).render()?))
     })
     .await
 }
@@ -574,13 +574,14 @@ pub async fn review_pane(State(app): State<AppState>, Path(id): Path<String>) ->
 /// and the landing verdict both shell out to git.
 fn rendered_review(store: &Store, id: &TicketId) -> Result<Html<String>, AppError> {
     let board = store.read_board()?;
-    if board.ticket(id).is_none() {
+    let Some(ticket) = board.ticket(id) else {
         return Err(AppError::not_found(&id.to_string()));
-    }
+    };
     let worktree_path = worktree::path_for(store, id).ok().flatten();
     let worktree_dirty = worktree::dirty_worktree(store, id).is_some();
     let landing = crate::land::explain(store, id);
-    let tpl = views::review(&board, id, worktree_path.map(|p| p.display().to_string()), worktree_dirty, landing)
+    let can_diff = diff::eligible(store, ticket);
+    let tpl = views::review(&board, id, worktree_path.map(|p| p.display().to_string()), worktree_dirty, landing, can_diff)
         .ok_or_else(|| AppError::bad_request(format!("{id} is not a review ticket to judge here")))?;
     Ok(Html(tpl.render()?))
 }

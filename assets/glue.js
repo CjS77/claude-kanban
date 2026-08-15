@@ -1,6 +1,6 @@
 /* claude-kanban glue — the only hand-written JavaScript in the project.
  *
- * Owns exactly eight jobs, none of which htmx attributes can express alone:
+ * Owns exactly nine jobs, none of which htmx attributes can express alone:
  *   1. Stamp the board version (X-Board-Version) onto every mutating request — the optimistic-concurrency token, and,
  *      being a custom header, the CSRF guard: cross-site forms can't send it, and cross-origin fetch would need a CORS
  *      preflight the server never grants.
@@ -14,6 +14,8 @@
  *   7. Epic options sync: the create-ticket form sits in the static page shell, so its epic <select> would go stale
  *      as epics come and go — after every swap it re-mirrors the list from the OOB-refreshed filter dropdown.
  *   8. Syntax highlighting: highlight.js over the diff pane's per-line code cells and the markdown panes' code blocks.
+ *   9. Inline diff comments: comment on a line in the diff, and the notes drain into the review pane's comment box as
+ *      `path:line — text` bullets, so the verdict the reviewer presses carries them to the agent.
  */
 (() => {
     "use strict";
@@ -164,6 +166,7 @@
         if (target.id === "detail" && target.innerHTML.trim() !== "") {
             const modal = document.getElementById("detail-modal");
             if (modal && !modal.open) modal.showModal();
+            drainComments(); // the review pane just arrived — hand it whatever was written in the diff (job 9)
         }
         // The diff lands in #diff-view (targeted from the detail pane's button): open its dialog over the detail modal
         // and colour the code now that it is in the DOM.
@@ -221,6 +224,137 @@
             select.value = [...select.options].some((option) => option.value === current) ? current : "";
         });
     };
+
+    // --- 9. inline diff comments ------------------------------------------------------------------------------------
+    // Click a line number in the diff, write a comment against that line, and it collects in a per-ticket buffer that
+    // drains into the review pane's comment box as a `path:line — text` bullet. There is deliberately no server side:
+    // the diff is stateless, the ticket note is the record, and `changes requested:` is already the agent's rework spec
+    // — the line references only tell it where to look. Once drained the bullets are ordinary text in the box, so the
+    // reviewer can reword or delete any of them before pressing a verdict, and the verdict posts them as it always has.
+    const drafts = new Map(); // ticket id -> Map(anchor key -> {path, side, line, text})
+
+    const draftsFor = (ticket) => drafts.get(ticket) || drafts.set(ticket, new Map()).get(ticket);
+    const ticketOf = (el) => el.closest?.(".diff")?.dataset.ticket;
+
+    // Which line a row speaks for. A deleted line has no counterpart in the new file, so it can only be quoted by its
+    // old-file number — and the bullet says so, or the agent would look up the wrong line.
+    const anchorOf = (row) => {
+        const path = row?.closest(".diff-file")?.dataset.path;
+        const side = row?.dataset.new ? "new" : "old";
+        const line = row?.dataset.new || row?.dataset.old;
+        return path && line ? { path, side, line, key: `${path} ${side} ${line}` } : null;
+    };
+
+    // The comment row sits immediately under its line, so a line carries at most one comment: clicking it again reopens
+    // that comment for editing rather than stacking a second one underneath.
+    const commentRowOf = (row) => (row.nextElementSibling?.classList.contains("diff-comment") ? row.nextElementSibling : null);
+    const cells = '<td class="diff-ln"></td><td class="diff-ln"></td>';
+
+    const showSaved = (tr, text) => {
+        tr.innerHTML = `${cells}<td class="diff-code"><div class="diff-comment-box"><div class="diff-comment-text"></div>` +
+            '<button type="button" class="diff-comment-del" title="delete this comment">×</button></div></td>';
+        tr.querySelector(".diff-comment-text").textContent = text; // reviewer's own words — never innerHTML
+    };
+
+    const showEditor = (tr, text) => {
+        tr.innerHTML = `${cells}<td class="diff-code"><div class="diff-comment-box">` +
+            '<textarea class="diff-comment-input" rows="2" placeholder="Comment on this line…"></textarea>' +
+            '<div class="diff-comment-actions"><button type="button" class="diff-comment-save">Save</button>' +
+            '<button type="button" class="diff-comment-cancel">Cancel</button></div></div></td>';
+        const input = tr.querySelector("textarea");
+        input.value = text;
+        input.focus();
+    };
+
+    document.body.addEventListener("click", (e) => {
+        const save = e.target.closest?.(".diff-comment-save");
+        const cancel = e.target.closest?.(".diff-comment-cancel");
+        const del = e.target.closest?.(".diff-comment-del");
+        const gutter = e.target.closest?.(".diff-ln");
+        const tr = (save || cancel || del)?.closest("tr");
+        const anchor = anchorOf(tr ? tr.previousElementSibling : gutter?.parentElement);
+        const ticket = ticketOf(e.target);
+        if (!anchor || !ticket) return;
+
+        if (save) {
+            const text = tr.querySelector("textarea").value.trim();
+            if (text) {
+                draftsFor(ticket).set(anchor.key, { ...anchor, text });
+                showSaved(tr, text);
+                diag(`inline comment on ${anchor.path}:${anchor.line}`);
+            } else {
+                draftsFor(ticket).delete(anchor.key); // saving it empty is how you take one back
+                tr.remove();
+            }
+        } else if (cancel) {
+            const saved = draftsFor(ticket).get(anchor.key);
+            if (saved) showSaved(tr, saved.text);
+            else tr.remove();
+        } else if (del) {
+            draftsFor(ticket).delete(anchor.key);
+            tr.remove();
+        } else if (gutter && /\bdl-(add|del|ctx)\b/.test(gutter.parentElement.className)) {
+            // Only real code rows: the hunk headers and the comment rows' own blank gutters carry no line to anchor to.
+            const row = gutter.parentElement;
+            let box = commentRowOf(row);
+            if (!box) {
+                box = document.createElement("tr");
+                box.className = "diff-comment";
+                row.insertAdjacentElement("afterend", box);
+            }
+            showEditor(box, draftsFor(ticket).get(anchor.key)?.text || "");
+        }
+    });
+
+    // Keys in the editor: ⌘/Ctrl+Enter saves, Escape backs out. Escape must not bubble — the diff sits in a <dialog>,
+    // and the native handler would close the whole modal out from under someone who only meant to drop one comment.
+    document.body.addEventListener("keydown", (e) => {
+        const input = e.target.closest?.(".diff-comment-input");
+        if (!input) return;
+        const saving = (e.metaKey || e.ctrlKey) && e.key === "Enter";
+        if (!saving && e.key !== "Escape") return;
+        e.preventDefault();
+        e.stopPropagation();
+        input.closest("tr").querySelector(saving ? ".diff-comment-save" : ".diff-comment-cancel").click();
+    });
+
+    // Multi-line comments indent under their bullet so the reference line stays scannable in the note.
+    const reference = (d) => `- ${d.path}:${d.line}${d.side === "old" ? " (old line)" : ""} — `;
+    const bullet = (d) => `${reference(d)}${d.text.split("\n").join("\n  ")}`;
+
+    // Drop the bullets a fresh drain supersedes: comment a line, close the diff, then comment that same line again and
+    // the second remark replaces the first rather than stacking a contradictory pair under one reference. Only the
+    // matching bullet and the lines indented under it go — prose, and bullets about other lines, stay put.
+    const withoutSuperseded = (text, fresh) => {
+        const stale = fresh.map(reference);
+        let dropping = false;
+        const kept = text.split("\n").filter((line) => {
+            if (stale.some((ref) => line.startsWith(ref))) {
+                dropping = true;
+                return false;
+            }
+            if (dropping && line.startsWith("  ")) return false;
+            dropping = false;
+            return true;
+        });
+        return kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+    };
+
+    // Drain into whichever review pane is open, appending below anything already typed there. Every route to a verdict
+    // passes through this pane, so nothing written in the diff can reach the agent without the reviewer seeing it first.
+    const drainComments = () => {
+        const ticket = document.querySelector("#detail form[data-ticket]")?.dataset.ticket;
+        const box = document.getElementById("review-comment");
+        const pending = ticket && drafts.get(ticket);
+        if (!box || !pending?.size) return;
+        const fresh = [...pending.values()].sort((a, b) => a.path.localeCompare(b.path) || Number(a.line) - Number(b.line));
+        box.value = [withoutSuperseded(box.value, fresh), fresh.map(bullet).join("\n")].filter(Boolean).join("\n\n");
+        drafts.delete(ticket);
+        diag(`drained ${fresh.length} inline comment(s) into ${ticket}'s review box`);
+    };
+
+    // Closing the diff over an already-open review pane is the other way back to the verdict buttons.
+    document.getElementById("diff-modal")?.addEventListener("close", drainComments);
 
     // htmx calls this once per swapped-in element (and once for body on load): wire up whatever arrived.
     htmx.onLoad((el) => {
