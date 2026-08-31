@@ -63,9 +63,10 @@ loop after it):
    tickets whose branches have reached local main, so **use the `version` it returns** for the claim — the sweep may
    have advanced the board.
 2. **Claim** — `kanban_claim` the ticket. A pure board mutation; git is untouched.
-   **Then check `model` and `effort` on the ticket.** If either is set, hand the ticket to a subagent instead of working
-   steps 3–7 — see **Model and effort** below — then close it out at step 8 as usual. If both are absent (the common
-   case), carry straight on.
+   **Then resolve the model and effort.** The effective model is the ticket's own `model`, else the board's
+   `implement_model` (this is `implement`/`rework` work), else nothing. If that resolves to a model, or the ticket
+   names an `effort`, hand the ticket to a subagent instead of working steps 3–7 — see **Model and effort** below —
+   then close it out at step 8 as usual. Only when neither resolves do you carry straight on and work it yourself.
 3. **Start** — `kanban_worktree_start`. Supply a `slug` yourself: a short kebab-case digest of the title
    (2–3 words, e.g. "Add authorization based on OAuth from Google" → `google-oauth`) beats the mechanical default.
 4. **Work** — `cd` into the reported worktree path and stay there for the ticket's lifetime. Read the ticket's `body` as
@@ -105,8 +106,9 @@ tickets in flight; a refinement counts as one worker, an implementation counts a
    sequential loop. Never let subagents race `kanban_next`: claim first, then delegate. (Claims are CAS-guarded by
    `expected_version` and refused when already claimed, so even a race only costs a re-read and retry.)
 2. **Delegate** — launch one subagent per claimed ticket via the task tool, passing the ticket id, its full `body`
-   as the spec, and the action. Pick the subagent from the ticket's `model` and `effort` — see **Model and effort**
-   below; with neither set, use the `general` subagent. Issue independent task calls together in a single message so
+   as the spec, and the action. Pick the subagent from the effective model (the ticket's own `model`, else the board's
+   role default for that action) and the ticket's `effort` — see **Model and effort** below; with neither resolving,
+   use the `general` subagent. Issue independent task calls together in a single message so
    they run concurrently. Every subagent starts in the **main checkout** — never inside another ticket's worktree.
    - `implement` → the subagent runs `kanban_worktree_start` (tell it to supply a short kebab-case `slug`), `cd`s into
      the reported worktree and stays there, works the spec, commits logical chunks, `kanban_note`s progress, runs
@@ -144,20 +146,31 @@ what needs discipline is the policy above: one claimer, one board-writer, subage
 
 A ticket can name what its work is worth running at: `model` (one of the board's configured models, or free text) and
 `effort` (`low` / `medium` / `high` / `xhigh` / `max`). Both are optional and usually absent — absent means "inherit",
-i.e. exactly today's behaviour.
+i.e. exactly today's behaviour. The board can also name a **role default** for tickets that say nothing, split by what
+the work is: `implement_model` covers `implement` and `rework`, `refine_model` covers `refine`.
+
+So the effective model for a ticket is: **its own `model`, else the role default for its action, else inherit.** A
+ticket's own `model` always wins. `effort` is unaffected and only ever comes off the card. Landing is never affected:
+it runs in the main checkout, in this session, and is never delegated.
 
 {{KANBAN_MODELS}}
 
 You cannot change your own model or reasoning settings mid-session, so the only way to honour either dial is to
-dispatch the ticket to a subagent. Read both fields off the ticket and pick:
+dispatch the ticket to a subagent. Resolve the model first, then read `effort` off the ticket and pick:
 
-| `model` | `effort` | Dispatch |
-|---------|----------|----------|
-| absent | absent | Work it yourself (sequential loop), or the `general` subagent (parallel loop). Nothing changes. |
-| absent | set | task tool with the `kanban-effort-<level>` subagent. |
+| effective `model` | `effort` | Dispatch |
+|-------------------|----------|----------|
+| none | absent | Work it yourself (sequential loop), or the `general` subagent (parallel loop). Nothing changes. |
+| none | set | task tool with the `kanban-effort-<level>` subagent. |
 | in the table above | absent | task tool with the `kanban-model-<slug>` subagent. |
 | in the table above | set | task tool with the `kanban-model-<slug>-<level>` subagent. |
 | anything else | either | No agent can run that model — see below. |
+
+The role defaults resolve through exactly the same agents: the block above names the agent each one maps to, because a
+role default is injected into the pinned set like any configured model. The consequence worth stating plainly: with an
+`implement_model` set, **even a ticket naming nothing is delegated**, since a session cannot change its own model
+mid-run. That costs the sequential loop its in-session visibility — the same trade a per-ticket `model` already
+makes, now as the default rather than the exception.
 
 These subagents ship with this plugin. The `kanban-effort-*` five carry their level as a `reasoningEffort` model
 option in their definitions — the only place this harness lets effort be set, since the task tool takes no effort
@@ -165,7 +178,7 @@ parameter — and pin no model, so each inherits the session's. The `kanban-mode
 model their name carries, with the same effort levels as suffixes. `max` maps to `xhigh`, the highest value providers
 accept; when a ticket asks for `max`, note the mapping (the `-max` agent names still exist, carrying `xhigh`).
 
-**A `model` outside the table above cannot be honoured**: the task tool takes no model override, and only configured
+**A role default or `model` outside the table above cannot be honoured**: the task tool takes no model override, and only configured
 `provider/model` entries get pinned agents — both the agents and the table freeze at session start, so a `models`
 edit in `.kanban/config.json` needs an opencode restart. Dispatch by `effort` alone (or work it yourself when only
 `model` is set) and `kanban_note` what was requested versus what actually ran. If the model genuinely matters, tell
@@ -174,7 +187,9 @@ a session on that model and run `/kanban:work <ticket-id>` there; a ticket-id ar
 
 **Never silently ignore either field.** If you dispatch a ticket at anything other than what it asked for — a level
 this harness maps down, a model it cannot switch to, a fallback you chose — `kanban_note` what was requested versus
-what actually ran, and say so in the end-of-loop summary. A dial that lies about being applied is worse than no dial.
+what actually ran, and say so in the end-of-loop summary. A dial that lies about being applied is worse than no dial. This
+covers the role defaults too: a board that asked for an `implement_model` it could not get deserves to hear about it
+just as loudly as a card that did.
 
 ## Landing a branch
 
@@ -281,7 +296,8 @@ accepting. That sends the card back to the top of `doing`, unclaimed, with its b
 dispatch is the ask. Somebody is blocked on near-finished code, and its worktree already exists.
 
 1. `kanban_claim` the ticket. The card is owned by the reviewer but worked by nobody, so the claim simply re-owns it to
-   you — this is the one `doing` state any agent may claim.
+   you — this is the one `doing` state any agent may claim. Rework is implementation work, so it resolves its model the
+   same way step 2 of the loop does: the ticket's own `model`, else `implement_model`.
 2. `kanban_worktree_start` — it re-attaches to the existing `k-<n>/…` branch and the worktree that was kept through
    review; your previous commits are all there.
 3. **The newest `changes requested:` note is the spec for this round.** Read it, address exactly it, commit — and if the
@@ -299,6 +315,10 @@ A stub is a spec to write, not code to build. When `kanban_next` says `action: "
 1. `kanban_claim` it — the card sits pink in `doing` while you write, so the human sees refinement in flight.
 2. **No worktree.** Refinement produces a spec, not commits; stay in the main checkout and touch nothing.
 3. Research the codebase until you can write a precise, implementable spec: what to change, where, how to verify.
+   **Check the effective model first** — the stub's own `model`, else the board's `refine_model`. If one resolves,
+   this research is a subagent's job, not yours: dispatch it exactly as **Model and effort** describes, with the
+   parallel loop's refine contract (it researches and returns the spec text, a sharper title, and any splits; it makes
+   no board writes and creates no worktree). You make the `kanban_refine` call with what it returns.
 4. `kanban_refine` with the fleshed-out `body` (and a sharper `title` if you found one). If the stub is really several
    units of work, pass `split_tickets`/`split_epics` in the same call — it is atomic. The tool lands everything in
    `review`, returns the card to the top of `todo`, and drops your claim.
@@ -308,9 +328,9 @@ A stub is a spec to write, not code to build. When `kanban_next` says `action: "
 
 - Only `ready` (implement) or `stub` (refine), unblocked, unclaimed, non-external tickets. Never touch `draft`
   tickets at all.
-- A ticket's `model`/`effort` is the human's instruction, not a suggestion to weigh. Honour it or report that you
-  couldn't — never substitute your own judgement about what a ticket deserves, and never set these fields on tickets
-  you create unless the user asked for them.
+- A ticket's `model`/`effort`, and the board's `implement_model`/`refine_model`, are the human's instruction, not a
+  suggestion to weigh. Honour them or report that you couldn't — never substitute your own judgement about what a
+  ticket deserves, and never set these fields on tickets you create unless the user asked for them.
 - `auto_merge` and **Accept** are both the human's permission to move their integration branch, and there is no undo
   once main has moved. Never set `auto_merge` on tickets you create unless the user explicitly asked for it, and never
   land a branch that carries neither — an unaccepted, unflagged branch is reported and left in review for them.
