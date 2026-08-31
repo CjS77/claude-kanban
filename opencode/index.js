@@ -62,15 +62,26 @@ const exists = (p) =>
     () => false,
   )
 
-// The board's configured model vocabulary — `models` in `.kanban/config.json`, `[]` when absent. The Rust side treats
-// a malformed config as a loud error; here silence is right, because the plugin loads in every project, board or not,
-// and must never take a session down with it.
-async function readModels(project) {
+// The board's model configuration — `models`, `implement_model` and `refine_model` in `.kanban/config.json`. The Rust
+// side treats a malformed config as a loud error; here silence is right, because the plugin loads in every project,
+// board or not, and must never take a session down with it.
+//
+// The two role defaults answer "what model works a ticket that names none" — the first for implementing and reworking,
+// the second for refining a stub. They need not appear in `models`: that list is the vocabulary a *ticket* draws on,
+// while these are the board's own fallback, so they are unioned into the dispatchable set below rather than looked up
+// in it.
+const str = (v) => (typeof v === "string" && v.trim() ? v.trim() : null)
+
+async function readModelConfig(project) {
   try {
     const config = JSON.parse(await readFile(path.join(project, ".kanban", "config.json"), "utf8"))
-    return Array.isArray(config.models) ? config.models.filter((m) => typeof m === "string") : []
+    return {
+      models: Array.isArray(config.models) ? config.models.filter((m) => typeof m === "string") : [],
+      implement: str(config.implement_model),
+      refine: str(config.refine_model),
+    }
   } catch {
-    return []
+    return { models: [], implement: null, refine: null }
   }
 }
 
@@ -97,26 +108,45 @@ export const KanbanPlugin = async ({ directory, worktree }) => {
       config.mcp["kanban"] ??= { type: "local", command: [launcher, "mcp"], enabled: true }
 
       // Only entries with a provider/ prefix are dispatchable: an opencode model ref is provider/model,
-      // so a bare alias ("opus") can get no pinned agent and falls to work.md's unconfigured-model path.
-      const vocabulary = await readModels(project)
-      const dispatchable = vocabulary.filter((m) => m.includes("/"))
-      const undispatchable = vocabulary.filter((m) => !m.includes("/"))
+      // so a bare alias ("opus") can get no pinned agent and falls to work.md's unconfigured-model
+      // path. The role defaults join the vocabulary here — they are dispatch targets like any other, and a board may
+      // name one without listing it as a ticket-facing choice.
+      const { models: vocabulary, implement, refine } = await readModelConfig(project)
+      const named = [...vocabulary, ...[implement, refine].filter(Boolean)]
+      const dispatchable = [...new Set(named.filter((m) => m.includes("/")))]
+      const undispatchable = [...new Set(vocabulary.filter((m) => !m.includes("/")))]
 
       // The {{KANBAN_MODELS}} block for work.md: the model → agent table this session's injected agents
       // answer to, frozen at the same moment they are injected — self-consistent by construction, stale
       // together after a config edit until restart. No table when nothing is dispatchable: an empty one
       // would invite guessed agent names.
-      const modelBlock = dispatchable.length
-        ? "This board's configured models and their pinned agents (`models` in `.kanban/config.json`, frozen at " +
-          "session start — a config edit needs an opencode restart):\n\n" +
-          "| ticket `model` | `effort` absent | `effort` set |\n|---|---|---|\n" +
-          dispatchable.map((m) => `| \`${m}\` | \`kanban-model-${slug(m)}\` | \`kanban-model-${slug(m)}-<level>\` |`).join("\n") +
-          (undispatchable.length
-            ? `\n\nConfigured entries without a provider prefix (${undispatchable.map((m) => `\`${m}\``).join(", ")}) ` +
-              "are not addressable on this harness and have no agents — treat them as unconfigured."
-            : "")
-        : "No `models` are configured in `.kanban/config.json`, so no model-pinned agents exist this session — " +
-          "treat every ticket `model` as unconfigured."
+      // A role default the harness cannot switch to is reported, never dropped: the loop has to be able to say what
+      // it was asked for versus what it actually ran.
+      const role = (model, label, what) =>
+        !model
+          ? `No \`${label}\` is configured, so ${what} inherits the session's model.`
+          : model.includes("/")
+            ? `\`${label}\` is \`${model}\` — ${what} goes to \`kanban-model-${slug(model)}\`, or ` +
+              `\`kanban-model-${slug(model)}-<level>\` when the ticket also names an \`effort\`.`
+            : `\`${label}\` is \`${model}\`, which carries no provider prefix and is **not addressable on this ` +
+              `harness** — ${what} inherits the session's model instead. Say so on the card when it happens.`
+
+      const modelBlock =
+        (dispatchable.length
+          ? "This board's configured models and their pinned agents (`models` in `.kanban/config.json`, frozen at " +
+            "session start — a config edit needs an opencode restart):\n\n" +
+            "| ticket `model` | `effort` absent | `effort` set |\n|---|---|---|\n" +
+            dispatchable.map((m) => `| \`${m}\` | \`kanban-model-${slug(m)}\` | \`kanban-model-${slug(m)}-<level>\` |`).join("\n") +
+            (undispatchable.length
+              ? `\n\nConfigured entries without a provider prefix (${undispatchable.map((m) => `\`${m}\``).join(", ")}) ` +
+                "are not addressable on this harness and have no agents — treat them as unconfigured."
+              : "")
+          : "No `models` are configured in `.kanban/config.json`, so a ticket naming a model has no pinned agent this " +
+            "session — treat every ticket `model` as unconfigured.") +
+        "\n\nThe board's **role defaults** — the model that works a ticket naming none of its own. A ticket's own " +
+        "`model` always wins over these:\n\n" +
+        `- ${role(implement, "implement_model", "implementing or reworking a ticket")}\n` +
+        `- ${role(refine, "refine_model", "refining a stub")}`
 
       config.command ??= {}
       for (const [name, file] of Object.entries(COMMANDS)) {
