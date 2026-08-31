@@ -69,9 +69,17 @@ loop after it):
    then close it out at step 8 as usual. Only when neither resolves do you carry straight on and work it yourself.
 3. **Start** — `kanban_worktree_start`. Supply a `slug` yourself: a short kebab-case digest of the title
    (2–3 words, e.g. "Add authorization based on OAuth from Google" → `google-oauth`) beats the mechanical default.
-4. **Work** — `cd` into the reported worktree path and stay there for the ticket's lifetime. Read the ticket's `body` as
-   the spec. Commit after each logical chunk — the worktree may live on volatile /tmp, and commits are what survive; but
-   don't spam micro-commits. Subtasks that emerge mid-ticket come in two kinds — never confuse them:
+   **Keep the `path` it returns — call it `$WT`. Every shell command for the rest of this ticket is rooted at it.**
+   Prove it before you write anything: `git -C <path> branch --show-current` must name this ticket's branch, and a
+   bare `pwd` must *not* be that path. That mismatch is the normal state on this harness, not a fault — it is why the
+   rest of these steps spell the path out.
+4. **Work** — **root every command at the worktree path**, on every call: `cd <path> && <command>`, or `git -C <path>
+   …` for git. This harness gives you no working directory that survives between tool calls, so a single `cd` does
+   *not* stick — the next command is back in the main checkout, silently working the wrong tree. The same goes for
+   file paths: read and edit through the absolute worktree path, never a bare relative one, or you will edit the main
+   checkout's copy of the file. Read the ticket's `body` as the spec. Commit after each logical chunk — the worktree
+   may live on volatile /tmp, and commits are what survive; but don't spam micro-commits. Subtasks that emerge
+   mid-ticket come in two kinds — never confuse them:
    - **Companion** (extra work you'll do *now*, as part of this ticket's session): create the ticket WITHOUT
      `depends_on` this one (claiming a blocked ticket is refused, and the work rides this same branch anyway), claim
      it, work it **in this same worktree on this same branch** — never create a worktree from inside a worktree —
@@ -82,17 +90,25 @@ loop after it):
      needs. Don't work it now.
 5. **Note** — `kanban_note` progress at meaningful moments: what landed, what's left, anything surprising. The human
    watches these appear live on the card.
-6. **Verify** — run the project's tests/build before calling anything done. A ticket whose tests fail is not done:
-   note the failure and either fix it or release the ticket with a note explaining the blocker.
-7. **Commit everything** — the worktree is **kept** through review: the human reads the code there, and a rework round
-   re-attaches to it instantly. So there is no `kanban_worktree_finish` at close-out — the board removes the worktree
+6. **Verify** — run the project's tests/build before calling anything done, **rooted at the worktree like everything
+   else** (`cd <path> && cargo test`, not a bare `cargo test`). This is the step the missing cwd punishes hardest: an
+   unrooted test run passes against the main checkout's code and tells you nothing about your branch. A ticket whose
+   tests fail is not done: note the failure and either fix it or release the ticket with a note explaining the
+   blocker.
+7. **Commit everything** — `git -C <path> add -A && git -C <path> commit`, never a bare `git commit`: unrooted, it
+   runs in the main checkout, reports "nothing to commit", and leaves every change you made stranded in an uncommitted
+   worktree. Confirm with `git -C <path> log --oneline` that your commits are actually on the ticket branch.
+   The worktree is **kept** through review: the human reads the code there, and a rework round re-attaches to it
+   instantly. So there is no `kanban_worktree_finish` at close-out — the board removes the worktree
    itself once the ticket lands. What you must do is leave nothing uncommitted: step 8's move refuses while the
    worktree is dirty, and that worktree may sit on volatile /tmp where only commits survive.
 8. **Close out** — `kanban_move` the ticket to `review`. Done is not yours to declare: the board lands review tickets
    in `done` automatically once their branch (or PR) is merged into the **local** main branch, and dependencies
    unblock only then. Report the branch name prominently: integrating it is the user's explicit next step. With
-   `--push`: `git push -u origin <branch>` and `gh pr create` (title from the ticket, body summarising the work and
-   linking the ticket id), then include the PR URL in the report — you don't record the PR on the board, the server's
+   `--push`: `cd <path> && git push -u origin <branch>` and `cd <path> && gh pr create` (title from the ticket, body
+   summarising the work and linking the ticket id) — rooted like everything else, because `gh pr create` infers its
+   head branch from the working directory and would otherwise open a PR for the main checkout's branch. Then include
+   the PR URL in the report — you don't record the PR on the board, the server's
    poller discovers it by branch. **Then, if `kanban_next` reported `auto_merge: true` for this ticket, land the branch
    yourself — see **Landing a branch** below.** Without that flag the branch waits in review for the user to accept it,
    which is what puts it back in front of this loop as `action: "land"`.
@@ -110,9 +126,11 @@ tickets in flight; a refinement counts as one worker, an implementation counts a
    role default for that action) and the ticket's `effort` — see **Model and effort** below; with neither resolving,
    use the `general` subagent. Issue independent task calls together in a single message so
    they run concurrently. Every subagent starts in the **main checkout** — never inside another ticket's worktree.
-   - `implement` → the subagent runs `kanban_worktree_start` (tell it to supply a short kebab-case `slug`), `cd`s into
-     the reported worktree and stays there, works the spec, commits logical chunks, `kanban_note`s progress, runs
-     the tests/build, and commits everything. It must NOT call `kanban_worktree_finish` — the worktree is kept through
+   - `implement` → the subagent runs `kanban_worktree_start` (tell it to supply a short kebab-case `slug`), then
+     **roots every shell command at the path it returns** — `cd <path> && …` or `git -C <path> …`, on every call,
+     because no working directory survives between tool calls here. Tell it so explicitly: this is the single most
+     common way a ticket silently fails on this harness. It works the spec, commits logical chunks, `kanban_note`s
+     progress, runs the tests/build **in the worktree**, and commits everything there. It must NOT call `kanban_worktree_finish` — the worktree is kept through
      review and the board retires it on landing. It reports back: branch name, what landed, and whether verification
      passed. It does NOT move the card — closing out is yours.
    - `refine` → the subagent researches the codebase (no worktree, no commits, no board writes) and returns the
@@ -299,7 +317,8 @@ dispatch is the ask. Somebody is blocked on near-finished code, and its worktree
    you — this is the one `doing` state any agent may claim. Rework is implementation work, so it resolves its model the
    same way step 2 of the loop does: the ticket's own `model`, else `implement_model`.
 2. `kanban_worktree_start` — it re-attaches to the existing `k-<n>/…` branch and the worktree that was kept through
-   review; your previous commits are all there.
+   review; your previous commits are all there. Its `path` governs this round exactly as in step 4: root every command
+   at it, and never assume a working directory carried over.
 3. **The newest `changes requested:` note is the spec for this round.** Read it, address exactly it, commit — and if the
    ticket has an open PR, push the branch so the PR updates.
 4. `kanban_move` back to `review`, which clears the flag. Leave the worktree in place, exactly as at any other

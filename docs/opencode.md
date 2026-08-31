@@ -68,6 +68,13 @@ same board under the other, and sessions from both can share it. What differs is
   `reasoningEffort` model option, passed through to whatever provider the session runs on. `max` maps to `xhigh`
   (the highest value providers accept), and providers that don't support the option ignore it — either way the loop
   notes on the card when a dial was mapped rather than applied exactly.
+- **No working directory survives between shell calls, so ticket commands name their worktree.** Claude Code's Bash
+  tool keeps its cwd across calls, so its work command can say "`cd` into the worktree and stay there". Here the next
+  command is back in the project root, which would silently run `git commit` and the test suite against the main
+  checkout while the edits landed in the worktree — the branch ends up empty and the card cannot close out. The
+  opencode work command therefore roots every ticket command explicitly (`cd <path> && …`, or `git -C <path> …`) and
+  has the subagent prove the worktree branch before it writes anything. It is the one place the two command files
+  deliberately differ in procedure rather than wording.
 - **`serve` runs via `nohup`.** opencode's shell tool has no background mode, so `/kanban:open` starts the server
   detached (`nohup … &`) and reads the URL back from a log file. The server outlives the opencode session either
   way; stop it with the pid recorded in `.kanban/serve.pid`.

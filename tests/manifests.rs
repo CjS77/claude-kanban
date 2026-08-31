@@ -153,6 +153,21 @@ fn the_opencode_commands_drive_the_binary_through_the_launcher() {
         assert!(body.contains("description:"), "{rel} must carry a description");
         assert!(body.contains("kanban_kanban_"), "{rel} must explain opencode's server-name tool prefix");
     }
+    // No cwd survives between shell calls on this harness, so the work command must root ticket commands at the
+    // worktree path rather than telling the agent to cd into it once. See docs/opencode.md.
+    let work = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("opencode/command/work.md")).unwrap();
+    assert!(
+        work.contains("git -C <path>"),
+        "opencode/command/work.md must root git at the worktree path — a bare git command runs in the main checkout"
+    );
+    assert!(
+        work.contains("cd <path> && "),
+        "opencode/command/work.md must show the rooted prefix form for non-git commands"
+    );
+    assert!(
+        !work.contains("`cd` into the reported worktree path and stay there"),
+        "opencode/command/work.md must not tell the agent to cd once — that wording assumes a cwd this harness drops"
+    );
     let work = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("opencode/command/work.md")).unwrap();
     assert!(work.contains("{{KANBAN_MODELS}}"), "work.md must carry the placeholder index.js fills with the model dispatch table");
 }

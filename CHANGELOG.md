@@ -28,6 +28,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   refine contract, with the orchestrator still making the `kanban_refine` call. The cost, stated plainly: with an
   `implement_model` set, every ticket is worked by a subagent, because a session cannot change its own model mid-run.
 
+### Fixed
+
+- **opencode: ticket work ran in the main checkout instead of the worktree.** The opencode work command told the agent
+  to `cd` into its worktree and stay there — wording inherited from Claude Code, whose Bash tool keeps its working
+  directory between calls. opencode's does not, so the next command was back in the project root: edits landed in the
+  worktree (they carry absolute paths) while `git commit` and the test run went to the main checkout. The branch ended
+  up with no commits, the tests reported green about code that was never touched, and the only symptom was
+  `kanban_move to=review` refusing over a dirty worktree at the very end — after the whole ticket had been worked.
+
+  Every ticket-lifetime command in `opencode/command/work.md` is now rooted at the worktree path explicitly
+  (`cd <path> && …`, or `git -C <path> …`), including the test run, the commits, and `gh pr create`, which infers its
+  head branch from the working directory and would otherwise have opened a PR for the main checkout's branch. The
+  subagent also proves the worktree branch before writing anything. A manifest test pins the wording so it cannot
+  regress, and `docs/opencode.md` records it as a harness difference. `commands/work.md` is unchanged: its `cd`-once
+  wording is correct for Claude Code.
+
 ## [3.3.0] - 2026-08-15
 
 ### Added
