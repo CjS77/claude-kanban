@@ -458,6 +458,33 @@ the orchestrator's per-call model override still wins. `/kanban:work` reads the 
 `effort`; only `hooks`, `mcpServers` and `permissionMode` are stripped for security, which is why they can live in the
 plugin rather than being generated into the user's `.claude/agents/`.)
 
+### Role defaults: what works a ticket that names nothing
+
+The per-ticket dials answer "this card deserves something different". They cannot answer "code on this board is
+written by the cheap fast model and specs by the strong one", which is a property of the *work*, not of any one card.
+That is `implement_model` and `refine_model` in `.kanban/config.json`: the model for a ticket carrying none of its
+own, split by action — the first covers `implement` and `rework`, the second covers `refine`. The effective model is
+**the ticket's own `model`, else the role default for its action, else inherit**, resolved on the read side like every
+other derived fact.
+
+Three decisions worth recording:
+
+- **They live on the board, not in either harness's own config.** Claude Code's Agent tool takes a per-call `model`
+  and opencode's pinned agents take one in their definition, so a board-level key is honourable on both — putting it
+  in `opencode.json` would have made it an opencode-only feature for no gain. It also has to be full-stack: the
+  settings pane writes `config.json` whole-file, so a key `Config` does not carry is destroyed on the next save.
+- **They need no new agents.** A role default substitutes into the existing dispatch table — the `model absent` rows
+  stop meaning "inherit" and start naming the default — so opencode routes it through the same `kanban-model-*`
+  agents the per-ticket path uses. `index.js` unions the two keys into its dispatchable set rather than looking them
+  up in `models`: that list is what a *ticket* may name, and a board may want a default it never offers as a choice.
+- **Refinement becomes delegable.** Sequential-loop refinement was the one path that never consulted `model` at all;
+  `refine_model` gives it the parallel loop's existing refine contract — the subagent researches and returns spec
+  text, the orchestrator still makes the `kanban_refine` call. Landing is untouched, and always will be: it runs in
+  the main checkout, in the orchestrator's session, and is never delegated.
+
+The cost, stated where the docs state it: with an `implement_model` set, **every** ticket is worked by a subagent, so
+the sequential loop loses its in-session visibility as a matter of course rather than as an exception.
+
 One consequence worth stating plainly: a ticket that names either field is **always** worked by a subagent, even at
 `max_workers: 1`, because a session cannot change its own model or effort mid-run. That is the whole reason the fields
 are dispatch instructions rather than session settings. Tickets naming neither — the overwhelming majority — are worked

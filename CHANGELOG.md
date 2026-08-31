@@ -5,6 +5,29 @@ All notable changes to this project are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Role-default models: `implement_model` and `refine_model`.** Two new keys in `.kanban/config.json` (and in the
+  settings pane, under Models) naming the model that works a ticket carrying none of its own — the first for
+  implementing and reworking, the second for refining a stub. The per-ticket `model` dial answers "this card deserves
+  something different"; these answer "code on this board is written by one model and specs by another", which is a
+  property of the work rather than of any one card. A ticket's own `model` always wins, `effort` is unaffected, and
+  landing is never delegated. Absent means inherit, so a board that sets neither behaves exactly as before.
+
+  No new agents on either harness: a role default substitutes into the existing dispatch table, so Claude Code passes
+  it as the Agent tool's per-call `model` and opencode routes it through the same `kanban-model-*` agents the
+  per-ticket path already uses. The opencode plugin unions both keys into its dispatchable set, so a role default gets
+  its pinned agents without also having to be listed in `models` — that list is the vocabulary a *ticket* draws on,
+  while these are the board's own fallback. A role default the harness cannot switch to (no `provider/` prefix on
+  opencode) is named as unaddressable in the dispatch table rather than dropped.
+
+  Refinement gains a dispatch path it never had: sequential-loop refinement was the one place `model` was never
+  consulted at all, and a `refine_model` now sends a stub's research to a subagent under the parallel loop's existing
+  refine contract, with the orchestrator still making the `kanban_refine` call. The cost, stated plainly: with an
+  `implement_model` set, every ticket is worked by a subagent, because a session cannot change its own model mid-run.
+
 ## [3.3.0] - 2026-08-15
 
 ### Added

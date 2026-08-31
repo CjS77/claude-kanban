@@ -58,6 +58,12 @@ same board under the other, and sessions from both can share it. What differs is
   and notes the deviation on the card. The fix when the model matters: add it to `models` (as `provider/model`) and
   restart opencode, or start a session on that model and run `/kanban:work <ticket-id>` there — a ticket-id argument
   works that one ticket and ends.
+- **The board's role defaults pick the model for tickets that name none.** `implement_model` and `refine_model` in
+  `.kanban/config.json` (or the settings pane, under Models) say what works a card that carries no `model` of its
+  own — the first for implementing and reworking, the second for refining a stub. They get pinned agents exactly like
+  a `models` entry does, and need not be listed in `models` themselves: that list is the vocabulary a *ticket* draws
+  on, while these are the board's fallback. A ticket's own `model` always wins. Setting an `implement_model` means
+  even an unadorned ticket is delegated to a subagent, since a session cannot change its own model mid-run.
 - **Per-ticket `effort` maps to `reasoningEffort`.** Each `kanban-effort-<level>` subagent carries its level as a
   `reasoningEffort` model option, passed through to whatever provider the session runs on. `max` maps to `xhigh`
   (the highest value providers accept), and providers that don't support the option ignore it — either way the loop
@@ -72,6 +78,37 @@ same board under the other, and sessions from both can share it. What differs is
 
 Overriding any injected piece is supported: an `mcp.kanban`, `command["kanban:work"]`, `agent["kanban-effort-…"]`,
 or `agent["kanban-model-…"]` entry you define in your own opencode config wins over the plugin's.
+
+## Worked example: a different model per role
+
+The three models a kanban session runs on are set in two different places, because two of them are the board's
+business and one is yours:
+
+```jsonc
+// ~/.config/opencode/opencode.json — your session, not the board
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "venice/z-ai-glm-5-3-flash",       // the orchestrator: the loop you drive in the terminal
+  "small_model": "venice/z-ai-glm-5-3-flash", // titles and other lightweight calls
+  "plugin": ["~/tools/claude-kanban/opencode"]
+}
+```
+
+```jsonc
+// <project>/.kanban/config.json — the board, shared with Claude Code
+{
+  "implement_model": "venice/deepseek-v4-flash", // writes the code
+  "refine_model": "venice/z-ai-glm-5-3-flash"    // writes the specs
+}
+```
+
+That gives you a cheap fast model writing code, a stronger one writing specs, and whatever you like driving the loop.
+The orchestrator model is opencode's own dial — the plugin neither reads nor sets it, and `/models` switches it
+mid-session. The two role defaults are board config, so they travel with the project and apply under Claude Code too.
+
+Restart opencode after editing `.kanban/config.json`: the pinned agents and the dispatch table the work command reads
+are both frozen at session start, exactly as for `models`. `opencode debug config` shows the injected agents — expect
+six per distinct `provider/model` named anywhere in the three keys, plus the five `kanban-effort-*`.
 
 ## Uninstall
 

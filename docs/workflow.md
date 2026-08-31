@@ -39,6 +39,7 @@ at all.
    column is priority. A ticket's `status` says how well-defined it is: `draft` (yours, untouchable) → `stub`
    (flesh me out) → `review` (vet the spec) → `ready` (implementable). Promoting to `ready` is your call, made on
    the card. A card can also name the **model** and **effort** its work deserves; leave them blank and it inherits
+   the board's `implement_model` / `refine_model` role default for that kind of work, or failing that
    whatever the worker session is running.
 3. **Run `/kanban:work`** in Claude Code. Claude claims the top eligible ticket, works it in its own worktree on
    its own branch, notes progress on the card, and moves it to `review` — code-complete, waiting to land — then
