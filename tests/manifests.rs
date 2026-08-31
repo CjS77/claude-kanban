@@ -101,6 +101,26 @@ fn opencode_plugin_wires_the_same_surface() {
     assert!(plugin.contains("config.json"), "index.js must read the board config for the models vocabulary");
     assert!(plugin.contains("kanban-model-"), "index.js must inject model-pinned agents for configured provider/model entries");
     assert!(plugin.contains("{{KANBAN_MODELS}}"), "index.js must substitute the model dispatch table into the command templates");
+    for key in ["implement_model", "refine_model"] {
+        assert!(plugin.contains(key), "index.js must read the board's {key} role default and give it a pinned agent");
+    }
+}
+
+/// The role defaults are a board dial both harnesses honour, so both command templates have to say how — the opencode
+/// one routes through the pinned agents, the Claude Code one passes a per-call model.
+#[test]
+fn both_work_commands_resolve_the_boards_role_defaults() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for rel in ["commands/work.md", "opencode/command/work.md"] {
+        let body = fs::read_to_string(root.join(rel)).unwrap_or_else(|e| panic!("{rel} must exist: {e}"));
+        for key in ["implement_model", "refine_model"] {
+            assert!(body.contains(key), "{rel} must tell the loop to resolve the board's {key}");
+        }
+        assert!(
+            body.contains("else the role default") || body.contains("else the board's"),
+            "{rel} must state the precedence: the ticket's own model wins over the role default"
+        );
+    }
 }
 
 /// Same contract as `the_setup_commands_drive_the_binary_through_the_launcher`, for the opencode templates: every

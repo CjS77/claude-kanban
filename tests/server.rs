@@ -1032,7 +1032,8 @@ async fn the_settings_pane_round_trips_the_config_and_refuses_garbage() {
     // POST writes the whole file; the re-rendered pane confirms and carries the new values.
     let form = "main_branch=trunk&poll_interval=0&max_workers=3&idle_time=&worktree_root=%2Fdata%2Fwt&copy_to_worktrees=.env%0Acerts%2Flocal.pem&port=\
                 &minesweeper=on&minesweeper_label=tryFix&minesweeper_flag_labels=minesweeperFailed%2C+broken\
-                &models=opus%0Avenice%2Fzai-org-glm-5-2";
+                &models=opus%0Avenice%2Fzai-org-glm-5-2\
+                &implement_model=venice%2Fdeepseek-v4-flash&refine_model=+venice%2Fz-ai-glm-5-3+";
     let res = router.clone().oneshot(post("/ui/settings", 1, form)).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     let html = body_text(res).await;
@@ -1049,6 +1050,8 @@ async fn the_settings_pane_round_trips_the_config_and_refuses_garbage() {
     assert_eq!(config.minesweeper_label(), "tryFix");
     assert_eq!(config.minesweeper_flag_labels(), vec!["minesweeperFailed", "broken"], "comma-separated input splits");
     assert_eq!(config.models, vec!["opus", "venice/zai-org-glm-5-2"], "newline-separated textarea splits");
+    assert_eq!(config.implement_model(), Some("venice/deepseek-v4-flash".to_owned()));
+    assert_eq!(config.refine_model(), Some("venice/z-ai-glm-5-3".to_owned()), "surrounding whitespace is trimmed");
 
     // A non-numeric number is a 422 toast and the file stays as-saved.
     let res = router.clone().oneshot(post("/ui/settings", 2, "max_workers=lots")).await.unwrap();
@@ -1063,6 +1066,8 @@ async fn the_settings_pane_round_trips_the_config_and_refuses_garbage() {
     let config = claude_kanban::config::Config::load(store.dir()).unwrap();
     assert!(!config.minesweeper(), "unchecked box means off");
     assert!(config.models.is_empty(), "an omitted models field clears the list");
+    assert_eq!(config.implement_model(), None, "an omitted role default clears it back to inherit");
+    assert_eq!(config.refine_model(), None);
 
     // The guard covers settings like every mutation: no version header, no write.
     let req = Request::builder().method("POST").uri("/ui/settings").header(header::HOST, HOST).body(Body::empty()).unwrap();

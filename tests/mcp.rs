@@ -105,14 +105,22 @@ fn the_mcp_face_reads_claims_and_recovers_from_conflicts() {
     assert_eq!(board["structuredContent"]["idle_time"], 300, "unconfigured board defaults to a five-minute idle: {board}");
     let aliases = json!(["opus", "sonnet", "haiku", "fable"]);
     assert_eq!(board["structuredContent"]["models"], aliases, "unconfigured board suggests the Claude aliases: {board}");
+    assert!(board["structuredContent"]["implement_model"].is_null(), "no role default means inherit the session: {board}");
+    assert!(board["structuredContent"]["refine_model"].is_null(), "{board}");
 
-    // max_workers, idle_time and models come from config.json at read time — no server restart needed.
-    let config = r#"{ "max_workers": 2, "idle_time": 60, "models": ["venice/zai-org-glm-5-2"] }"#;
+    // max_workers, idle_time, models and the role defaults come from config.json at read time — no server restart needed.
+    let config = r#"{ "max_workers": 2, "idle_time": 60, "models": ["venice/zai-org-glm-5-2"],
+                      "implement_model": "venice/deepseek-v4-flash", "refine_model": "venice/z-ai-glm-5-3" }"#;
     std::fs::write(store_dir.join("config.json"), config).unwrap();
     let board = mcp.call_tool(40, "kanban_board", &json!({}));
     assert_eq!(board["structuredContent"]["max_workers"], 2, "{board}");
     assert_eq!(board["structuredContent"]["idle_time"], 60, "{board}");
     assert_eq!(board["structuredContent"]["models"], json!(["venice/zai-org-glm-5-2"]), "a configured list replaces the defaults: {board}");
+    assert_eq!(board["structuredContent"]["implement_model"], "venice/deepseek-v4-flash", "{board}");
+    assert_eq!(
+        board["structuredContent"]["refine_model"], "venice/z-ai-glm-5-3",
+        "a role default need not appear in the models vocabulary: {board}"
+    );
 
     // kanban_next nominates it; claim it; next then reports nothing eligible.
     let next = mcp.call_tool(5, "kanban_next", &json!({}));
