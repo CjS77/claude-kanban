@@ -393,6 +393,10 @@ impl KanbanServer {
     /// loop may drive concurrently, `idle_time`, how many seconds it sleeps between polls when nothing is eligible, and
     /// `models`, the model vocabulary a ticket's `model` field should draw from.
     ///
+    /// `implement_model` and `refine_model` are the board's **role defaults**: the model to work a ticket that names
+    /// none of its own — the first for implementing and reworking, the second for refining a stub. Each is `null` when
+    /// unset, which means inherit whatever the worker session runs. A ticket's own `model` always wins over these.
+    ///
     /// Done tickets are **omitted by default**: finished work is not input to the next decision, and its specs and
     /// progress logs are the bulk of the board. In their place comes a `done` summary — `count` plus the `landed` and
     /// `discarded` id lists, kept apart because a discarded ticket never unblocks a dependent. Two ways to the full
@@ -418,6 +422,8 @@ impl KanbanServer {
                 obj.insert("idle_time".into(), config.idle_time().into());
                 obj.insert("minesweeper".into(), (cfg!(feature = "minesweeper") && config.minesweeper()).into());
                 obj.insert("models".into(), config.models().into());
+                obj.insert("implement_model".into(), config.implement_model().into());
+                obj.insert("refine_model".into(), config.refine_model().into());
             }
             Ok(value)
         })

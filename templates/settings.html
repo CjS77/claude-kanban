@@ -46,6 +46,16 @@
         <textarea name="models" rows="3" placeholder="opus&#10;sonnet&#10;haiku&#10;fable" class="textarea textarea-sm w-full font-mono">{{ models }}</textarea>
         <span class="text-xs opacity-60">the model vocabulary tickets may name — empty means the Claude aliases; opencode dispatch needs provider/model ids</span>
     </label>
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <label class="flex flex-col gap-1 text-sm">Implementing model
+            <input name="implement_model" value="{{ implement_model }}" placeholder="inherit the session model" class="input input-sm w-full font-mono">
+            <span class="text-xs opacity-60">works tickets that name no model of their own — also used for rework</span>
+        </label>
+        <label class="flex flex-col gap-1 text-sm">Refining model
+            <input name="refine_model" value="{{ refine_model }}" placeholder="inherit the session model" class="input input-sm w-full font-mono">
+            <span class="text-xs opacity-60">writes stub specs; empty leaves both to whatever the worker session runs</span>
+        </label>
+    </div>
     <div class="divider my-0 text-xs opacity-60">Minesweeper delegation</div>
     <label class="flex items-center justify-between gap-3 text-sm">
         <span>Delegate ready tickets

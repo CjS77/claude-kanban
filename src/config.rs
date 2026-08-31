@@ -72,6 +72,13 @@ pub struct Config {
     /// harness can actually switch to: Claude Code takes aliases or full ids, opencode needs `provider/model` ids.
     /// Empty → [`DEFAULT_MODELS`].
     pub models: Vec<String>,
+    /// The model that works a ticket naming none of its own — `implement` and `rework`. Free text with the same reach
+    /// as a ticket's `model` (aliases or full ids on Claude Code, `provider/model` on opencode). Absent means inherit
+    /// the worker session's model, which is the behaviour without this key. A ticket's own `model` always wins.
+    pub implement_model: Option<String>,
+    /// The model that refines a stub naming none of its own. Same rules as [`Config::implement_model`]; the split
+    /// exists because writing a spec and writing the code it describes are not worth the same model.
+    pub refine_model: Option<String>,
 }
 
 impl Config {
@@ -154,6 +161,20 @@ impl Config {
         } else {
             self.models.clone()
         }
+    }
+
+    /// The default model for implementing and reworking a ticket that names none. Unlike [`Config::models`] there is
+    /// no collapse to a default: absent has to stay distinguishable from set, because absent is what means "inherit".
+    #[must_use]
+    pub fn implement_model(&self) -> Option<String> {
+        self.implement_model.as_deref().map(str::trim).filter(|m| !m.is_empty()).map(str::to_owned)
+    }
+
+    /// The default model for refining a stub that names none. Same "absent means inherit" rule as
+    /// [`Config::implement_model`].
+    #[must_use]
+    pub fn refine_model(&self) -> Option<String> {
+        self.refine_model.as_deref().map(str::trim).filter(|m| !m.is_empty()).map(str::to_owned)
     }
 }
 
@@ -253,6 +274,8 @@ mod tests {
             "minesweeper_label",
             "minesweeper_flag_labels",
             "models",
+            "implement_model",
+            "refine_model",
         ];
         let missing: Vec<_> = keys.iter().filter(|key| !obj.contains_key(**key)).collect();
         assert!(missing.is_empty(), "missing {missing:?}");
@@ -291,6 +314,27 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("config.json"), r#"{ "models": ["venice/zai-org-glm-5-2", "anthropic/claude-opus-4-8"] }"#).unwrap();
         assert_eq!(Config::load(dir.path()).unwrap().models(), vec!["venice/zai-org-glm-5-2", "anthropic/claude-opus-4-8"]);
+    }
+
+    #[test]
+    fn role_defaults_are_absent_until_configured() {
+        let cfg = Config::default();
+        assert_eq!(cfg.implement_model(), None, "absent means inherit the session model");
+        assert_eq!(cfg.refine_model(), None);
+        let cfg = Config { implement_model: Some("  ".into()), refine_model: Some(String::new()), ..Config::default() };
+        assert_eq!(cfg.implement_model(), None, "blank is not a model name — it collapses to inherit");
+        assert_eq!(cfg.refine_model(), None);
+    }
+
+    #[test]
+    fn role_defaults_parse_from_config_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let json = r#"{ "implement_model": "venice/deepseek-v4-flash", "refine_model": "venice/zai-org-glm-5-3" }"#;
+        std::fs::write(dir.path().join("config.json"), json).unwrap();
+        let cfg = Config::load(dir.path()).unwrap();
+        assert_eq!(cfg.implement_model().as_deref(), Some("venice/deepseek-v4-flash"));
+        assert_eq!(cfg.refine_model().as_deref(), Some("venice/zai-org-glm-5-3"));
+        assert_eq!(cfg.models(), DEFAULT_MODELS.map(str::to_owned).to_vec(), "role defaults need not appear in the vocabulary");
     }
 
     #[test]

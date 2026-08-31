@@ -507,6 +507,8 @@ pub struct SettingsForm {
     minesweeper_label: String,
     minesweeper_flag_labels: String,
     models: String,
+    implement_model: String,
+    refine_model: String,
 }
 
 impl SettingsForm {
@@ -538,6 +540,8 @@ impl SettingsForm {
                 .map(str::to_owned)
                 .collect(),
             models: self.models.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_owned).collect(),
+            implement_model: Some(self.implement_model.trim()).filter(|s| !s.is_empty()).map(str::to_owned),
+            refine_model: Some(self.refine_model.trim()).filter(|s| !s.is_empty()).map(str::to_owned),
         })
     }
 }

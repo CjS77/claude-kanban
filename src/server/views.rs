@@ -805,6 +805,9 @@ pub struct SettingsTpl {
     /// One entry per line in the textarea. The raw field, not the accessor: unset renders empty, and the placeholder
     /// names the alias defaults.
     pub models: String,
+    /// The role defaults, raw again: empty means "inherit the session model", which is what the accessors would hide.
+    pub implement_model: String,
+    pub refine_model: String,
     /// True right after a save — shows the confirmation (and the port-needs-restart caveat).
     pub saved: bool,
 }
@@ -826,6 +829,8 @@ pub fn settings(config: &crate::config::Config, saved: bool) -> SettingsTpl {
         minesweeper_label: config.minesweeper_label.clone().unwrap_or_default(),
         minesweeper_flag_labels: config.minesweeper_flag_labels.join(", "),
         models: config.models.join("\n"),
+        implement_model: config.implement_model.clone().unwrap_or_default(),
+        refine_model: config.refine_model.clone().unwrap_or_default(),
         saved,
     }
 }
