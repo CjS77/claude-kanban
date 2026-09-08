@@ -21,8 +21,12 @@ use serde::Deserialize;
 
 use crate::{
     config::Config,
-    ops::{self, Applied, NewEpicSpec, NewTicketSpec, Op, OpError, RefineTarget, TicketPatch},
-    store::{Store, derive, derive::BoardView, model::{Board, Column, ColumnId, Effort, EpicId, Status, TicketId}},
+    ops::{self, Applied, NewEpicSpec, NewTicketSpec, Op, OpError, RefineTarget, TicketPatch, VerdictReview},
+    store::{
+        Store, derive,
+        derive::BoardView,
+        model::{Board, Column, ColumnId, Effort, EpicId, ReviewKind, Side, Status, TicketId, Verdict},
+    },
 };
 
 /// What Claude is called on the board when a tool doesn't say otherwise.
@@ -42,7 +46,10 @@ unblocks anything). A review ticket can be claimed again for rework (PR feedback
 and kanban_worktree_start re-attaches. A human can also send a review ticket back with feedback: it returns to doing \
 unclaimed, kanban_next surfaces it as action \"rework\" ahead of any todo work, and the newest \"changes requested:\" \
 note is the spec for that round — address it in the existing worktree and move it to review again. Accepting, \
-requesting changes and discarding are the human's verdicts, made in the browser; never press one for them. \
+requesting changes and discarding are the human's verdicts, made in the browser; never press one for them \
+outside a /kanban:review loop the board's auto_review allows. Reviewing is not judging: a review loop writes its \
+findings with kanban_review_comment onto the ticket's review log, whatever auto_review says — never as kanban_note \
+progress, and never replacing what an earlier reviewer wrote. \
 Accepting does not close a ticket — it clears the branch to land, and kanban_next then surfaces it as action \
 \"land\" ahead of everything else. Take it with kanban_start_landing, never kanban_claim (claiming a review ticket is \
 the rework path), rebase the branch onto the main branch and fast-forward main into it, then call kanban_next and let \
@@ -272,6 +279,39 @@ pub struct NoteParams {
     /// The progress note to append (plain text or markdown).
     pub text: String,
     /// Who is writing. Defaults to "claude".
+    #[serde(default)]
+    pub agent: Option<String>,
+    /// The board version from your latest `kanban_board` read.
+    pub expected_version: u64,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct InlineParam {
+    /// The file, relative to the repository root, as the diff names it.
+    pub path: String,
+    /// The line number, counted in the branch's version of the file — or in the pre-change version when `side` is "old".
+    pub line: u32,
+    /// "new" (default) or "old". Old is for a deleted line, which has no number in the new file.
+    #[serde(default)]
+    pub side: Option<String>,
+    /// The comment about that line.
+    pub text: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct ReviewCommentParams {
+    /// The review ticket, e.g. "K-7".
+    pub ticket: String,
+    /// The review prose (markdown). Optional when `inline` carries everything.
+    #[serde(default)]
+    pub text: Option<String>,
+    /// Line-anchored findings, each becoming its own entry on the review log. Prefer these over `path:line` bullets in
+    /// `text`: the board renders and re-reads them structurally.
+    #[serde(default)]
+    pub inline: Option<Vec<InlineParam>>,
+    /// Who is reviewing. Defaults to "auto-review".
     #[serde(default)]
     pub agent: Option<String>,
     /// The board version from your latest `kanban_board` read.
@@ -657,10 +697,22 @@ impl KanbanServer {
         self.apply(Some(p.expected_version), op).await
     }
 
+    /// Write a review onto a review ticket's `review` log — the reviewer's findings, as prose and/or line-anchored
+    /// `inline` entries. **Always allowed**, whatever the board's `auto_review` says: writing a review is not pressing a
+    /// verdict. This is where a `/kanban:review` loop's findings go; `kanban_note` is the worker's progress log and is
+    /// not for reviews. Entries append: a second review, or a human's own comments, sit beside earlier ones rather than
+    /// replacing them, and the human sees new entries live under their own comment box. Refuses outside `review` and on
+    /// external tickets.
+    #[tool]
+    async fn kanban_review_comment(&self, Parameters(p): Parameters<ReviewCommentParams>) -> Result<CallToolResult, ErrorData> {
+        let op = review_comment_op(p).map_err(|e| ErrorData::invalid_params(e.to_string(), None))?;
+        self.apply(Some(op.1), op.0).await
+    }
+
     /// Press a review verdict on a ticket — accept, request changes, or discard — the way a human would in the browser.
     /// This is a **guarded** tool for a `/kanban:review` loop, not part of the work loop: it applies **only** when the
     /// board's `auto_review` is on. With `auto_review` off (the default) it refuses, because the verdict is the human's;
-    /// record your assessment with `kanban_note` and leave the card in review for them.
+    /// your `kanban_review_comment` review is the deliverable then, and the card stays in review for them.
     ///
     /// - `accept` — clears the branch to land (the card stays in `review`; the sweep lands it, exactly as pressing
     ///   Accept does). Not "done": there is still no proof the code reached main.
@@ -668,8 +720,8 @@ impl KanbanServer {
     ///   `changes requested:` note that a worker reads as the rework spec.
     /// - `discard` — retires it in `done` unlanded (`discarded: true`), `comment` folded in as the reason.
     ///
-    /// Write your detailed findings as `kanban_note`s **before** calling this; `comment` is the one-line verdict, not
-    /// the review.
+    /// Write your findings with `kanban_review_comment` **before** calling this; `comment` is the one-line verdict, not
+    /// the review, and is recorded on the review log with the verdict.
     #[tool]
     async fn kanban_review(&self, Parameters(p): Parameters<ReviewParams>) -> Result<CallToolResult, ErrorData> {
         let store = self.store.clone();
@@ -870,6 +922,20 @@ fn nothing_eligible(todo: &[(TicketId, String)], stalled: &[(TicketId, String)])
 /// human made the call.
 const REVIEW_AUTHOR: &str = "auto-review";
 
+/// Map a `kanban_review_comment` request to its op and version. Pure, like [`review_verdict_op`], and deliberately
+/// without an `auto_review` argument: the flag gates verdicts, never reviews. Anchors with a bad `side` are refused
+/// here rather than silently read as the new side.
+fn review_comment_op(p: ReviewCommentParams) -> Result<(Op, u64), OpError> {
+    let inline = p.inline.unwrap_or_default().into_iter().map(|i| {
+        let side = i.side.as_deref().unwrap_or("new").parse::<Side>().map_err(OpError::Invalid)?;
+        Ok(ReviewKind::Inline { path: i.path, line: i.line, side, text: i.text })
+    });
+    let text = p.text.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty()).map(|text| Ok(ReviewKind::Comment { text }));
+    let entries = inline.chain(text).collect::<Result<Vec<_>, OpError>>()?;
+    let author = p.agent.unwrap_or_else(|| REVIEW_AUTHOR.into());
+    Ok((Op::AddReview { id: TicketId(p.ticket), author, entries }, p.expected_version))
+}
+
 /// Map a `kanban_review` request to the verdict op, gated on the board's `auto_review`. Pure so the gate and the
 /// verdict routing are unit-testable without a store: the tool loads the flag and applies whatever this returns.
 fn review_verdict_op(auto_review: bool, id: TicketId, verdict: &str, comment: Option<&str>) -> Result<Op, OpError> {
@@ -880,16 +946,15 @@ fn review_verdict_op(auto_review: bool, id: TicketId, verdict: &str, comment: Op
         )));
     }
     let comment = comment.map(str::trim).filter(|c| !c.is_empty());
-    match verdict {
-        "accept" => Ok(Op::AcceptReview { id, by: REVIEW_AUTHOR.into() }),
-        "request_changes" => match comment {
-            Some(feedback) => Ok(Op::RequestChanges { id, feedback: feedback.to_owned(), by: REVIEW_AUTHOR.into() }),
+    let review = VerdictReview::text(comment.unwrap_or_default());
+    let by = REVIEW_AUTHOR.to_owned();
+    match verdict.parse::<Verdict>().map_err(OpError::Invalid)? {
+        Verdict::Accept => Ok(Op::AcceptReview { id, by, review }),
+        Verdict::RequestChanges => match comment {
+            Some(_) => Ok(Op::RequestChanges { id, by, review }),
             None => Err(OpError::Invalid("request_changes needs a comment — say what has to change; it becomes the rework spec".into())),
         },
-        "discard" => Ok(Op::DiscardTicket { id, reason: comment.unwrap_or("discarded by auto-review").to_owned() }),
-        other => Err(OpError::Invalid(format!(
-            "unknown verdict {other:?} — use \"accept\", \"request_changes\", or \"discard\""
-        ))),
+        Verdict::Discard => Ok(Op::DiscardTicket { id, reason: comment.unwrap_or("discarded by auto-review").to_owned(), by, review }),
     }
 }
 
@@ -1060,6 +1125,7 @@ mod tests {
             landing_blocked: false,
             depends_on: vec![],
             notes: vec![],
+            review: vec![],
             external: None,
             pr: None,
             column,
@@ -1106,6 +1172,48 @@ mod tests {
     }
 
     #[test]
+    fn review_comment_builds_one_append_and_needs_no_auto_review() {
+        let params = |text: Option<&str>, inline: Option<Vec<InlineParam>>, agent: Option<&str>| ReviewCommentParams {
+            ticket: "K-7".into(),
+            text: text.map(str::to_owned),
+            inline,
+            agent: agent.map(str::to_owned),
+            expected_version: 9,
+        };
+        let anchor = |path: &str, line: u32, side: Option<&str>, text: &str| InlineParam {
+            path: path.into(),
+            line,
+            side: side.map(str::to_owned),
+            text: text.into(),
+        };
+
+        // Inline entries lead, the prose follows, and the author defaults to the review loop's name.
+        let (op, version) = review_comment_op(params(
+            Some("  looks right overall  "),
+            Some(vec![anchor("src/a.rs", 7, None, "nit"), anchor("src/a.rs", 3, Some("old"), "why gone?")]),
+            None,
+        ))
+        .unwrap();
+        assert_eq!(version, 9);
+        let Op::AddReview { id, author, entries } = op else { panic!("not an AddReview: {op:?}") };
+        assert_eq!(id, TicketId("K-7".into()));
+        assert_eq!(author, REVIEW_AUTHOR);
+        assert_eq!(
+            entries,
+            vec![
+                ReviewKind::Inline { path: "src/a.rs".into(), line: 7, side: Side::New, text: "nit".into() },
+                ReviewKind::Inline { path: "src/a.rs".into(), line: 3, side: Side::Old, text: "why gone?".into() },
+                ReviewKind::Comment { text: "looks right overall".into() },
+            ]
+        );
+
+        // Blank prose is not an entry; a named agent is the author; a bad side is refused up front.
+        let (op, _) = review_comment_op(params(Some("   "), Some(vec![anchor("x", 1, None, "y")]), Some("sam"))).unwrap();
+        assert!(matches!(op, Op::AddReview { author, entries, .. } if author == "sam" && entries.len() == 1));
+        assert!(matches!(review_comment_op(params(Some("t"), Some(vec![anchor("x", 1, Some("left"), "y")]), None)), Err(OpError::Invalid(_))));
+    }
+
+    #[test]
     fn review_verdict_maps_each_verdict_to_its_op_when_on() {
         let id = TicketId("K-7".into());
         assert!(matches!(
@@ -1114,7 +1222,7 @@ mod tests {
         ));
         assert!(matches!(
             review_verdict_op(true, id.clone(), "request_changes", Some("  tighten naming  ")).unwrap(),
-            Op::RequestChanges { feedback, by, .. } if feedback == "tighten naming" && by == REVIEW_AUTHOR
+            Op::RequestChanges { review, by, .. } if review.text == "tighten naming" && by == REVIEW_AUTHOR
         ));
         assert!(matches!(
             review_verdict_op(true, id.clone(), "discard", Some("dead end")).unwrap(),
@@ -1223,6 +1331,7 @@ mod action_tests {
             landing_blocked: false,
             depends_on: vec![],
             notes: vec![],
+            review: vec![],
             external: None,
             pr: None,
             column: Column::Todo,

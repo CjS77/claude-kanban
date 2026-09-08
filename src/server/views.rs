@@ -409,6 +409,8 @@ pub struct TicketCtx {
     pub auto_merge_confirm: String,
     pub deps: Vec<DepCtx>,
     pub notes: Vec<NoteCtx>,
+    /// The review log, read-only here — it outlives the review pane, which only exists while the card is in review.
+    pub log: Vec<ReviewEntryCtx>,
     pub statuses: Vec<StatusOptCtx>,
 }
 
@@ -431,6 +433,62 @@ pub struct NoteCtx {
     pub at: String,
     pub author: Option<String>,
     pub text: String,
+}
+
+/// One review-log entry as the panes show it (`templates/review_log.html`).
+#[derive(Debug)]
+pub struct ReviewEntryCtx {
+    pub at: String,
+    pub author: String,
+    /// `path:line` (or `path:line (old line)`) for an inline comment; nothing for the rest.
+    pub anchor: Option<String>,
+    /// The verdict's wire name and the badge colour it wears, for a verdict entry.
+    pub verdict: Option<(&'static str, &'static str)>,
+    pub text: String,
+    /// The first entry after a verdict: a new round begins here, and the log draws the line.
+    pub round_start: bool,
+}
+
+/// The review log alone (`templates/review_log.html`): what the review pane re-fetches on every board change so an
+/// agent's findings appear under the comment box without disturbing it. Both panes include the same partial inline.
+#[derive(Debug, Template)]
+#[template(path = "review_log.html")]
+pub struct ReviewLogTpl {
+    pub id: String,
+    pub log: Vec<ReviewEntryCtx>,
+    /// Whether the partial re-fetches itself on `kanban:refresh` — the review pane's log does, the detail pane's
+    /// read-only copy does not.
+    pub live: bool,
+}
+
+#[must_use]
+pub fn review_log(board: &Board, id: &crate::store::model::TicketId) -> Option<ReviewLogTpl> {
+    let t = board.ticket(id)?;
+    Some(ReviewLogTpl { id: t.id.to_string(), log: review_entries(t), live: true })
+}
+
+fn review_entries(t: &crate::store::model::Ticket) -> Vec<ReviewEntryCtx> {
+    use crate::store::model::{ReviewKind, Verdict};
+    let badge = |v: Verdict| match v {
+        Verdict::Accept => "badge-neutral",
+        Verdict::RequestChanges => "badge-warning",
+        Verdict::Discard => "badge-error",
+    };
+    t.review
+        .iter()
+        .enumerate()
+        .map(|(i, e)| ReviewEntryCtx {
+            at: human_time(e.at),
+            author: e.author.clone(),
+            anchor: e.kind.anchor(),
+            verdict: match e.kind {
+                ReviewKind::Verdict { verdict, .. } => Some((verdict.as_str(), badge(verdict))),
+                _ => None,
+            },
+            text: e.kind.text().to_owned(),
+            round_start: i > 0 && matches!(t.review[i - 1].kind, ReviewKind::Verdict { .. }),
+        })
+        .collect()
 }
 
 #[derive(Debug)]
@@ -501,6 +559,8 @@ pub struct ReviewCtx {
     /// they have to act on.
     pub landing_blocked: bool,
     pub notes: Vec<NoteCtx>,
+    /// The review log so far — the reviewer reads what agents and earlier rounds said before adding their own.
+    pub log: Vec<ReviewEntryCtx>,
     pub discard_confirm: String,
     /// Whether the pane offers its own View diff button — `diff::eligible`, the same predicate the detail pane uses.
     /// The reviewer's flow starts here, and the diff is where inline comments are written.
@@ -540,6 +600,7 @@ pub fn review(
             ),
             landing,
             notes: t.notes.iter().map(|n| NoteCtx { at: human_time(n.at), author: n.author.clone(), text: n.text.clone() }).collect(),
+            log: review_entries(t),
             can_diff,
         },
     })
@@ -629,6 +690,7 @@ pub fn detail(board: &Board, claims: &[Claim], id: &crate::store::model::TicketI
                 .iter()
                 .map(|n| NoteCtx { at: human_time(n.at), author: n.author.clone(), text: n.text.clone() })
                 .collect(),
+            log: review_entries(t),
             statuses: STATUSES.map(|s| StatusOptCtx { name: s.as_str(), current: s == t.status }).into(),
         },
     })

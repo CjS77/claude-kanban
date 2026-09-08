@@ -7,7 +7,7 @@ use std::{fs, path::Path, process::Command};
 
 use claude_kanban::{
     land,
-    ops::{self, Op},
+    ops::{self, Op, VerdictReview},
     store::{
         Store,
         derive,
@@ -184,7 +184,7 @@ fn a_discarded_predecessor_keeps_its_dependent_blocked_for_good() {
     let s = scratch();
     work_k1_to_review(&s);
 
-    ops::apply(&s.store, None, Op::DiscardTicket { id: TicketId("K-1".into()), reason: "superseded".into() }).unwrap();
+    ops::apply(&s.store, None, Op::DiscardTicket { id: TicketId("K-1".into()), reason: "superseded".into(), by: "tester".into(), review: VerdictReview::default() }).unwrap();
     let board = s.store.read_board().unwrap();
     assert!(matches!(board.ticket(&TicketId("K-1".into())).unwrap().column, Column::Done { discarded: true, .. }));
     assert!(derive::blocked(board.ticket(&TicketId("K-2".into())).unwrap(), &board), "the promised code never landed");
@@ -249,7 +249,7 @@ fn a_discarded_ticket_loses_its_worktree_too() {
     let id = TicketId("K-1".into());
     let path = worktree::path_for(&s.store, &id).unwrap().unwrap();
 
-    ops::apply(&s.store, None, Op::DiscardTicket { id: id.clone(), reason: "superseded".into() }).unwrap();
+    ops::apply(&s.store, None, Op::DiscardTicket { id: id.clone(), reason: "superseded".into(), by: "tester".into(), review: VerdictReview::default() }).unwrap();
     worktree::retire(&s.store, &id);
 
     assert!(!path.exists(), "a discarded ticket's checkout is finished with too");

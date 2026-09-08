@@ -1,0 +1,23 @@
+{#- The review log: what reviewers said and the verdicts they pressed, oldest first, a rule between rounds. One partial
+    for two panes — the review pane includes it live (`live`: it re-fetches itself on every board change, so an agent's
+    findings arrive under the comment box without touching what the reviewer is typing), the detail pane includes it
+    read-only, which is how a review outlives the card's stay in review. Also served alone by /review/log.
+    Expects `id`, `log` and `live` in scope. -#}
+<div id="review-log"{% if live %} hx-get="/ui/ticket/{{ id }}/review/log" hx-trigger="kanban:refresh from:body" hx-swap="outerHTML"{% endif %}>
+{% if !log.is_empty() %}
+<div class="mt-4">
+    <h3 class="font-semibold text-sm mb-1">Review</h3>
+    <ul class="flex flex-col gap-2">
+        {% for entry in log %}
+        {% if entry.round_start %}<li class="divider my-0 text-xs opacity-60">next round</li>{% endif %}
+        <li class="text-sm p-2 rounded bg-base-200">
+            <div class="text-xs opacity-60 mb-0.5">{{ entry.at }} — {{ entry.author }}
+                {% if let Some((verdict, badge)) = entry.verdict %}<span class="badge badge-xs {{ badge }} ml-1">{{ verdict }}</span>{% endif %}</div>
+            {% if let Some(anchor) = entry.anchor %}<div class="font-mono text-xs">{{ anchor }}</div>{% endif %}
+            {% if !entry.text.is_empty() %}<div class="whitespace-pre-wrap">{{ entry.text }}</div>{% endif %}
+        </li>
+        {% endfor %}
+    </ul>
+</div>
+{% endif %}
+</div>

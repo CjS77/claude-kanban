@@ -5,6 +5,30 @@ All notable changes to this project are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **A `review` log on every ticket.** Reviews now have a home of their own, apart from the worker's progress notes:
+  an append-only array of entries — free-form comments, comments anchored to a diff line (`{path, line, side, text}`),
+  and the verdicts pressed. Nothing rewrites it: a `/kanban:review` loop's findings sit beside a human's own comments,
+  and a second round sits beside the first. The review pane shows the log live under the comment box, so an agent's
+  review arrives while you type without disturbing the box; the detail pane shows it read-only after the card lands.
+- **`kanban_review_comment` tool.** How a review loop writes its findings, prose and `inline` anchors alike. Always
+  allowed — `auto_review` gates only the verdict (`kanban_review`), never the review.
+- **Add to review** button on the review pane: file the comment box and any pending inline comments without giving a
+  verdict.
+
+### Changed
+
+- **Inline diff comments are entries, not text.** They are listed under the comment box instead of being written into
+  it, and travel with the next press — a verdict or Add to review — as structured entries. With the box empty, Request
+  changes composes the `changes requested:` note from them, as the box used to.
+- **Verdict comments go on the review log**, with the verdict, rather than into the progress notes. The
+  `changes requested:` rework note is unchanged.
+- `/kanban:review` records findings with `kanban_review_comment` instead of `kanban_note`, and recognises an
+  already-reviewed card by an `auto-review` entry after the newest verdict rather than by a note marker.
+
 ## [3.6.0] - 2026-09-08
 
 ### Added

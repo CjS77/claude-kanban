@@ -90,7 +90,7 @@ fn the_mcp_face_reads_claims_and_recovers_from_conflicts() {
     // The advertised tool set.
     let tools = mcp.request(2, "tools/list", &json!({}));
     let names: Vec<&str> = tools["result"]["tools"].as_array().unwrap().iter().filter_map(|t| t["name"].as_str()).collect();
-    for expected in ["kanban_board", "kanban_next", "kanban_claim", "kanban_release", "kanban_move", "kanban_create_ticket", "kanban_create_epic", "kanban_note", "kanban_refine"] {
+    for expected in ["kanban_board", "kanban_next", "kanban_claim", "kanban_release", "kanban_move", "kanban_create_ticket", "kanban_create_epic", "kanban_note", "kanban_review_comment", "kanban_review", "kanban_refine"] {
         assert!(names.contains(&expected), "missing tool {expected}; got {names:?}");
     }
 

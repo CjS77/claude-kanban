@@ -177,6 +177,7 @@ mod tests {
             landing_blocked: false,
             depends_on: vec![],
             notes,
+            review: vec![],
             external: None,
             pr: None,
             column: Column::Done { branch: Some("k-7/rate-limit-login".into()), completed_at: Utc::now(), discarded: false },

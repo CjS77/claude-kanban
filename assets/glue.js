@@ -14,8 +14,9 @@
  *   7. Epic options sync: the create-ticket form sits in the static page shell, so its epic <select> would go stale
  *      as epics come and go — after every swap it re-mirrors the list from the OOB-refreshed filter dropdown.
  *   8. Syntax highlighting: highlight.js over the diff pane's per-line code cells and the markdown panes' code blocks.
- *   9. Inline diff comments: comment on a line in the diff, and the notes drain into the review pane's comment box as
- *      `path:line — text` bullets, so the verdict the reviewer presses carries them to the agent.
+ *   9. Inline diff comments: comment on a line in the diff, and the comments are listed under the review pane's comment
+ *      box and serialised into its hidden `inline` field, so whichever button the reviewer presses — a verdict, or Add
+ *      to review — files each one on the ticket's review log as an entry of its own.
  */
 (() => {
     "use strict";
@@ -226,11 +227,12 @@
     };
 
     // --- 9. inline diff comments ------------------------------------------------------------------------------------
-    // Click a line number in the diff, write a comment against that line, and it collects in a per-ticket buffer that
-    // drains into the review pane's comment box as a `path:line — text` bullet. There is deliberately no server side:
-    // the diff is stateless, the ticket note is the record, and `changes requested:` is already the agent's rework spec
-    // — the line references only tell it where to look. Once drained the bullets are ordinary text in the box, so the
-    // reviewer can reword or delete any of them before pressing a verdict, and the verdict posts them as it always has.
+    // Click a line number in the diff, write a comment against that line, and it collects in a per-ticket buffer. The
+    // buffer is listed under the review pane's comment box and serialised into the form's hidden `inline` field, so the
+    // next press — a verdict, or Add to review — sends every comment to the server, which files each as an `inline`
+    // entry on the ticket's review log. The diff itself stays stateless: nothing is posted until the reviewer presses
+    // something in the pane, so no comment reaches an agent unseen, and the buffer is only cleared once a post
+    // succeeds — a refused verdict keeps everything for the retry.
     const drafts = new Map(); // ticket id -> Map(anchor key -> {path, side, line, text})
 
     const draftsFor = (ticket) => drafts.get(ticket) || drafts.set(ticket, new Map()).get(ticket);
@@ -318,43 +320,43 @@
         input.closest("tr").querySelector(saving ? ".diff-comment-save" : ".diff-comment-cancel").click();
     });
 
-    // Multi-line comments indent under their bullet so the reference line stays scannable in the note.
-    const reference = (d) => `- ${d.path}:${d.line}${d.side === "old" ? " (old line)" : ""} — `;
-    const bullet = (d) => `${reference(d)}${d.text.split("\n").join("\n  ")}`;
+    const reference = (d) => `${d.path}:${d.line}${d.side === "old" ? " (old line)" : ""}`;
 
-    // Drop the bullets a fresh drain supersedes: comment a line, close the diff, then comment that same line again and
-    // the second remark replaces the first rather than stacking a contradictory pair under one reference. Only the
-    // matching bullet and the lines indented under it go — prose, and bullets about other lines, stay put.
-    const withoutSuperseded = (text, fresh) => {
-        const stale = fresh.map(reference);
-        let dropping = false;
-        const kept = text.split("\n").filter((line) => {
-            if (stale.some((ref) => line.startsWith(ref))) {
-                dropping = true;
-                return false;
-            }
-            if (dropping && line.startsWith("  ")) return false;
-            dropping = false;
-            return true;
-        });
-        return kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
-    };
-
-    // Drain into whichever review pane is open, appending below anything already typed there. Every route to a verdict
-    // passes through this pane, so nothing written in the diff can reach the agent without the reviewer seeing it first.
+    // Mirror the buffer into whichever review pane is open: a read-only list under the comment box, so the reviewer
+    // sees what the next press will send, and the hidden `inline` field that actually carries it. Comments stay
+    // editable where they were written — in the diff — and the comment box itself is never touched.
     const drainComments = () => {
-        const ticket = document.querySelector("#detail form[data-ticket]")?.dataset.ticket;
-        const box = document.getElementById("review-comment");
-        const pending = ticket && drafts.get(ticket);
-        if (!box || !pending?.size) return;
-        const fresh = [...pending.values()].sort((a, b) => a.path.localeCompare(b.path) || Number(a.line) - Number(b.line));
-        box.value = [withoutSuperseded(box.value, fresh), fresh.map(bullet).join("\n")].filter(Boolean).join("\n\n");
-        drafts.delete(ticket);
-        diag(`drained ${fresh.length} inline comment(s) into ${ticket}'s review box`);
+        const form = document.querySelector("#detail form[data-ticket]");
+        const list = document.getElementById("review-pending");
+        const field = form?.querySelector("input[name=inline]");
+        if (!form || !list || !field) return;
+        const pending = drafts.get(form.dataset.ticket);
+        const fresh = [...(pending?.values() ?? [])].sort((a, b) => a.path.localeCompare(b.path) || Number(a.line) - Number(b.line));
+        list.replaceChildren(
+            ...fresh.map((d) => {
+                const li = document.createElement("li");
+                li.textContent = `${reference(d)} — ${d.text}`; // reviewer's own words — never innerHTML
+                return li;
+            })
+        );
+        list.hidden = fresh.length === 0;
+        field.value = fresh.length ? JSON.stringify(fresh.map(({ path, line, side, text }) => ({ path, line: Number(line), side, text }))) : "";
+        if (fresh.length) diag(`${fresh.length} inline comment(s) pending on ${form.dataset.ticket}'s review pane`);
     };
 
     // Closing the diff over an already-open review pane is the other way back to the verdict buttons.
     document.getElementById("diff-modal")?.addEventListener("close", drainComments);
+
+    // A successful post from the review pane's form — a verdict or Add to review — has filed the buffered comments, so
+    // they must not be sent twice. Cleared *before* the swap: the response re-renders the pane, and the drain that
+    // greets it must find the buffer already empty, or the fresh pane would list the filed comments again and refill
+    // the field. A refused post (the 422 toast) keeps them for the retry.
+    document.body.addEventListener("htmx:beforeSwap", (e) => {
+        const status = e.detail.xhr.status;
+        const form = e.detail.requestConfig?.elt?.closest?.("form[data-ticket]");
+        if (status < 200 || status >= 300 || !form) return;
+        if (drafts.delete(form.dataset.ticket)) diag(`filed inline comments for ${form.dataset.ticket}`);
+    });
 
     // htmx calls this once per swapped-in element (and once for body on load): wire up whatever arrived.
     htmx.onLoad((el) => {

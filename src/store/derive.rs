@@ -285,6 +285,7 @@ mod tests {
             landing_blocked: false,
             depends_on: vec![],
             notes: vec![],
+            review: vec![],
             external: None,
             pr: None,
             column,

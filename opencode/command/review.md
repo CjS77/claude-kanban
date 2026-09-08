@@ -28,7 +28,7 @@ Your first `kanban_board` read carries them, already resolved from `.kanban/conf
   flight at once, and `idle_time` seconds asleep when the review column is empty.
 
 You are the orchestrator and the **only board-writer**: reviewer subagents read code and hand findings back; you write
-the notes and (when allowed) apply the verdict. You never `kanban_claim` a review ticket — claiming one is the *rework*
+the review and (when allowed) apply the verdict. You never `kanban_claim` a review ticket — claiming one is the *rework*
 path and would drag it into `doing` — and you never `kanban_move` a card yourself.
 
 ## The loop
@@ -40,25 +40,30 @@ Repeat until the user stops you (a ticket-id argument or `--one` ends it after o
    - **external** — its review belongs on the delegate's issue, not here (`kanban_review` refuses it anyway);
    - **`accepted: true`** — already judged and cleared to land; `/kanban:work` lands it, you don't touch it;
    - **`landing_blocked: true`** — a landing already failed and is waiting on the human;
-   - **already reviewed this round** — see step 4's marker. In `auto_review` mode this never arises (your verdict moves
-     or flags the card); with `auto_review` off it is how you avoid re-reviewing the same unchanged card every poll.
+   - **already reviewed this round** — its `review` log has an `auto-review` entry after its newest `kind: "verdict"`
+     entry (or with no verdict at all). In `auto_review` mode this never arises (your verdict moves or flags the
+     card); with `auto_review` off it is how you avoid re-reviewing the same unchanged card every poll.
 2. **Dispatch a reviewer per candidate** — launch the `kanban-reviewer` subagent via the task tool, passing the ticket
    **id**, its full **body** as the spec, the **branch** (from the ticket's column), and the **worktree path** if the
    board shows one. Issue independent task calls in a single message so they run concurrently, up to `max_workers`. The
    subagent finds the worktree and reads the diff itself — rooting every git command at the worktree path with
    `git -C <path> …`, since no working directory survives between calls here — and returns findings plus a verdict; it
    makes no board writes.
-3. **Record the findings** — when a reviewer returns, re-read `kanban_board` for a fresh `version`, then `kanban_note`
-   its findings onto the ticket with `agent: "auto-review"` and the text opening with the marker
-   **`auto-review — verdict: <accept|request changes|discard>`**, followed by the line-anchored bullets and prose. That
-   one note is both the human-readable review and the marker step 1 uses to skip an already-reviewed card.
+3. **Record the findings** — when a reviewer returns, re-read `kanban_board` for a fresh `version`, then write them
+   onto the ticket's **review log** with `kanban_review_comment` (`agent: "auto-review"`) — never with `kanban_note`,
+   which is the worker's progress log. Pass the reviewer's line-anchored items as `inline` entries
+   (`{path, line, side, text}`, `side: "old"` for an `(old line)` reference) and the prose as `text`, opening with the
+   marker **`auto-review — verdict: <accept|request changes|discard>`**. Entries append: a human's own comments and
+   earlier rounds are never overwritten, and the human sees yours arrive live under their comment box. That one write
+   is both the human-readable review and the marker step 1 uses to skip an already-reviewed card — and it is allowed
+   whatever `auto_review` says: the flag gates the verdict, not the review.
 4. **The verdict** — then, and only then:
    - **`auto_review` is on** → apply it with `kanban_review` (`verdict` = `accept` / `request_changes` / `discard`).
      For `request_changes` and `discard`, pass the reviewer's rationale as `comment` — for request-changes it becomes
      the `changes requested:` note a rework round reads as its spec, so make it concrete. `accept` clears the branch to
      land (the card stays in review; `/kanban:work` lands it — you never do). `request_changes` sends it back to
      `doing`; `discard` retires it. All three take the card out of your candidate set on the next poll.
-   - **`auto_review` is off** → stop here. The card stays in review; your note **is** the deliverable, and it already
+   - **`auto_review` is off** → stop here. The card stays in review; your review **is** the deliverable, and it already
      names the recommended verdict. Do not call `kanban_review` — it will refuse, and refusing is the point: the verdict
      is the human's. Say in your running report which cards are waiting on their button.
    - If the reviewer returned **no verdict** (it couldn't read the code), note that plainly and leave the card alone —
@@ -74,8 +79,8 @@ Repeat until the user stops you (a ticket-id argument or `--one` ends it after o
   changes / discard, and `kanban_review` enforces it. On is a deliberate per-project choice the human made in the
   settings; even then, a discard is near-irreversible for dependents (a discarded ticket never unblocks them), so reserve
   it for genuinely dead work and always say why in the note.
-- **You are the single board-writer.** Reviewer subagents read code and return text; only you call `kanban_note` and
-  `kanban_review`. Never let a subagent write to the board. Never `kanban_claim` or `kanban_move` a review ticket.
+- **You are the single board-writer.** Reviewer subagents read code and return text; only you call
+  `kanban_review_comment` and `kanban_review`. Never let a subagent write to the board. Never `kanban_claim` or `kanban_move` a review ticket.
 - **Every mutating call needs `expected_version`** from your latest `kanban_board` read; on a conflict, re-read and
   retry against the new state.
 - **This loop complements `/kanban:work`, it doesn't replace it.** An `accept` you press surfaces to a work loop as

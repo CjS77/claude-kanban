@@ -36,8 +36,11 @@ and any **worktree path** it knows.
 
 Return, as plain text the orchestrator can post and act on:
 
-- **Findings** — your review comments, the line-anchored bullets first, then any prose. This is what gets written to
-  the card.
+- **Inline findings** — one item per line-anchored comment, exactly `- path:line — comment` (or
+  `- path:line (old line) — comment`), and nothing else in that list: the orchestrator files each one on the card's
+  review log as a structured entry, so a stray sentence here becomes a mis-anchored comment. Empty if you have none.
+- **Findings** — the prose: the overall assessment and anything not tied to a line. This is written to the card's
+  review log beside the inline entries.
 - **Verdict** — exactly one of `accept`, `request_changes`, or `discard`, with a one-line rationale:
   - `accept` — the code does what the spec asked and you'd be comfortable landing it. Nits may remain; name them, but
     they don't block.

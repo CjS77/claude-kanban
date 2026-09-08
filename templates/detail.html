@@ -129,6 +129,10 @@
 </div>
 {% endif %}
 
+{#- The review, read-only and apart from the progress log: what was said about the work, not what the worker said. -#}
+{% let id = ticket.id.clone() %}{% let log = ticket.log %}{% let live = false %}
+{% include "review_log.html" %}
+
 {% if !ticket.notes.is_empty() %}
 <div class="mt-4">
     <h3 class="font-semibold text-sm mb-1">Progress</h3>

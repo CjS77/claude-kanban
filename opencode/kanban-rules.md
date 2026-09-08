@@ -17,7 +17,10 @@ can be claimed again for rework (PR feedback); its branch and worktree are kept 
 re-attaches. A human can also send a review ticket back with feedback: it returns to doing unclaimed, kanban_next
 surfaces it as action "rework" ahead of any todo work, and the newest "changes requested:" note is the spec for that
 round — address it in the existing worktree and move it to review again. Accepting, requesting changes and discarding
-are the human's verdicts, made in the browser; never press one for them. Accepting does not close a ticket — it
+are the human's verdicts, made in the browser; never press one for them
+outside a /kanban:review loop the board's auto_review allows. Reviewing is not judging: a review loop writes its
+findings with kanban_review_comment onto the ticket's review log, whatever auto_review says — never as kanban_note
+progress, and never replacing what an earlier reviewer wrote. Accepting does not close a ticket — it
 clears the branch to land, and kanban_next then surfaces it as action "land" ahead of everything else. Take it with
 kanban_start_landing, never kanban_claim (claiming a review ticket is the rework path), rebase the branch onto the
 main branch and fast-forward main into it, then call kanban_next and let its sweep move the card. Resolve a rebase

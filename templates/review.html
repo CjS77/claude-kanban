@@ -37,8 +37,9 @@
     buttons can sit above it. They lead the pane, under the switch and under whatever state banner is showing — the
     progress log below runs to any length, and the verdict is what the reviewer opened this pane to give.
 
-    data-ticket is the inline-comment hook: glue.js matches comments buffered in the diff pane to this form and drains
-    them into the comment box below, so whichever verdict is pressed carries them. -#}
+    data-ticket is the inline-comment hook: glue.js matches comments buffered in the diff pane to this form, lists them
+    under the comment box and serialises them into the hidden `inline` field, so whichever button is pressed — a
+    verdict, or Add to review — carries them onto the review log as entries of their own. -#}
 <form class="mt-4" data-ticket="{{ review.id }}">
     <div class="flex flex-wrap gap-2">
         {#- No confirm. Accept is permission for the work loop to land the branch, and that permission is withdrawable
@@ -73,9 +74,22 @@
             {% endif %}
         </div>
         <textarea id="review-comment" name="comment" rows="4" class="textarea w-full mt-1"
-                  placeholder="Goes with whichever verdict you press — required for Request changes…"></textarea>
+                  placeholder="Adds to the review — goes with whichever verdict you press, or with Add to review…"></textarea>
+        {#- The inline comments waiting to go with the next press, listed by glue.js from its diff buffer. Hidden until
+            there are any; the hidden input is what actually travels. -#}
+        <ul id="review-pending" class="mt-1 flex flex-col gap-1 text-xs font-mono opacity-80" hidden></ul>
+        <input type="hidden" name="inline" value="">
+        <div class="mt-2 flex justify-end">
+            <button type="button" class="btn btn-xs" hx-post="/ui/ticket/{{ review.id }}/review/comment"
+                    hx-include="closest form" hx-target="#detail" hx-swap="innerHTML"
+                    title="put the comment and any inline comments on the review log now, without giving a verdict">
+                Add to review</button>
+        </div>
     </div>
 </form>
+
+{% let id = review.id.clone() %}{% let log = review.log %}{% let live = true %}
+{% include "review_log.html" %}
 
 <div class="divider"></div>
 

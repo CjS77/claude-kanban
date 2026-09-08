@@ -141,6 +141,7 @@ mod tests {
             landing_blocked: false,
             depends_on: deps.iter().map(|d| TicketId((*d).into())).collect(),
             notes: vec![],
+            review: vec![],
             external: None,
             pr: None,
             column: Column::Todo,

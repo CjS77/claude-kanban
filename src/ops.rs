@@ -15,12 +15,40 @@ use serde_json::{Value, json};
 
 use crate::store::{
     Claim, ClaimKind, Store, StoreError, find_claim, landing_in_flight,
-    model::{Board, Column, ColumnId, Effort, Epic, EpicId, Note, Status, Ticket, TicketId},
+    model::{Board, Column, ColumnId, Effort, Epic, EpicId, Note, ReviewEntry, ReviewKind, Status, Ticket, TicketId, Verdict},
     remove_claim, upsert_claim,
 };
 
 /// Default epic colours, assigned round-robin when `CreateEpic` gets no explicit colour. Muted, dark-and-light-friendly.
 const EPIC_PALETTE: [&str; 8] = ["#7c9cf5", "#5cb8a7", "#d4a45c", "#c98bc9", "#e08787", "#8fb965", "#5eb3d6", "#a58fd6"];
+
+/// What a verdict carries onto the review log: the comment box (`text`) and the inline diff comments drained with it.
+/// The verdict op pushes `inline` first, then a [`ReviewKind::Verdict`] with `text` — one write, so a refused verdict
+/// records nothing and the log always reads findings → verdict.
+#[derive(Debug, Clone, Default)]
+pub struct VerdictReview {
+    pub text: String,
+    pub inline: Vec<ReviewKind>,
+}
+
+impl VerdictReview {
+    /// Just a comment, no inline entries — the MCP verdict and the older call sites.
+    #[must_use]
+    pub fn text(text: impl Into<String>) -> VerdictReview {
+        VerdictReview { text: text.into(), inline: Vec::new() }
+    }
+
+    /// The feedback a rework round reads: the text, or — when the reviewer only commented on lines — the inline entries
+    /// as `- path:line — text` bullets, which is what glue.js used to drain into the box by hand.
+    #[must_use]
+    pub fn feedback(&self) -> String {
+        let text = self.text.trim();
+        if !text.is_empty() {
+            return text.to_owned();
+        }
+        self.inline.iter().filter_map(ReviewKind::bullet).collect::<Vec<_>>().join("\n")
+    }
+}
 
 /// Every mutation the board supports. One enum, one funnel.
 #[derive(Debug, Clone)]
@@ -62,6 +90,11 @@ pub enum Op {
     Release { id: TicketId },
     /// Append to the ticket's progress log.
     AddNote { id: TicketId, text: String, author: Option<String> },
+    /// Append to a review ticket's review log — a reviewer's findings, human or agent, as one atomic write however many
+    /// entries a drain of inline comments produces. Never gated on `auto_review`: writing a review is always allowed;
+    /// only pressing a verdict is the human's to grant. Refuses outside `review`, on external tickets, and with nothing
+    /// to say.
+    AddReview { id: TicketId, author: String, entries: Vec<ReviewKind> },
     /// Bind (or unbind, with `None`) a ticket to a work item in another system — the delegate skill records where a
     /// mirrored ticket went, and the minesweeper poll refreshes a binding's observed facts. The binding is an address;
     /// nothing here touches the network.
@@ -87,15 +120,17 @@ pub enum Op {
     /// human always sees why a card jumped.
     LandTicket { id: TicketId, expected_branch: Option<String>, reason: String },
     /// Retire a review ticket without landing it: `done` with `discarded: true`, which never satisfies dependencies.
-    /// Always an explicit human action (the Discard button) — the sweep never constructs this.
-    DiscardTicket { id: TicketId, reason: String },
-    /// A human's review verdict of "not yet": send a review ticket back to `doing` carrying its feedback. The branch and
-    /// the worktree are untouched — the worker re-attaches to them and picks up where it left off. Always a human
-    /// action, like [`Op::DiscardTicket`]; no agent-facing tool constructs this.
-    RequestChanges { id: TicketId, feedback: String, by: String },
-    /// A human's review verdict of "yes": mark a review ticket approved, so the work loop may land its branch. The
-    /// column is deliberately untouched — accepting is *permission to land*, and `done` still means landed.
-    AcceptReview { id: TicketId, by: String },
+    /// An explicit verdict (the Discard button, or a `/kanban:review` loop the board lets judge) — the sweep never
+    /// constructs this. `reason` is the progress note; `review` is what goes on the review log, verdict included.
+    DiscardTicket { id: TicketId, reason: String, by: String, review: VerdictReview },
+    /// The review verdict of "not yet": send a review ticket back to `doing` carrying its feedback. The branch and the
+    /// worktree are untouched — the worker re-attaches to them and picks up where it left off. The feedback is
+    /// `review.text`, or the inline comments rendered as bullets when the text is empty; it becomes the
+    /// `changes requested:` note that is the rework spec, and the review log gets the structured copy.
+    RequestChanges { id: TicketId, by: String, review: VerdictReview },
+    /// The review verdict of "yes": mark a review ticket approved, so the work loop may land its branch. The column is
+    /// deliberately untouched — accepting is *permission to land*, and `done` still means landed.
+    AcceptReview { id: TicketId, by: String, review: VerdictReview },
     /// A work loop is rebasing and fast-forwarding this ticket's branch right now: take the in-flight marker. Refuses
     /// when the ticket is not landable or another landing is already in hand, which is what makes it the interlock
     /// between concurrent loops rather than a decoration.
@@ -254,6 +289,7 @@ impl Op {
             Op::Claim { .. } => "claim",
             Op::Release { .. } => "release",
             Op::AddNote { .. } => "add_note",
+            Op::AddReview { .. } => "add_review",
             Op::BindExternal { .. } => "bind_external",
             Op::Delegate { .. } => "delegate",
             Op::MirrorSubIssues { .. } => "mirror_sub_issues",
@@ -305,14 +341,15 @@ fn transition(op: Op, board: &mut Board, claims: &mut Vec<Claim>) -> Result<OpOu
         Op::Claim { id, agent } => claim(board, claims, &id, &agent),
         Op::Release { id } => release(board, claims, &id),
         Op::AddNote { id, text, author } => add_note(board, &id, text, author),
+        Op::AddReview { id, author, entries } => add_review(board, &id, &author, entries),
         Op::BindExternal { id, external } => bind_external(board, &id, external),
         Op::Delegate { id, external, agent, note } => delegate(board, claims, &id, external, &agent, note),
         Op::MirrorSubIssues { parent, agent, children } => mirror_sub_issues(board, claims, &parent, &agent, &children),
         Op::Refine { target, title, body, split_tickets, split_epics } => refine(board, claims, &target, title, body, split_tickets, split_epics),
         Op::LandTicket { id, expected_branch, reason } => land_ticket(board, claims, &id, expected_branch.as_deref(), &reason),
-        Op::DiscardTicket { id, reason } => discard_ticket(board, claims, &id, &reason),
-        Op::RequestChanges { id, feedback, by } => request_changes(board, &id, &feedback, &by),
-        Op::AcceptReview { id, by } => accept_review(board, claims, &id, &by),
+        Op::DiscardTicket { id, reason, by, review } => discard_ticket(board, claims, &id, &reason, &by, review),
+        Op::RequestChanges { id, by, review } => request_changes(board, &id, &by, review),
+        Op::AcceptReview { id, by, review } => accept_review(board, claims, &id, &by, review),
         Op::StartLanding { id, agent } => start_landing(board, claims, &id, &agent),
         Op::BlockLanding { id, reason } => block_landing(board, claims, &id, &reason),
         Op::SetPr { id, pr } => set_pr(board, &id, pr),
@@ -360,6 +397,7 @@ fn create_ticket(board: &mut Board, new: NewTicket) -> OpOutput {
         landing_blocked: false,
         depends_on,
         notes: vec![],
+        review: vec![],
         external: None,
         pr: None,
         column: Column::Todo,
@@ -541,7 +579,14 @@ fn land_ticket(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, expect
 }
 
 /// The explicit human retirement: review → done with `discarded: true`. Dependents stay blocked — that is the point.
-fn discard_ticket(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, reason: &str) -> Result<OpOutput, OpError> {
+fn discard_ticket(
+    board: &mut Board,
+    claims: &mut Vec<Claim>,
+    id: &TicketId,
+    reason: &str,
+    by: &str,
+    review: VerdictReview,
+) -> Result<OpOutput, OpError> {
     let ticket = ticket_mut(board, id)?;
     let Column::Review { branch } = &ticket.column else {
         return Err(OpError::Invalid(format!("{id} is not in review — only code-complete, unlanded work can be discarded")));
@@ -551,6 +596,7 @@ fn discard_ticket(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, rea
     ticket.accepted = false; // nor an approval to land work that will never land
     ticket.landing_blocked = false; // and nothing is waiting to be landed once the work is retired
     ticket.notes.push(Note { at: Utc::now(), author: Some("kanban".into()), text: reason.to_owned() });
+    record_verdict(ticket, by, Verdict::Discard, review);
     remove_claim(claims, id);
     reposition(board, id, ColumnId::Done, None);
     Ok(OpOutput::plain(json!({ "id": id, "column": ColumnId::Done, "discarded": true })))
@@ -559,7 +605,7 @@ fn discard_ticket(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, rea
 /// Send a review ticket back for changes: to the top of `doing`, wearing `changes_requested`, with the feedback as the
 /// newest note. No claim is created — the card is unclaimed work waiting for whichever worker picks it up next, which is
 /// what [`crate::store::derive::next_ticket`] looks for.
-fn request_changes(board: &mut Board, id: &TicketId, feedback: &str, by: &str) -> Result<OpOutput, OpError> {
+fn request_changes(board: &mut Board, id: &TicketId, by: &str, review: VerdictReview) -> Result<OpOutput, OpError> {
     let ticket = ticket_mut(board, id)?;
     let Column::Review { branch } = &ticket.column else {
         return Err(OpError::Invalid(format!("{id} is not in review — only a review ticket can be sent back for changes")));
@@ -567,7 +613,7 @@ fn request_changes(board: &mut Board, id: &TicketId, feedback: &str, by: &str) -
     if ticket.external.is_some() {
         return Err(OpError::Invalid(format!("{id} is external — its review feedback belongs on the delegate's issue, not here")));
     }
-    let feedback = feedback.trim();
+    let feedback = review.feedback();
     if feedback.is_empty() {
         return Err(OpError::Invalid("changes requested needs feedback — say what has to change".into()));
     }
@@ -579,6 +625,7 @@ fn request_changes(board: &mut Board, id: &TicketId, feedback: &str, by: &str) -
     ticket.accepted = false;
     ticket.landing_blocked = false;
     ticket.notes.push(Note { at: Utc::now(), author: Some(by.to_owned()), text: format!("changes requested: {feedback}") });
+    record_verdict(ticket, by, Verdict::RequestChanges, review);
     reposition(board, id, ColumnId::Doing, Some(0));
     Ok(OpOutput::plain(json!({ "id": id, "column": ColumnId::Doing, "changes_requested": true })))
 }
@@ -589,7 +636,7 @@ fn request_changes(board: &mut Board, id: &TicketId, feedback: &str, by: &str) -
 /// purpose, so *something* has to put it back — and the human who just resolved the conflict by hand, looking at the
 /// pane, pressing the same button they pressed the first time, is exactly the right something. Without it the flag
 /// would be a dead end reachable only by sending perfectly good work back for rework.
-fn accept_review(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, by: &str) -> Result<OpOutput, OpError> {
+fn accept_review(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, by: &str, review: VerdictReview) -> Result<OpOutput, OpError> {
     let ticket = ticket_mut(board, id)?;
     if !matches!(ticket.column, Column::Review { .. }) {
         return Err(OpError::Invalid(format!("{id} is not in review — only code-complete work can be accepted")));
@@ -601,6 +648,7 @@ fn accept_review(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, by: 
     ticket.accepted = true;
     ticket.landing_blocked = false;
     ticket.notes.push(Note { at: Utc::now(), author: Some(by.to_owned()), text: format!("accepted by {by} — cleared to land") });
+    record_verdict(ticket, by, Verdict::Accept, review);
     // A re-accept re-arms the landing, so the abandoned attempt's marker must not outlive it.
     crate::store::remove_landing(claims, id);
     Ok(OpOutput::plain(json!({ "id": id, "accepted": true, "retry": retry })))
@@ -730,6 +778,35 @@ fn add_note(board: &mut Board, id: &TicketId, text: String, author: Option<Strin
     Ok(OpOutput::plain(json!({ "id": id, "notes": ticket.notes.len() })))
 }
 
+/// Append a reviewer's entries to the review log. The same refusals as a verdict — not in review, external — because a
+/// review of a card nobody can judge here is a lost message; plus "nothing to say", so an empty drain never leaves a
+/// blank entry behind.
+fn add_review(board: &mut Board, id: &TicketId, author: &str, entries: Vec<ReviewKind>) -> Result<OpOutput, OpError> {
+    let ticket = ticket_mut(board, id)?;
+    if !matches!(ticket.column, Column::Review { .. }) {
+        return Err(OpError::Invalid(format!("{id} is not in review — only a review ticket takes review comments")));
+    }
+    if ticket.external.is_some() {
+        return Err(OpError::Invalid(format!("{id} is external — its review belongs on the delegate's issue, not here")));
+    }
+    if entries.is_empty() || entries.iter().any(|e| e.text().trim().is_empty()) {
+        return Err(OpError::Invalid("a review entry needs text — say what you found".into()));
+    }
+    let at = Utc::now();
+    ticket.review.extend(entries.into_iter().map(|kind| ReviewEntry { at, author: author.to_owned(), kind }));
+    Ok(OpOutput::plain(json!({ "id": id, "review": ticket.review.len() })))
+}
+
+/// The verdict's mark on the review log: the inline comments drained with it, then the verdict itself carrying the
+/// comment. Empty inline entries are dropped rather than refused — the verdict is the point, and a blank line in the
+/// diff is not worth failing it over.
+fn record_verdict(ticket: &mut Ticket, by: &str, verdict: Verdict, review: VerdictReview) {
+    let at = Utc::now();
+    let inline = review.inline.into_iter().filter(|e| !e.text().trim().is_empty());
+    ticket.review.extend(inline.map(|kind| ReviewEntry { at, author: by.to_owned(), kind }));
+    ticket.review.push(ReviewEntry { at, author: by.to_owned(), kind: ReviewKind::Verdict { verdict, text: review.text.trim().to_owned() } });
+}
+
 fn bind_external(board: &mut Board, id: &TicketId, external: Option<crate::store::model::External>) -> Result<OpOutput, OpError> {
     let ticket = ticket_mut(board, id)?;
     ticket.external = external;
@@ -809,6 +886,7 @@ fn mirror_sub_issues(
                 landing_blocked: false,
                 depends_on: vec![],
                 notes: vec![],
+                review: vec![],
                 external: Some(crate::store::model::External::github_issue(child.number)),
                 pr: None,
                 column: Column::Doing { owner: agent.to_owned(), branch: None },
@@ -971,6 +1049,7 @@ fn build_refined_ticket(spec: NewTicketSpec, id: TicketId, default_epic: Option<
         landing_blocked: false,
         depends_on,
         notes: vec![],
+        review: vec![],
         external: None,
         pr: None,
         column: Column::Todo,
@@ -1764,14 +1843,14 @@ mod tests {
         .unwrap();
         to_review(&store, &parent, "k-1/abandoned");
 
-        apply(&store, None, Op::DiscardTicket { id: parent.clone(), reason: "superseded by a different design".into() }).unwrap();
+        apply(&store, None, Op::DiscardTicket { id: parent.clone(), reason: "superseded by a different design".into(), by: "tester".into(), review: VerdictReview::default() }).unwrap();
         let board = store.read_board().unwrap();
         assert!(matches!(board.ticket(&parent).unwrap().column, Column::Done { discarded: true, .. }));
         assert!(derive::blocked(board.ticket(&child).unwrap(), &board), "the promised code never landed — the dependent stays blocked");
         assert!(derive::next_ticket(&board, &[]).is_none(), "nothing on this board is workable");
 
         // Only review tickets can be discarded — done and todo tickets refuse.
-        let err = apply(&store, None, Op::DiscardTicket { id: parent, reason: "again".into() }).unwrap_err();
+        let err = apply(&store, None, Op::DiscardTicket { id: parent, reason: "again".into(), by: "tester".into(), review: VerdictReview::default() }).unwrap_err();
         assert!(err.to_string().contains("not in review"), "{err}");
     }
 
@@ -1856,13 +1935,92 @@ mod review_round_tests {
         id
     }
 
+    fn inline(path: &str, line: u32, side: crate::store::model::Side, text: &str) -> ReviewKind {
+        ReviewKind::Inline { path: path.into(), line, side, text: text.into() }
+    }
+
+    #[test]
+    fn add_review_appends_in_order_stamps_the_author_and_refuses_what_a_verdict_would() {
+        use crate::store::model::{External, Side};
+        let (_dir, store) = scratch();
+        let todo = create(&store, "not started");
+        let id = to_review(&store, "under review");
+
+        let first = vec![inline("src/a.rs", 7, Side::New, "nit"), ReviewKind::Comment { text: "auto-review — verdict: accept".into() }];
+        apply(&store, None, Op::AddReview { id: id.clone(), author: "auto-review".into(), entries: first.clone() }).unwrap();
+        // A second reviewer adds to the log; nothing is replaced.
+        apply(&store, None, Op::AddReview { id: id.clone(), author: "sam".into(), entries: vec![ReviewKind::Comment { text: "agreed".into() }] })
+            .unwrap();
+
+        let board = store.read_board().unwrap();
+        let t = board.ticket(&id).unwrap();
+        assert_eq!(t.review.iter().map(|e| &e.kind).collect::<Vec<_>>(), [&first[0], &first[1], &ReviewKind::Comment { text: "agreed".into() }]);
+        assert_eq!(t.review.iter().map(|e| e.author.as_str()).collect::<Vec<_>>(), ["auto-review", "auto-review", "sam"]);
+        assert_eq!(t.review_round().len(), 3, "no verdict yet: the whole log is this round");
+        assert!(t.notes.iter().all(|n| !n.text.contains("verdict")), "a review is not a progress note: {:?}", t.notes);
+
+        let refused = |op: Op| matches!(apply(&store, None, op), Err(OpError::Invalid(_)));
+        assert!(refused(Op::AddReview { id: todo, author: "sam".into(), entries: vec![ReviewKind::Comment { text: "x".into() }] }), "not in review");
+        assert!(refused(Op::AddReview { id: id.clone(), author: "sam".into(), entries: vec![] }), "nothing to say");
+        assert!(refused(Op::AddReview { id: id.clone(), author: "sam".into(), entries: vec![ReviewKind::Comment { text: "  ".into() }] }), "blank entry");
+        let ext = create(&store, "delegated");
+        let external = External { provider: "github".into(), kind: "issue".into(), number: 4, closed: false, flag: None, sub_issues: vec![] };
+        apply(&store, None, Op::BindExternal { id: ext.clone(), external: Some(external) }).unwrap();
+        apply(&store, None, Op::MoveTicket { id: ext.clone(), to: ColumnId::Review, position: None, owner: None, branch: Some("ext".into()) }).unwrap();
+        assert!(refused(Op::AddReview { id: ext, author: "sam".into(), entries: vec![ReviewKind::Comment { text: "x".into() }] }), "external");
+    }
+
+    #[test]
+    fn a_verdict_records_its_inline_comments_then_itself_and_closes_the_round() {
+        use crate::store::model::Side;
+        let (_dir, store) = scratch();
+        let id = to_review(&store, "judged");
+        apply(&store, None, Op::AddReview { id: id.clone(), author: "auto-review".into(), entries: vec![ReviewKind::Comment { text: "fine".into() }] }).unwrap();
+
+        // Request changes with only inline comments: the note carries them as bullets, the log as entries.
+        let review = VerdictReview {
+            text: "  ".into(),
+            inline: vec![inline("src/a.rs", 3, Side::Old, "why gone?"), inline("src/b.rs", 9, Side::New, "off by one\nsee test")],
+        };
+        apply(&store, None, Op::RequestChanges { id: id.clone(), by: "sam".into(), review }).unwrap();
+        let board = store.read_board().unwrap();
+        let t = board.ticket(&id).unwrap();
+        assert_eq!(t.notes.last().unwrap().text, "changes requested: - src/a.rs:3 (old line) — why gone?\n- src/b.rs:9 — off by one\n  see test");
+        let kinds: Vec<&ReviewKind> = t.review.iter().map(|e| &e.kind).collect();
+        assert_eq!(kinds.len(), 4, "{kinds:?}");
+        assert!(matches!(kinds[1], ReviewKind::Inline { line: 3, .. }));
+        assert!(matches!(kinds[3], ReviewKind::Verdict { verdict: Verdict::RequestChanges, text } if text.is_empty()));
+        assert_eq!(t.review.iter().skip(1).map(|e| e.author.as_str()).collect::<Vec<_>>(), ["sam", "sam", "sam"]);
+        assert!(t.review_round().is_empty(), "the verdict closed the round");
+
+        // Neither text nor inline: still refused.
+        apply(&store, None, Op::MoveTicket { id: id.clone(), to: ColumnId::Review, position: None, owner: None, branch: None }).unwrap();
+        let err = apply(&store, None, Op::RequestChanges { id: id.clone(), by: "sam".into(), review: VerdictReview::text("   ") }).unwrap_err();
+        assert!(matches!(err, OpError::Invalid(_)));
+
+        // Accept with a comment — the comment is on the log with the verdict, not in the notes.
+        apply(&store, None, Op::AcceptReview { id: id.clone(), by: "sam".into(), review: VerdictReview::text(" ship it ") }).unwrap();
+        let board = store.read_board().unwrap();
+        let t = board.ticket(&id).unwrap();
+        assert!(matches!(&t.review.last().unwrap().kind, ReviewKind::Verdict { verdict: Verdict::Accept, text } if text == "ship it"));
+        assert!(t.notes.iter().all(|n| n.text != "ship it"), "{:?}", t.notes);
+
+        // Discard is a verdict too, and a blank inline entry is dropped rather than refused.
+        let review = VerdictReview { text: "dead end".into(), inline: vec![inline("x", 1, Side::New, "  ")] };
+        apply(&store, None, Op::DiscardTicket { id: id.clone(), reason: "discarded: dead end".into(), by: "sam".into(), review }).unwrap();
+        let board = store.read_board().unwrap();
+        let t = board.ticket(&id).unwrap();
+        assert!(matches!(&t.review.last().unwrap().kind, ReviewKind::Verdict { verdict: Verdict::Discard, text } if text == "dead end"));
+        assert!(!matches!(&t.review[t.review.len() - 2].kind, ReviewKind::Inline { .. }), "the blank inline entry was dropped");
+    }
+
     #[test]
     fn requesting_changes_sends_a_review_ticket_back_to_doing_with_its_feedback() {
         let (_dir, store) = scratch();
         let _first = create(&store, "something already in doing");
         let id = to_review(&store, "the reviewed one");
 
-        apply(&store, None, Op::RequestChanges { id: id.clone(), feedback: "  naming is off  ".into(), by: "sam".into() }).unwrap();
+        apply(&store, None, Op::RequestChanges { id: id.clone(), by: "sam".into(), review: VerdictReview::text("  naming is off  ") }).unwrap();
 
         let board = store.read_board().unwrap();
         let t = board.ticket(&id).unwrap();
@@ -1888,16 +2046,16 @@ mod review_round_tests {
         let (_dir, store) = scratch();
 
         let todo = create(&store, "not started");
-        let err = apply(&store, None, Op::RequestChanges { id: todo, feedback: "x".into(), by: "sam".into() }).unwrap_err();
+        let err = apply(&store, None, Op::RequestChanges { id: todo, by: "sam".into(), review: VerdictReview::text("x") }).unwrap_err();
         assert!(err.to_string().contains("not in review"), "{err}");
 
         let id = to_review(&store, "blank feedback");
-        let err = apply(&store, None, Op::RequestChanges { id: id.clone(), feedback: "   ".into(), by: "sam".into() }).unwrap_err();
+        let err = apply(&store, None, Op::RequestChanges { id: id.clone(), by: "sam".into(), review: VerdictReview::text("   ") }).unwrap_err();
         assert!(err.to_string().contains("say what has to change"), "{err}");
 
         let ext = to_review(&store, "delegated");
         apply(&store, None, Op::BindExternal { id: ext.clone(), external: Some(crate::store::model::External::github_issue(9)) }).unwrap();
-        let err = apply(&store, None, Op::RequestChanges { id: ext, feedback: "fix it".into(), by: "sam".into() }).unwrap_err();
+        let err = apply(&store, None, Op::RequestChanges { id: ext, by: "sam".into(), review: VerdictReview::text("fix it") }).unwrap_err();
         assert!(err.to_string().contains("delegate's issue"), "{err}");
     }
 
@@ -1907,7 +2065,7 @@ mod review_round_tests {
     fn a_changes_requested_card_is_claimable_by_another_agent_and_the_claim_re_owns_it() {
         let (_dir, store) = scratch();
         let id = to_review(&store, "sent back");
-        apply(&store, None, Op::RequestChanges { id: id.clone(), feedback: "rename it".into(), by: "sam".into() }).unwrap();
+        apply(&store, None, Op::RequestChanges { id: id.clone(), by: "sam".into(), review: VerdictReview::text("rename it") }).unwrap();
 
         apply(&store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
 
@@ -1937,7 +2095,7 @@ mod review_round_tests {
     fn moving_back_to_review_clears_the_changes_requested_flag() {
         let (_dir, store) = scratch();
         let id = to_review(&store, "round two");
-        apply(&store, None, Op::RequestChanges { id: id.clone(), feedback: "again".into(), by: "sam".into() }).unwrap();
+        apply(&store, None, Op::RequestChanges { id: id.clone(), by: "sam".into(), review: VerdictReview::text("again") }).unwrap();
         apply(&store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
 
         apply(&store, None, Op::MoveTicket { id: id.clone(), to: ColumnId::Review, position: None, owner: None, branch: None }).unwrap();
@@ -1951,7 +2109,7 @@ mod review_round_tests {
         let (_dir, store) = scratch();
         for discard in [false, true] {
             let id = to_review(&store, "terminal");
-            apply(&store, None, Op::RequestChanges { id: id.clone(), feedback: "f".into(), by: "sam".into() }).unwrap();
+            apply(&store, None, Op::RequestChanges { id: id.clone(), by: "sam".into(), review: VerdictReview::text("f") }).unwrap();
             // Put it back in review and re-set the flag directly: the ordinary move clears it, so this is the only way
             // to reach the state these two ops defend against — a hand-edited board, or a future path that forgets.
             let board = store.read_board().unwrap();
@@ -1965,7 +2123,7 @@ mod review_round_tests {
                 .unwrap();
 
             let op = if discard {
-                Op::DiscardTicket { id: id.clone(), reason: "no".into() }
+                Op::DiscardTicket { id: id.clone(), reason: "no".into(), by: "tester".into(), review: VerdictReview::default() }
             } else {
                 Op::LandTicket { id: id.clone(), expected_branch: branch, reason: "merged".into() }
             };
@@ -2001,7 +2159,7 @@ mod review_round_tests {
         // And the review verdict that sends it back clears it in one step.
         apply(&store, None, Op::MoveTicket { id: id.clone(), to: ColumnId::Review, position: None, owner: None, branch: None }).unwrap();
         block(&store).unwrap();
-        apply(&store, None, Op::RequestChanges { id: id.clone(), feedback: "rebase it".into(), by: "sam".into() }).unwrap();
+        apply(&store, None, Op::RequestChanges { id: id.clone(), by: "sam".into(), review: VerdictReview::text("rebase it") }).unwrap();
         assert!(!blocked(&store));
 
         // Nothing outside review can be flagged: the flag means "this is what stopped it landing from here".
@@ -2015,7 +2173,7 @@ mod review_round_tests {
     fn accepting_arms_the_landing_and_leaves_the_card_in_review() {
         let (_dir, store) = scratch();
         let id = to_review(&store, "good work");
-        apply(&store, None, Op::AcceptReview { id: id.clone(), by: "sam".into() }).unwrap();
+        apply(&store, None, Op::AcceptReview { id: id.clone(), by: "sam".into(), review: VerdictReview::default() }).unwrap();
 
         let board = store.read_board().unwrap();
         let t = board.ticket(&id).unwrap();
@@ -2025,10 +2183,10 @@ mod review_round_tests {
 
         // Only review work can be accepted, and never somebody else's.
         let todo = create(&store, "not in review");
-        assert!(matches!(apply(&store, None, Op::AcceptReview { id: todo, by: "sam".into() }), Err(OpError::Invalid(_))));
+        assert!(matches!(apply(&store, None, Op::AcceptReview { id: todo, by: "sam".into(), review: VerdictReview::default() }), Err(OpError::Invalid(_))));
         let ext = to_review(&store, "delegated");
         apply(&store, None, Op::BindExternal { id: ext.clone(), external: Some(crate::store::model::External::github_issue(7)) }).unwrap();
-        assert!(matches!(apply(&store, None, Op::AcceptReview { id: ext, by: "sam".into() }), Err(OpError::Invalid(_))));
+        assert!(matches!(apply(&store, None, Op::AcceptReview { id: ext, by: "sam".into(), review: VerdictReview::default() }), Err(OpError::Invalid(_))));
     }
 
     /// The dead end that must not be one: a blocked landing is out of the loop's reach until a human puts it back, and
@@ -2037,7 +2195,7 @@ mod review_round_tests {
     fn accepting_again_clears_a_blocked_landing_and_re_arms_it() {
         let (_dir, store) = scratch();
         let id = to_review(&store, "conflicted once");
-        apply(&store, None, Op::AcceptReview { id: id.clone(), by: "sam".into() }).unwrap();
+        apply(&store, None, Op::AcceptReview { id: id.clone(), by: "sam".into(), review: VerdictReview::default() }).unwrap();
         apply(&store, None, Op::StartLanding { id: id.clone(), agent: "claude".into() }).unwrap();
         apply(&store, None, Op::BlockLanding { id: id.clone(), reason: "conflicts in f".into() }).unwrap();
 
@@ -2047,7 +2205,7 @@ mod review_round_tests {
         assert!(matches!(err, OpError::Invalid(ref e) if e.contains("blocked")), "{err}");
 
         // The human resolves it by hand and presses Accept again.
-        let out = apply(&store, None, Op::AcceptReview { id: id.clone(), by: "sam".into() }).unwrap();
+        let out = apply(&store, None, Op::AcceptReview { id: id.clone(), by: "sam".into(), review: VerdictReview::default() }).unwrap();
         assert_eq!(out.result["retry"], true, "the op says it was a retry, so the UI can word it as one");
         let t = store.read_board().unwrap().ticket(&id).unwrap().clone();
         assert!(t.accepted && !t.landing_blocked);
@@ -2065,7 +2223,7 @@ mod review_round_tests {
         let err = apply(&store, None, Op::StartLanding { id: id.clone(), agent: "claude".into() }).unwrap_err();
         assert!(matches!(err, OpError::Invalid(ref e) if e.contains("not been accepted")), "{err}");
 
-        apply(&store, None, Op::AcceptReview { id: id.clone(), by: "sam".into() }).unwrap();
+        apply(&store, None, Op::AcceptReview { id: id.clone(), by: "sam".into(), review: VerdictReview::default() }).unwrap();
         let out = apply(&store, None, Op::StartLanding { id: id.clone(), agent: "claude".into() }).unwrap();
         assert_eq!(out.result["branch"], "k-1/x", "the taker is told which branch to rebase");
 
@@ -2090,7 +2248,7 @@ mod review_round_tests {
     fn a_stale_landing_marker_stops_holding_the_ticket() {
         let (_dir, store) = scratch();
         let id = to_review(&store, "abandoned mid-landing");
-        apply(&store, None, Op::AcceptReview { id: id.clone(), by: "sam".into() }).unwrap();
+        apply(&store, None, Op::AcceptReview { id: id.clone(), by: "sam".into(), review: VerdictReview::default() }).unwrap();
         apply(&store, None, Op::StartLanding { id: id.clone(), agent: "claude".into() }).unwrap();
 
         let board = store.read_board().unwrap();
@@ -2116,7 +2274,7 @@ mod review_round_tests {
     fn releasing_a_rework_ticket_keeps_its_feedback_flag() {
         let (_dir, store) = scratch();
         let id = to_review(&store, "handed back");
-        apply(&store, None, Op::RequestChanges { id: id.clone(), feedback: "still wrong".into(), by: "sam".into() }).unwrap();
+        apply(&store, None, Op::RequestChanges { id: id.clone(), by: "sam".into(), review: VerdictReview::text("still wrong") }).unwrap();
         apply(&store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
 
         apply(&store, None, Op::Release { id: id.clone() }).unwrap();
@@ -2133,7 +2291,7 @@ mod review_round_tests {
         let (_dir, store) = scratch();
         let waiting = create(&store, "brand new work");
         let sent_back = to_review(&store, "reviewed and returned");
-        apply(&store, None, Op::RequestChanges { id: sent_back.clone(), feedback: "tighten it".into(), by: "sam".into() }).unwrap();
+        apply(&store, None, Op::RequestChanges { id: sent_back.clone(), by: "sam".into(), review: VerdictReview::text("tighten it") }).unwrap();
 
         let board = store.read_board().unwrap();
         let claims = store.read_claims().unwrap();
@@ -2153,7 +2311,7 @@ mod review_round_tests {
     fn a_claimed_or_external_rework_card_is_not_surfaced() {
         let (_dir, store) = scratch();
         let id = to_review(&store, "sent back");
-        apply(&store, None, Op::RequestChanges { id: id.clone(), feedback: "x".into(), by: "sam".into() }).unwrap();
+        apply(&store, None, Op::RequestChanges { id: id.clone(), by: "sam".into(), review: VerdictReview::text("x") }).unwrap();
 
         apply(&store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
         let board = store.read_board().unwrap();

@@ -62,7 +62,7 @@ at all.
 ## Reviewing a ticket
 
 A card in `review` carries a **Review** tab beside its details, with the branch, the worktree still on disk, the
-progress log, a comment box, and three verdicts:
+review log, a comment box, and three verdicts:
 
 - **Accept** — clears the work to land. It doesn't close the card: it marks the ticket `accepted`, and a running
   `/kanban:work` loop then picks it up ahead of all other work, rebases its branch onto your main branch and
@@ -84,9 +84,17 @@ progress log, a comment box, and three verdicts:
 - **Discard** — retires work that will never land. The card closes but its dependents stay blocked, which is the
   point of the difference from Accept. Your comment is folded into the reason.
 
-All three are yours alone: agents address feedback and land what you approve, but they never decide the work was good
-enough. Delegated
-(external) tickets have no Review tab — their verdict belongs on the issue the daemon is working from.
+Everything said *about* the work goes on the card's **review log**, kept apart from the worker's progress notes and
+only ever added to. Your comment box adds to it: with whichever verdict you press, or on its own with **Add to
+review**. Comments you leave on lines in the diff (click a line number) are listed under the box and become entries
+of their own, anchored to `path:line`. A `/kanban:review` loop writes its findings there too — they appear under your
+box as they arrive, without disturbing what you are typing — and it may press a verdict itself only when the board's
+`auto_review` setting says so; writing the review never depends on that. The log survives landing: the detail pane
+shows it read-only once the card is done.
+
+All three verdicts are yours alone unless you turned `auto_review` on: agents address feedback and land what you
+approve, but they never decide the work was good enough. Delegated (external) tickets have no Review tab — their
+verdict belongs on the issue the daemon is working from.
 
 Dependencies (`depends_on`) block a ticket until they're all done — and since done means landed, a dependent's
 fresh worktree is guaranteed to contain its predecessors' code. Epics group tickets, colour their cards, and move

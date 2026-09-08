@@ -292,7 +292,9 @@ dispatch is the ask. Somebody is blocked on near-finished code, and its worktree
 2. `kanban_worktree_start` — it re-attaches to the existing `k-<n>/…` branch and the worktree that was kept through
    review; your previous commits are all there.
 3. **The newest `changes requested:` note is the spec for this round.** Read it, address exactly it, commit — and if the
-   ticket has an open PR, push the branch so the PR updates.
+   ticket has an open PR, push the branch so the PR updates. The ticket's `review` log holds the same feedback
+   structured — each inline comment as its own `{path, line, side, text}` entry — beside any auto-review findings; read
+   it when a bullet in the note needs its context.
 4. `kanban_move` back to `review`, which clears the flag. Leave the worktree in place, exactly as at any other
    close-out. The board takes it from there.
 

@@ -460,7 +460,7 @@ mod tests {
     use super::*;
     use crate::{
         git::git,
-        ops::Op,
+        ops::{Op, VerdictReview},
         store::model::{ColumnId, External, Status, TicketId},
     };
 
@@ -761,7 +761,7 @@ mod tests {
         let parent = refined_parent(&s, &[43]);
         ops::apply(&s.store, None, Op::MoveTicket { id: TicketId("K-3".into()), to: ColumnId::Review, position: None, owner: None, branch: None })
             .unwrap();
-        ops::apply(&s.store, None, Op::DiscardTicket { id: TicketId("K-3".into()), reason: "retired".into() }).unwrap();
+        ops::apply(&s.store, None, Op::DiscardTicket { id: TicketId("K-3".into()), reason: "retired".into(), by: "tester".into(), review: VerdictReview::default() }).unwrap();
         let closed = External { closed: true, sub_issues: vec![43], ..External::github_issue(42) };
         ops::apply(&s.store, None, Op::BindExternal { id: parent, external: Some(closed) }).unwrap();
 
@@ -868,7 +868,7 @@ mod tests {
             Op::CreateTicket { title: "dependent".into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![TicketId("K-1".into())], status: Status::Ready, model: None, effort: None, auto_merge: false },
         )
         .unwrap();
-        ops::apply(&s.store, None, Op::DiscardTicket { id: TicketId("K-1".into()), reason: "abandoned".into() }).unwrap();
+        ops::apply(&s.store, None, Op::DiscardTicket { id: TicketId("K-1".into()), reason: "abandoned".into(), by: "tester".into(), review: VerdictReview::default() }).unwrap();
         // Even though the branch still exists and could later merge, the ticket is done+discarded: no sweep revives it,
         // and the dependent stays blocked.
         git(&s.repo, &["merge", "-q", "--ff-only", "k-1/work"]).unwrap();

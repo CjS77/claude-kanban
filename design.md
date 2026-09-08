@@ -111,6 +111,11 @@ The board is one file, `.kanban/board.json`, committed to your repo:
       "epic": "EP-1",
       "status": "ready",
       "pr": { "number": 12, "url": "https://github.com/acme/myrepo/pull/12", "state": "merged", "merged_commit": "8f7d3a2c1b" },
+      "review": [
+        { "at": "2026-07-14T10:00:00Z", "author": "auto-review", "kind": "comment", "text": "auto-review — verdict: accept …" },
+        { "at": "2026-07-14T10:05:00Z", "author": "user", "kind": "inline", "path": "src/audit.rs", "line": 42, "text": "nit: name" },
+        { "at": "2026-07-14T10:05:00Z", "author": "user", "kind": "verdict", "verdict": "accept", "text": "ship it" }
+      ],
       "column": { "id": "review", "branch": "k-4/audit-log" }
     },
     {
@@ -133,7 +138,7 @@ The board is one file, `.kanban/board.json`, committed to your repo:
 }
 ```
 
-Eight properties of this shape are load-bearing:
+Nine properties of this shape are load-bearing:
 
 - **A ticket's `column` is a tagged object, not a bare string.** The `id` names the workflow state and that state's data nests inside it:
   `doing` carries `owner` and `branch`, `review` carries `branch`, `done` carries `branch`, `completed_at`, and (only when true)
@@ -164,6 +169,12 @@ Eight properties of this shape are load-bearing:
   they are additive and `#[serde(default)]`, and every load floors them above the highest id in use — so a board written before they
   existed, or hand-edited to add a higher id, cannot hand out an id that is already taken. The reconciled value persists on the board's
   next write; nothing is upgraded on disk for it.
+- **`review` is an append-only log, apart from `notes`.** What was said *about* the work — a human's comments, a review loop's findings,
+  the comments left on diff lines (`{kind: "inline", path, line, side, text}`, `side` defaulting to `new`) and the verdicts pressed
+  (`{kind: "verdict", verdict, text}`) — lives here, never in the worker's progress notes, and nothing rewrites it: a second review sits
+  beside the first. A verdict entry closes a round, which is how a review loop knows a card it already judged has come back for another
+  look. Writing to it is never gated on `auto_review`; only pressing a verdict is. Additive and `#[serde(default)]` like the id counters:
+  no schema bump.
 
 Two optional fields look outward: `external` binds a ticket to a work item in another system — `{provider, kind, number}`, e.g. the GitHub
 issue a minesweeper daemon is chewing on — and `pr` binds it to the GitHub PR carrying its branch — `{number, url, state, merged_commit}`,

@@ -181,6 +181,8 @@ pub fn router(app: AppState) -> Router {
         .route("/ui/ticket/{id}/review", get(routes::review_pane))
         .route("/ui/ticket/{id}/review/accept", post(routes::review_accept))
         .route("/ui/ticket/{id}/review/changes", post(routes::review_changes))
+        .route("/ui/ticket/{id}/review/comment", post(routes::review_comment))
+        .route("/ui/ticket/{id}/review/log", get(routes::review_log))
         .route("/ui/ticket/{id}/discard", post(routes::discard_ticket))
         .route("/ui/ticket/{id}/delete", post(routes::delete_ticket))
         .route("/ui/epic", post(routes::create_epic))

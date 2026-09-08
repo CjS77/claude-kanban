@@ -17,12 +17,12 @@ use serde::Deserialize;
 use super::{AppState, security::VERSION_HEADER, views};
 use crate::{
     diff,
-    ops::{self, Op, TicketPatch},
+    ops::{self, Op, TicketPatch, VerdictReview},
     pr,
     store::{
         Store, StoreError,
         derive,
-        model::{ColumnId, Effort, EpicId, Status, TicketId},
+        model::{ColumnId, Effort, EpicId, ReviewKind, Status, TicketId},
     },
     worktree,
 };
@@ -562,12 +562,79 @@ pub async fn save_settings(State(app): State<AppState>, Form(form): Form<Setting
 
 /// The Discard button: retire a review ticket without landing it — done with `discarded: true`, dependents stay
 /// blocked. Always a human decision (the confirm dialog says exactly what it costs); the auto-lander never does this.
-/// The comment box the three verdicts share. Every field defaults: the detail pane's own Discard button posts an empty
-/// body, and must keep working.
+/// The review pane's form, shared by the three verdicts and Add to review. Every field defaults: the detail pane's own
+/// Discard button posts an empty body, and must keep working. `inline` is the JSON array glue.js fills from the diff's
+/// inline comments — `[{path, line, side, text}]` — which become separate review entries.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct ReviewForm {
     comment: String,
+    inline: String,
+}
+
+/// One inline comment as glue.js serialises it. `side` is `new` (default) or `old`.
+#[derive(Debug, Deserialize)]
+struct InlineForm {
+    path: String,
+    line: u32,
+    #[serde(default)]
+    side: String,
+    text: String,
+}
+
+/// The form's inline comments as review entries. Malformed JSON is a 422 like any other bad input — glue.js writes this
+/// field, so a human never sees the toast unless something is genuinely wrong.
+fn inline_entries(raw: &str) -> Result<Vec<ReviewKind>, AppError> {
+    if raw.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let items: Vec<InlineForm> =
+        serde_json::from_str(raw).map_err(|e| AppError::bad_request(format!("inline comments are not valid JSON: {e}")))?;
+    items
+        .into_iter()
+        .map(|i| Ok(ReviewKind::Inline { path: i.path, line: i.line, side: i.side.parse().map_err(AppError::bad_request)?, text: i.text }))
+        .collect()
+}
+
+/// What a verdict carries onto the review log: the comment box and the inline comments drained with it.
+fn verdict_review(form: &ReviewForm) -> Result<VerdictReview, AppError> {
+    Ok(VerdictReview { text: form.comment.trim().to_owned(), inline: inline_entries(&form.inline)? })
+}
+
+/// The Add to review button: the comment box and any inline comments go onto the review log with no verdict. The op
+/// refuses an empty post, which surfaces as the usual 422 toast.
+pub async fn review_comment(
+    State(app): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Form(form): Form<ReviewForm>,
+) -> Result<Html<String>, AppError> {
+    let id = TicketId(id);
+    let version = client_version(&headers)?;
+    let comment = form.comment.trim();
+    let entries = inline_entries(&form.inline)?
+        .into_iter()
+        .chain((!comment.is_empty()).then(|| ReviewKind::Comment { text: comment.to_owned() }))
+        .collect();
+    let op = Op::AddReview { id: id.clone(), author: app.ui_owner.clone(), entries };
+    blocking(&app, move |store| {
+        ops::apply(store, Some(version), op)?;
+        rendered_review(store, &id)
+    })
+    .await
+}
+
+/// The review log alone, for the review pane to re-fetch on every board change: an agent's findings appear while the
+/// pane is open without the comment box or the pending inline comments being touched. Lenient about the column on
+/// purpose — a ticket that just left review must not turn every refresh into a toast.
+pub async fn review_log(State(app): State<AppState>, Path(id): Path<String>) -> Result<Html<String>, AppError> {
+    let id = TicketId(id);
+    blocking(&app, move |store| {
+        let board = store.read_board()?;
+        let tpl = views::review_log(&board, &id).ok_or_else(|| AppError::not_found(&id.to_string()))?;
+        Ok(Html(tpl.render()?))
+    })
+    .await
 }
 
 /// The review pane. 404 when there is no such ticket, 422 when it is not a review ticket of ours to judge — rendering
@@ -608,14 +675,9 @@ pub async fn review_accept(
 ) -> Result<Html<String>, AppError> {
     let id = TicketId(id);
     let version = client_version(&headers)?;
-    let (owner, comment) = (app.ui_owner.clone(), form.comment.trim().to_owned());
+    let op = Op::AcceptReview { id: id.clone(), by: app.ui_owner.clone(), review: verdict_review(&form)? };
     blocking(&app, move |store| {
-        // The verdict carries the client's version and so must go first: it is the guarded action, and any write ahead
-        // of it — the note included — would bump the board out from under its own CAS check.
-        ops::apply(store, Some(version), Op::AcceptReview { id: id.clone(), by: owner.clone() })?;
-        if !comment.is_empty() {
-            ops::apply(store, None, Op::AddNote { id: id.clone(), text: comment, author: Some(owner) })?;
-        }
+        ops::apply(store, Some(version), op)?;
         // Back to the review pane, not the detail pane: the card is still in review, and the pane now says what it is
         // waiting for.
         rendered_review(store, &id)
@@ -632,7 +694,7 @@ pub async fn review_changes(
     Form(form): Form<ReviewForm>,
 ) -> Result<Html<String>, AppError> {
     let id = TicketId(id);
-    let op = Op::RequestChanges { id: id.clone(), feedback: form.comment, by: app.ui_owner.clone() };
+    let op = Op::RequestChanges { id: id.clone(), by: app.ui_owner.clone(), review: verdict_review(&form)? };
     mutate_then_detail(&app, &headers, op, id).await
 }
 
@@ -649,7 +711,7 @@ pub async fn discard_ticket(
     } else {
         format!("discarded from the board by {}: {comment}", app.ui_owner)
     };
-    let op = Op::DiscardTicket { id: id.clone(), reason };
+    let op = Op::DiscardTicket { id: id.clone(), reason, by: app.ui_owner.clone(), review: verdict_review(&form)? };
     let version = client_version(&headers)?;
     blocking(&app, move |store| {
         ops::apply(store, Some(version), op)?;

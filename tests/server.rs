@@ -11,11 +11,11 @@ use axum::{
 };
 use claude_kanban::{
     git::git,
-    ops::{self, Op},
+    ops::{self, Op, VerdictReview},
     server::{App, router},
     store::{
         Store,
-        model::{ColumnId, Effort, EpicId, External, PrRef, PrState, Status, TicketId},
+        model::{ColumnId, Effort, EpicId, External, PrRef, PrState, ReviewKind, Status, TicketId, Verdict},
     },
 };
 use http_body_util::BodyExt;
@@ -166,7 +166,7 @@ async fn the_example_query_narrows_to_the_landed_ux_card() {
 
     to_done_with_branch(&store, "K-1", "k-1/work");
     to_review_with_branch(&store, "K-2", "k-2/work");
-    ops::apply(&store, None, Op::DiscardTicket { id: TicketId("K-2".into()), reason: "superseded".into() }).unwrap();
+    ops::apply(&store, None, Op::DiscardTicket { id: TicketId("K-2".into()), reason: "superseded".into(), by: "tester".into(), review: VerdictReview::default() }).unwrap();
     to_review_with_branch(&store, "K-3", "k-3/work");
     to_done_with_branch(&store, "K-4", "k-4/work");
 
@@ -1439,8 +1439,11 @@ async fn accept_arms_the_landing_and_leaves_the_card_in_review() {
     assert_eq!(t.column.id(), ColumnId::Review, "accepting never moves the card — done still means landed");
     assert!(t.accepted);
     assert!(!t.landing_blocked);
-    assert_eq!(t.notes.last().unwrap().text, "ship it");
-    assert_eq!(t.notes.last().unwrap().author.as_deref(), Some("tester"));
+    // The comment is review, not progress: it rides on the verdict entry of the review log and stays out of the notes.
+    let last = t.review.last().unwrap();
+    assert!(matches!(&last.kind, ReviewKind::Verdict { verdict: Verdict::Accept, text } if text == "ship it"), "{:?}", t.review);
+    assert_eq!(last.author, "tester");
+    assert!(t.notes.iter().all(|n| n.text != "ship it"), "{:?}", t.notes);
     assert!(t.notes.iter().any(|n| n.text.contains("accepted by tester")), "the verdict itself is on the record: {:?}", t.notes);
 
     // The old hazard, gone: a dependent waits for the code to actually reach main, not for a reviewer's opinion.
@@ -1466,7 +1469,7 @@ async fn an_accepted_ticket_is_offered_for_landing_until_it_is_taken_or_blocked(
     };
     assert_eq!(next(&store), None, "an unaccepted review ticket is nobody's to land");
 
-    ops::apply(&store, None, Op::AcceptReview { id: id.clone(), by: "tester".into() }).unwrap();
+    ops::apply(&store, None, Op::AcceptReview { id: id.clone(), by: "tester".into(), review: VerdictReview::default() }).unwrap();
     assert_eq!(next(&store), Some(id.clone()), "accepted: the loop's first duty");
 
     ops::apply(&store, None, Op::StartLanding { id: id.clone(), agent: "claude".into() }).unwrap();
@@ -1478,7 +1481,7 @@ async fn an_accepted_ticket_is_offered_for_landing_until_it_is_taken_or_blocked(
     assert_eq!(note, "landing blocked: conflicts in src/a.rs", "the human is told exactly where to look");
 
     // Only the human puts it back — and accepting again is that act.
-    ops::apply(&store, None, Op::AcceptReview { id: id.clone(), by: "tester".into() }).unwrap();
+    ops::apply(&store, None, Op::AcceptReview { id: id.clone(), by: "tester".into(), review: VerdictReview::default() }).unwrap();
     assert_eq!(next(&store), Some(id));
 }
 
@@ -1491,7 +1494,7 @@ async fn the_board_shows_a_landing_in_flight_and_a_blocked_one() {
     to_review_with_branch(&store, "K-1", "k-1/now");
     to_review_with_branch(&store, "K-2", "k-2/refused");
     for id in ["K-1", "K-2"] {
-        ops::apply(&store, None, Op::AcceptReview { id: TicketId(id.into()), by: "tester".into() }).unwrap();
+        ops::apply(&store, None, Op::AcceptReview { id: TicketId(id.into()), by: "tester".into(), review: VerdictReview::default() }).unwrap();
     }
     ops::apply(&store, None, Op::StartLanding { id: TicketId("K-1".into()), agent: "claude".into() }).unwrap();
     ops::apply(&store, None, Op::BlockLanding { id: TicketId("K-2".into()), reason: "conflicts in Cargo.toml".into() }).unwrap();
@@ -1521,6 +1524,97 @@ async fn discard_folds_the_reviewers_comment_into_the_reason() {
     let board = store.read_board().unwrap();
     let note = board.ticket(&TicketId("K-1".into())).unwrap().notes.last().unwrap().text.clone();
     assert_eq!(note, "discarded from the board by tester: replaced by K-9");
+}
+
+/// Percent-encode a form value the way a browser would, so a JSON `inline` field survives the form body.
+fn enc(s: &str) -> String {
+    s.bytes()
+        .map(|b| if b.is_ascii_alphanumeric() { char::from(b).to_string() } else { format!("%{b:02X}") })
+        .collect()
+}
+
+/// Inline diff comments arrive as a JSON field beside the comment box and become entries of their own on the review
+/// log, ahead of the verdict that carried them. With the box empty they are also the `changes requested:` feedback —
+/// the bullets glue.js used to write into the box are now composed server-side.
+#[tokio::test]
+async fn a_verdict_files_inline_comments_as_review_entries() {
+    let (_dir, router, store) = test_app();
+    seed_ticket(&store, "Needs a nudge");
+    to_review_with_branch(&store, "K-1", "k-1/nudge");
+
+    let inline = r#"[{"path":"src/a.rs","line":7,"text":"nit"},{"path":"src/a.rs","line":3,"side":"old","text":"why gone?"}]"#;
+    let version = store.read_board().unwrap().version;
+    let form = format!("comment=&inline={}", enc(inline));
+    let res = router.clone().oneshot(post("/ui/ticket/K-1/review/changes", version, &form)).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let board = store.read_board().unwrap();
+    let t = board.ticket(&TicketId("K-1".into())).unwrap();
+    assert_eq!(t.column.id(), ColumnId::Doing);
+    assert_eq!(t.notes.last().unwrap().text, "changes requested: - src/a.rs:7 — nit\n- src/a.rs:3 (old line) — why gone?");
+    let kinds: Vec<&ReviewKind> = t.review.iter().map(|e| &e.kind).collect();
+    assert_eq!(kinds.len(), 3, "{:?}", t.review);
+    assert!(matches!(kinds[0], ReviewKind::Inline { path, line: 7, text, .. } if path == "src/a.rs" && text == "nit"));
+    assert!(matches!(kinds[1], ReviewKind::Inline { line: 3, .. }));
+    assert!(matches!(kinds[2], ReviewKind::Verdict { verdict: Verdict::RequestChanges, .. }));
+    assert!(t.review.iter().all(|e| e.author == "tester"));
+
+    // Malformed JSON in the field is a 422 toast, not a silent drop.
+    let version = board.version;
+    let res = router.oneshot(post("/ui/ticket/K-1/review/accept", version, &format!("inline={}", enc("[not json")))).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+/// Add to review files the box and the inline comments with no verdict; the log partial serves on its own for the
+/// pane's live refresh; and the detail pane keeps showing the log after the card lands, apart from the progress notes.
+#[tokio::test]
+async fn add_to_review_appends_without_a_verdict_and_the_log_outlives_review() {
+    let (_dir, router, store) = test_app();
+    seed_ticket(&store, "Looked at");
+    seed_ticket(&store, "Untouched");
+    to_review_with_branch(&store, "K-1", "k-1/looked");
+
+    // An agent's review is already there; the human's addition sits beside it rather than replacing it.
+    ops::apply(
+        &store,
+        None,
+        Op::AddReview { id: TicketId("K-1".into()), author: "auto-review".into(), entries: vec![ReviewKind::Comment { text: "auto-review — verdict: accept".into() }] },
+    )
+    .unwrap();
+
+    let version = store.read_board().unwrap().version;
+    let form = format!("comment=agreed%2C+one+nit&inline={}", enc(r#"[{"path":"src/b.rs","line":2,"text":"typo"}]"#));
+    let res = router.clone().oneshot(post("/ui/ticket/K-1/review/comment", version, &form)).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let pane = body_text(res).await;
+    assert!(pane.contains("auto-review — verdict: accept") && pane.contains("agreed, one nit") && pane.contains("src/b.rs:2"), "{pane}");
+    assert!(pane.contains(r#"hx-get="/ui/ticket/K-1/review/log""#), "the pane's log refreshes itself live: {pane}");
+
+    let board = store.read_board().unwrap();
+    let t = board.ticket(&TicketId("K-1".into())).unwrap();
+    assert_eq!(t.review.len(), 3);
+    assert_eq!(t.column.id(), ColumnId::Review, "no verdict was given");
+    assert!(t.notes.iter().all(|n| !n.text.contains("agreed")), "review text stays out of the progress log: {:?}", t.notes);
+
+    // An empty post has nothing to file.
+    let res = router.clone().oneshot(post("/ui/ticket/K-1/review/comment", board.version, "comment=+")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // The partial on its own, for any ticket — a card that just left review must not toast on every refresh.
+    let log = body_text(router.clone().oneshot(get("/ui/ticket/K-1/review/log")).await.unwrap()).await;
+    assert!(log.contains("typo") && !log.contains("Request changes"), "the log alone, not the pane: {log}");
+    let res = router.clone().oneshot(get("/ui/ticket/K-2/review/log")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "an empty log is an empty partial");
+    let res = router.clone().oneshot(get("/ui/ticket/K-99/review/log")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+    // Landed: the detail pane still shows the review, under its own heading, above the progress notes.
+    ops::apply(&store, None, Op::MoveTicket { id: TicketId("K-1".into()), to: ColumnId::Done, position: None, owner: None, branch: None }).unwrap();
+    let detail = body_text(router.oneshot(get("/ui/ticket/K-1")).await.unwrap()).await;
+    let review = detail.find("agreed, one nit").expect("the review survives landing");
+    let progress = detail.find("Add a progress note").expect("the progress log");
+    assert!(review < progress, "review above progress, not inside it: {detail}");
+    assert!(!detail.contains("/ui/ticket/K-1/review/log"), "read-only there — no live refresh: {detail}");
 }
 
 /// The detail pane's own Discard button posts an empty body and predates the comment box — it must keep working.

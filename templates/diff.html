@@ -7,8 +7,8 @@
     underneath. The anchor links are real hrefs, but glue.js intercepts them to scroll the diff pane alone.
 
     The data-* attributes are the inline-comment feature's anchors: glue.js reads the ticket off the root, the path off
-    the file, and the line number off the clicked row, then writes `path:line — comment` into the review pane's comment
-    box. They exist for that alone — nothing server-side reads them back. -#}
+    the file, and the line number off the clicked row, and buffers the comment until the review pane's next press sends
+    it as an inline entry on the ticket's review log. They exist for that alone — nothing server-side reads them back. -#}
 {% if files.is_empty() %}
 <p class="diff-empty">No changes — <span class="font-mono">{{ branch }}</span> is even with <span class="font-mono">{{ main }}</span>.</p>
 {% else %}

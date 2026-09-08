@@ -295,6 +295,12 @@ pub struct Ticket {
     /// Progress log, appended to by `kanban_note`. Newest last.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<Note>,
+    /// The review log: what reviewers — human or agent — said about the code, and the verdicts they pressed. Newest
+    /// last, and only ever appended to: a second reviewer adds to the first rather than replacing it. Kept apart from
+    /// `notes` on purpose — that is the worker's progress, this is the judgement of it. A `Verdict` entry closes a
+    /// round; see [`Ticket::review_round`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub review: Vec<ReviewEntry>,
     /// Binding to a work item in another system (e.g. a GitHub issue a delegate daemon works). External tickets are never
     /// given worktrees or branches by this binary; the binding is just an address for other tools to act on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -447,6 +453,135 @@ pub struct Note {
     pub text: String,
 }
 
+/// One entry in a ticket's review log — see [`Ticket::review`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReviewEntry {
+    pub at: DateTime<Utc>,
+    /// Who wrote it: `user`, `auto-review`, or an agent name. Never absent — a review always has a reviewer.
+    pub author: String,
+    #[serde(flatten)]
+    pub kind: ReviewKind,
+}
+
+/// What a review entry is, tagged on `kind` like [`Column`] is on `id`: the three shapes carry different data.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ReviewKind {
+    /// Free-form review text (markdown).
+    Comment { text: String },
+    /// A comment anchored to one line of the reviewed diff. `side` says which file version `line` counts in: `new`
+    /// (the default, the branch's file) or `old` — a deleted line has no new-side number, so it can only be quoted by
+    /// its pre-change one, which is what the "(old line)" suffix in the rendered bullet means.
+    Inline {
+        path: String,
+        line: u32,
+        #[serde(default, skip_serializing_if = "Side::is_new")]
+        side: Side,
+        text: String,
+    },
+    /// A verdict was pressed, with the comment that went with it. Closes a review round.
+    Verdict {
+        verdict: Verdict,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        text: String,
+    },
+}
+
+impl ReviewKind {
+    /// The entry's text, whatever its shape.
+    #[must_use]
+    pub fn text(&self) -> &str {
+        match self {
+            ReviewKind::Comment { text } | ReviewKind::Inline { text, .. } | ReviewKind::Verdict { text, .. } => text,
+        }
+    }
+
+    /// The rendered anchor of an inline entry — `path:line`, or `path:line (old line)` — and `None` for the rest.
+    #[must_use]
+    pub fn anchor(&self) -> Option<String> {
+        match self {
+            ReviewKind::Inline { path, line, side: Side::New, .. } => Some(format!("{path}:{line}")),
+            ReviewKind::Inline { path, line, side: Side::Old, .. } => Some(format!("{path}:{line} (old line)")),
+            _ => None,
+        }
+    }
+
+    /// The `- path:line — text` bullet a rework round reads, with continuation lines indented under the reference so
+    /// the anchor stays scannable. `None` for anything but an inline entry.
+    #[must_use]
+    pub fn bullet(&self) -> Option<String> {
+        self.anchor().map(|anchor| format!("- {anchor} — {}", self.text().split('\n').collect::<Vec<_>>().join("\n  ")))
+    }
+}
+
+/// Which version of a file an inline comment's line number counts in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Side {
+    #[default]
+    New,
+    Old,
+}
+
+impl Side {
+    #[must_use]
+    pub fn is_new(&self) -> bool {
+        *self == Side::New
+    }
+}
+
+impl std::str::FromStr for Side {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Side, String> {
+        match s {
+            "new" | "" => Ok(Side::New),
+            "old" => Ok(Side::Old),
+            other => Err(format!("'{other}' is not a diff side (new/old)")),
+        }
+    }
+}
+
+/// The three review verdicts, as recorded in the review log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Verdict {
+    Accept,
+    RequestChanges,
+    Discard,
+}
+
+impl Verdict {
+    /// The wire name (`accept` / `request_changes` / `discard`).
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Verdict::Accept => "accept",
+            Verdict::RequestChanges => "request_changes",
+            Verdict::Discard => "discard",
+        }
+    }
+}
+
+impl fmt::Display for Verdict {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for Verdict {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Verdict, String> {
+        match s {
+            "accept" => Ok(Verdict::Accept),
+            "request_changes" => Ok(Verdict::RequestChanges),
+            "discard" => Ok(Verdict::Discard),
+            other => Err(format!("unknown verdict {other:?} — use \"accept\", \"request_changes\", or \"discard\"")),
+        }
+    }
+}
+
 /// A group of tickets. Epics are meta-tasks, not work: nobody claims one, and an epic stores no column — its place on the
 /// board is derived from its tickets on read (see [`crate::store::derive::epic_column`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -491,6 +626,17 @@ pub fn migrate(board: &mut Board) -> Result<bool, u32> {
     }
     board.schema = CURRENT_SCHEMA;
     Ok(true)
+}
+
+impl Ticket {
+    /// The current review round: every entry after the newest [`ReviewKind::Verdict`], or the whole log when no
+    /// verdict has been pressed yet. A verdict closes a round — after a rework the ticket comes back to review as
+    /// new work, and an old review's findings must not read as this round's.
+    #[must_use]
+    pub fn review_round(&self) -> &[ReviewEntry] {
+        let start = self.review.iter().rposition(|e| matches!(e.kind, ReviewKind::Verdict { .. })).map_or(0, |i| i + 1);
+        &self.review[start..]
+    }
 }
 
 impl Board {
@@ -738,6 +884,38 @@ mod tests {
     }
 
     #[test]
+    fn review_entries_round_trip_and_default_absent() {
+        // A board written before the review log existed parses with an empty one, and `false`-ish defaults (new side,
+        // empty verdict text) stay off the wire so hand-written entries need only the essentials.
+        let old: Ticket =
+            serde_json::from_str(r#"{ "id": "K-1", "title": "x", "status": "ready", "column": { "id": "review" } }"#).unwrap();
+        assert!(old.review.is_empty());
+        assert!(old.review_round().is_empty());
+
+        let at: DateTime<Utc> = "2026-07-14T09:12:00Z".parse().unwrap();
+        let entries = vec![
+            ReviewEntry { at, author: "auto-review".into(), kind: ReviewKind::Comment { text: "looks right".into() } },
+            ReviewEntry { at, author: "user".into(), kind: ReviewKind::Inline { path: "src/a.rs".into(), line: 7, side: Side::New, text: "nit".into() } },
+            ReviewEntry { at, author: "user".into(), kind: ReviewKind::Inline { path: "src/a.rs".into(), line: 3, side: Side::Old, text: "why gone?".into() } },
+            ReviewEntry { at, author: "user".into(), kind: ReviewKind::Verdict { verdict: Verdict::RequestChanges, text: String::new() } },
+            ReviewEntry { at, author: "auto-review".into(), kind: ReviewKind::Comment { text: "second pass".into() } },
+        ];
+        let v = serde_json::to_value(&entries).unwrap();
+        assert_eq!(v[0], serde_json::json!({ "at": "2026-07-14T09:12:00Z", "author": "auto-review", "kind": "comment", "text": "looks right" }));
+        assert_eq!(v[1], serde_json::json!({ "at": "2026-07-14T09:12:00Z", "author": "user", "kind": "inline", "path": "src/a.rs", "line": 7, "text": "nit" }));
+        assert_eq!(v[2]["side"], "old");
+        assert_eq!(v[3], serde_json::json!({ "at": "2026-07-14T09:12:00Z", "author": "user", "kind": "verdict", "verdict": "request_changes" }));
+        assert_eq!(serde_json::from_value::<Vec<ReviewEntry>>(v).unwrap(), entries);
+
+        assert_eq!(entries[1].kind.bullet().as_deref(), Some("- src/a.rs:7 — nit"));
+        assert_eq!(entries[2].kind.bullet().as_deref(), Some("- src/a.rs:3 (old line) — why gone?"));
+        assert_eq!(entries[0].kind.bullet(), None);
+
+        let t = Ticket { review: entries.clone(), ..old };
+        assert_eq!(t.review_round(), &entries[4..], "a verdict closes the round; what follows it is the next one");
+    }
+
+    #[test]
     fn done_discarded_round_trips_and_defaults_false() {
         let kept = Column::Done { branch: None, completed_at: "2026-07-14T09:12:00Z".parse().unwrap(), discarded: false };
         let v = serde_json::to_value(&kept).unwrap();
@@ -952,6 +1130,7 @@ mod tests {
             landing_blocked: false,
             depends_on: vec![],
             notes: vec![],
+            review: vec![],
             external: None,
             pr: None,
             column: Column::Todo,
