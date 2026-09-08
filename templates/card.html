@@ -2,11 +2,12 @@
     business (it suppresses the click after a real drag). A stub in doing is being refined: pink, mixed from the theme's
     own card colour so it reads in light and dark alike — and a review ticket whose accept could not merge is washed the
     same way in red, because that one is stuck until the human goes to the branch. The two states cannot co-occur (one
-    is a stub in doing, the other a ticket in review), so the later rule never has to win a fight. -#}
-<article class="card bg-base-100 shadow-sm border-l-4 cursor-pointer select-none {% if card.done %}opacity-60{% endif %}"
+    is a stub in doing, the other a ticket in review), so the later rule never has to win a fight. An archived card is
+    the done rendering with the click taken away: the ticket is no longer on the board, so there is no detail to open. -#}
+<article class="card bg-base-100 shadow-sm border-l-4 select-none {% if card.done %}opacity-60{% endif %}{% if !card.archived %} cursor-pointer{% endif %}"
          style="border-left-color: {{ card.color }}{% if card.refining %}; background-color: color-mix(in oklab, var(--color-base-100) 72%, #ec4899){% endif %}{% if card.landing_blocked %}; background-color: color-mix(in oklab, var(--color-base-100) 70%, #ef4444){% endif %}"
          data-id="{{ card.id }}"
-         hx-get="/ui/ticket/{{ card.id }}" hx-target="#detail" hx-trigger="click" hx-swap="innerHTML">
+         {% if card.archived %}title="archived — the full record is in .kanban/archive.json"{% else %}hx-get="/ui/ticket/{{ card.id }}" hx-target="#detail" hx-trigger="click" hx-swap="innerHTML"{% endif %}>
     <div class="card-body p-3 gap-1">
         <div class="flex items-start justify-between gap-2">
             <div class="flex items-center gap-1">

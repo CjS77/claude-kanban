@@ -2,13 +2,18 @@
   THE board fragment — the one rendering path for initial load, post-action refreshes, and SSE-driven live updates.
   `data-version` is the optimistic-concurrency token: glue.js copies it into the X-Board-Version header of every mutating
   request. `data-draggable` turns dragging off while filters hide cards — a drop position among *visible* cards would be
-  meaningless against the full column.
+  meaningless against the full column. `data-archive` widens the grid to five tracks (a rule in page.html — the committed
+  Tailwind build has no grid-cols-5) while the toolbar's archive toggle adds the fifth column after done.
 -#}
 <div id="board-root" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 items-start"
      data-version="{{ version }}"
-     data-draggable="{{ draggable }}">
+     data-draggable="{{ draggable }}"
+     data-archive="{{ archive.is_some() }}">
     {% for col in columns %}
     {% include "column.html" %}
     {% endfor %}
+    {% if let Some(archive) = archive %}
+    {% include "archive_column.html" %}
+    {% endif %}
 </div>
 {% include "filter_epic.html" %}

@@ -204,7 +204,10 @@ pub async fn board(State(app): State<AppState>, Query(filters): Query<views::Fil
         // One subprocess per render, in the main checkout (the store's parent — the same derivation `ui_owner` uses).
         // The local branch list feeds the review column's "branch gone" flag: no answer flags nothing.
         let heads = store.dir().parent().and_then(crate::git::local_heads);
-        Ok(Html(views::board(&view, &filters, heads.as_ref()).render()?))
+        // Read at request time, only when the toggle is on: `kanban:archive` rewrites the file behind our back, and it
+        // stays display-only — never joined into the board, never seen by the MCP tools.
+        let archive = filters.show_archive().then(|| store.read_archive()).transpose()?;
+        Ok(Html(views::board(&view, &filters, heads.as_ref(), archive.as_ref()).render()?))
     })
     .await
 }

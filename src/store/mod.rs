@@ -75,6 +75,8 @@ const BOARD_FILE: &str = "board.json";
 const BACKUP_V1_FILE: &str = "board-v1.json";
 /// File name of the live-claims sidecar inside the store directory.
 const CLAIMS_FILE: &str = "claims.json";
+/// File name of the append-only archive `kanban:archive` writes beside the board.
+const ARCHIVE_FILE: &str = "archive.json";
 /// File name of the store config inside the store directory.
 pub(crate) const CONFIG_FILE: &str = "config.json";
 /// File name of the landing sweep's branch-tip observations, gitignored like the claims sidecar (machine-local facts).
@@ -180,6 +182,12 @@ impl Store {
     #[must_use] 
     pub fn claims_path(&self) -> PathBuf {
         self.dir.join(CLAIMS_FILE)
+    }
+
+    /// Path of the archive `kanban:archive` writes.
+    #[must_use]
+    pub fn archive_path(&self) -> PathBuf {
+        self.dir.join(ARCHIVE_FILE)
     }
 
     /// Path of the store config.
@@ -309,6 +317,13 @@ impl Store {
     /// Read the live claims. A missing sidecar is an empty one. Lock-free.
     pub fn read_claims(&self) -> Result<Vec<Claim>, StoreError> {
         Ok(io::read_json(&self.claims_path())?.unwrap_or_default())
+    }
+
+    /// Read the archive, fresh from disk: `kanban:archive` rewrites it behind the server's back. A missing file is an
+    /// empty archive — nothing has been retired yet — and, unlike the board, nothing here is migrated or validated: the
+    /// tickets are shown, never acted on.
+    pub fn read_archive(&self) -> Result<model::Archive, StoreError> {
+        read_json_or_default(&self.archive_path())
     }
 
     /// The one write cycle: lock → read fresh state → check `expected_version` → run `f` → validate → bump version →

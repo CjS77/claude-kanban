@@ -19,6 +19,13 @@
     <link rel="stylesheet" href="/assets/diff.css">
     <link rel="stylesheet" href="/assets/github.min.css" media="(prefers-color-scheme: light)">
     <link rel="stylesheet" href="/assets/github-dark.min.css" media="(prefers-color-scheme: dark)">
+    {#- The archive column: assets/app.css is a committed Tailwind build with no grid-cols-5 and no pressed look for a
+        checkbox wearing .btn, and regenerating it needs the standalone CLI — so the two rules live here. The breakpoint is
+        the build's own xl (80rem), where the board goes to four tracks. -#}
+    <style>
+        @media (min-width: 80rem) { #board-root[data-archive="true"] { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+        #archive-toggle:checked { background-color: var(--color-base-300); }
+    </style>
     <script src="/assets/htmx.min.js" defer></script>
     <script src="/assets/sortable.min.js" defer></script>
     <script src="/assets/marked.min.js" defer></script>
@@ -43,6 +50,15 @@
                 <button class="btn btn-primary" onclick="document.getElementById('new-ticket-modal').showModal()">+ Ticket</button>
                 <button class="btn btn-epic" onclick="document.getElementById('new-epic-modal').showModal()">+ Epic</button>
             </div>
+            {#-
+              The archive toggle is a checkbox because it lives in #filters: htmx harvests it with the epic dropdown and the
+              search box, so `archive=on` rides the same /ui/board request and the fifth column comes and goes with the
+              rest of the board. daisyUI paints the aria-label as the button face. glue.js remembers the state in
+              localStorage so a reload keeps the column open.
+            -#}
+            <input id="archive-toggle" type="checkbox" name="archive" class="btn btn-sm btn-ghost text-lg" aria-label="🗄️"
+                   title="Show archived tickets (.kanban/archive.json)"
+                   hx-get="/ui/board" hx-target="#board" hx-include="#filters" hx-trigger="change">
             {#-
               The search is a different kind of control from the create buttons, so it gets air. The margin is inline
               because assets/app.css is a committed Tailwind build whose widest gap utility is gap-4 — see the note on

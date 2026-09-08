@@ -602,6 +602,17 @@ pub struct Epic {
     pub auto_merge: bool,
 }
 
+/// The whole of `.kanban/archive.json`: what `kanban:archive` moved off the board. Read-only for the binary — the script
+/// is its only writer — and never merged into a [`Board`]: the archive column renders it, nothing else looks at it. Both
+/// arrays default so an archive written before `epics` existed still loads.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Archive {
+    #[serde(default)]
+    pub tickets: Vec<Ticket>,
+    #[serde(default)]
+    pub epics: Vec<Epic>,
+}
+
 /// Upgrade an older board in memory. Returns whether anything changed (the caller's next write persists it); a schema
 /// *newer* than this binary understands comes back as `Err` with the found version — misreading it would be worse than
 /// stopping, so the caller must refuse loudly.

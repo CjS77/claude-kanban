@@ -14,7 +14,7 @@ use crate::{
     store::{
         Claim,
         derive::{self, BoardView, ClaimView, EpicView, TicketView},
-        model::{Board, ColumnId, Effort, Epic, Status},
+        model::{Archive, Board, ColumnId, Effort, Epic, Status},
     },
 };
 
@@ -42,9 +42,19 @@ pub struct Filters {
     /// The search box, raw. Parsed by [`crate::server::search::Query::parse`].
     #[serde(default)]
     pub q: String,
+    /// The toolbar's archive toggle — a checkbox, so it arrives as `on` when ticked and not at all otherwise. Not a
+    /// filter: it adds the fifth column rather than hiding anything, so it never affects `draggable`.
+    #[serde(default)]
+    pub archive: String,
 }
 
 impl Filters {
+    /// Whether the board should carry the archive column.
+    #[must_use]
+    pub fn show_archive(&self) -> bool {
+        !self.archive.is_empty()
+    }
+
     /// Whether these filters hide nothing — the board only drags while that holds. The query half is the parsed
     /// query's own emptiness, never a string check on `q`: a query that parses to no terms hides nothing by
     /// construction.
@@ -125,6 +135,8 @@ pub struct BoardTpl {
     /// Dragging is disabled while filters hide cards: a drop index among visible cards is meaningless.
     pub draggable: bool,
     pub columns: Vec<ColumnCtx>,
+    /// The fifth column, present only while the toolbar's archive toggle is on.
+    pub archive: Option<ArchiveCtx>,
     pub epics: Vec<EpicOptionCtx>,
     pub filter_oob: bool,
 }
@@ -181,6 +193,8 @@ pub struct CardCtx {
     pub branch: Option<String>,
     /// The `doing` owner, for cards that are owned but not live-claimed (e.g. dragged into doing by a human).
     pub owner: Option<String>,
+    /// Off the board entirely: the card is a record, so it opens nothing and drags nowhere.
+    pub archived: bool,
 }
 
 /// A bound PR, pre-rendered for the templates: one linked badge, label and colour chosen by state.
@@ -236,13 +250,22 @@ pub struct ItemCtx {
     pub done: bool,
 }
 
+/// The archive column: every ticket `kanban:archive` has retired, rendered like done cards but inert — no detail pane
+/// to open, no list for SortableJS to adopt. `total` is the unfiltered count, so the header can say what the search box
+/// is hiding.
+#[derive(Debug)]
+pub struct ArchiveCtx {
+    pub cards: Vec<CardCtx>,
+    pub total: usize,
+}
+
 /// The default colour of a ticket with no epic: a neutral grey stripe.
 const NO_EPIC_COLOR: &str = "#9ca3af";
 
 // A view-model builder has one caller and no use for custom hashers.
 #[allow(clippy::implicit_hasher)]
 #[must_use]
-pub fn board(view: &BoardView, filters: &Filters, heads: Option<&HashSet<String>>) -> BoardTpl {
+pub fn board(view: &BoardView, filters: &Filters, heads: Option<&HashSet<String>>, archive: Option<&Archive>) -> BoardTpl {
     // Parsed once per render, not once per card: a linear scan over ~26 tickets is dwarfed by the git subprocess the
     // handler already spawns, but re-parsing per ticket would be gratuitous.
     let query = Query::parse(&filters.q);
@@ -265,6 +288,7 @@ pub fn board(view: &BoardView, filters: &Filters, heads: Option<&HashSet<String>
         version: view.version,
         draggable: filters.is_empty(&query),
         columns,
+        archive: archive.map(|a| archive_column(a, view, filters, &query)),
         epics: view
             .epics
             .iter()
@@ -310,6 +334,38 @@ fn card(t: &TicketView, view: &BoardView, heads: Option<&HashSet<String>>) -> Ca
             crate::store::model::Column::Doing { owner, .. } => Some(owner.clone()),
             _ => None,
         },
+        archived: false,
+    }
+}
+
+/// The archive as a view of its own: archived tickets joined with the epics they name, which may still be on the board
+/// (an epic follows its last ticket into the archive, so it lives in exactly one of the two files) — either way the card
+/// gets its stripe, and an epic in neither falls back to the no-epic grey. No claims, no blocking: nothing here is live.
+fn archive_view(archive: &Archive, view: &BoardView) -> BoardView {
+    let archived_epics = archive.epics.iter().map(|e| EpicView { epic: e.clone(), column: ColumnId::Done, tickets: vec![] });
+    BoardView {
+        version: view.version,
+        columns: vec![],
+        tickets: archive
+            .tickets
+            .iter()
+            .map(|t| TicketView { ticket: t.clone(), blocked: false, auto_merge_effective: false, claim: None })
+            .collect(),
+        epics: view.epics.iter().cloned().chain(archived_epics).collect(),
+    }
+}
+
+/// The archive column: the same search box and epic dropdown narrow it, so a query spans the board and its history.
+fn archive_column(archive: &Archive, view: &BoardView, filters: &Filters, query: &Query) -> ArchiveCtx {
+    let archived = archive_view(archive, view);
+    ArchiveCtx {
+        cards: archived
+            .tickets
+            .iter()
+            .filter(|t| filters.admits_ticket(query, t, &archived.epics))
+            .map(|t| CardCtx { archived: true, ..card(t, &archived, None) })
+            .collect(),
+        total: archive.tickets.len(),
     }
 }
 

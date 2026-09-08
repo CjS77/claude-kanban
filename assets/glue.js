@@ -1,6 +1,6 @@
 /* claude-kanban glue — the only hand-written JavaScript in the project.
  *
- * Owns exactly nine jobs, none of which htmx attributes can express alone:
+ * Owns exactly ten jobs, none of which htmx attributes can express alone:
  *   1. Stamp the board version (X-Board-Version) onto every mutating request — the optimistic-concurrency token, and,
  *      being a custom header, the CSRF guard: cross-site forms can't send it, and cross-origin fetch would need a CORS
  *      preflight the server never grants.
@@ -17,6 +17,8 @@
  *   9. Inline diff comments: comment on a line in the diff, and the comments are listed under the review pane's comment
  *      box and serialised into its hidden `inline` field, so whichever button the reviewer presses — a verdict, or Add
  *      to review — files each one on the ticket's review log as an entry of its own.
+ *  10. Archive toggle memory: the toolbar checkbox that adds the archive column is remembered in localStorage, so the
+ *      column survives a reload the way the rest of the page shell does not.
  */
 (() => {
     "use strict";
@@ -357,6 +359,28 @@
         if (status < 200 || status >= 300 || !form) return;
         if (drafts.delete(form.dataset.ticket)) diag(`filed inline comments for ${form.dataset.ticket}`);
     });
+
+    // --- 10. archive toggle memory ------------------------------------------------------------------------------------
+    // Restored here, before htmx boots: this script is deferred, so it runs before DOMContentLoaded, and htmx only
+    // processes the page — firing #board's `load` fetch, which harvests the checkbox with the rest of #filters — once
+    // that event fires. localStorage can throw (private windows, blocked site data); a failure just means unticked.
+    const archiveToggle = document.getElementById("archive-toggle");
+    if (archiveToggle) {
+        const key = "kanban.archive";
+        try {
+            archiveToggle.checked = localStorage.getItem(key) === "1";
+        } catch {
+            /* no memory available — the toggle starts off */
+        }
+        archiveToggle.addEventListener("change", () => {
+            diag(`archive column ${archiveToggle.checked ? "shown" : "hidden"}`);
+            try {
+                localStorage.setItem(key, archiveToggle.checked ? "1" : "0");
+            } catch {
+                /* nothing to remember it in */
+            }
+        });
+    }
 
     // htmx calls this once per swapped-in element (and once for body on load): wire up whatever arrived.
     htmx.onLoad((el) => {

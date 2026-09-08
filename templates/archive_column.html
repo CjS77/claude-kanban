@@ -1,0 +1,17 @@
+{#- The archive column: what `kanban:archive` moved out of board.json, read from .kanban/archive.json on every render so
+    the column follows the file. Deliberately NOT a `.ticket-list` — SortableJS adopts every one of those, and nothing here
+    may be dragged onto the board or dropped into. The cards are the ordinary done rendering, minus their click. -#}
+<section class="flex flex-col gap-2 min-w-0" data-archive-column>
+    <header class="flex items-center justify-between px-1">
+        <h2 class="font-semibold text-sm uppercase tracking-wide opacity-70">Archive</h2>
+        <span class="badge badge-ghost badge-sm" title="{{ archive.total }} archived in all">{{ archive.cards.len() }}</span>
+    </header>
+    <div class="flex flex-col gap-2 grow min-h-16 rounded-lg">
+        {% for card in archive.cards %}
+        {% include "card.html" %}
+        {% endfor %}
+        {% if archive.total == 0 %}
+        <p class="text-xs opacity-60 px-1">Nothing archived yet — <code class="font-mono">/kanban:archive</code> moves old done tickets here.</p>
+        {% endif %}
+    </div>
+</section>
