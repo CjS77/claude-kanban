@@ -1632,3 +1632,96 @@ async fn the_bodyless_discard_post_still_works() {
     let note = board.ticket(&TicketId("K-1".into())).unwrap().notes.last().unwrap().text.clone();
     assert_eq!(note, "discarded from the board by tester", "no comment, no colon");
 }
+
+// ---- the archive column -------------------------------------------------------------------------------------------
+
+/// An archive as `kanban-archive.sh` writes it: full ticket and epic objects, exactly the board's own shapes.
+const ARCHIVE_JSON: &str = r##"{
+  "tickets": [
+    {"id": "K-90", "title": "Retired long ago", "status": "ready", "epic": "E-9", "labels": ["ux"],
+     "column": {"id": "done", "branch": "k-90/retired", "completed_at": "2026-01-01T00:00:00Z"}},
+    {"id": "K-91", "title": "Retired without an epic", "status": "ready",
+     "column": {"id": "done", "completed_at": "2026-01-02T00:00:00Z", "discarded": true}}
+  ],
+  "epics": [{"id": "E-9", "title": "Old epic", "color": "#123456", "status": "ready"}]
+}"##;
+
+fn archive_column(html: &str) -> Option<&str> {
+    let start = html.find("data-archive-column")?;
+    Some(&html[start..html[start..].find("</section>").map_or(html.len(), |end| start + end)])
+}
+
+#[tokio::test]
+async fn the_archive_column_is_absent_until_the_toggle_is_on() {
+    let (_dir, router, store) = test_app();
+    std::fs::write(store.archive_path(), ARCHIVE_JSON).unwrap();
+    seed_ticket(&store, "Live work");
+
+    let html = body_text(router.clone().oneshot(get("/ui/board")).await.unwrap()).await;
+    assert!(archive_column(&html).is_none(), "no toggle, no column: {html}");
+    assert!(html.contains(r#"data-archive="false""#), "{html}");
+    assert!(!html.contains("Retired long ago"), "archived tickets must stay out of the board: {html}");
+
+    let page = body_text(router.oneshot(get("/")).await.unwrap()).await;
+    assert!(page.contains(r#"id="archive-toggle" type="checkbox" name="archive""#), "the toolbar carries the toggle: {page}");
+    assert!(page.contains(r#"aria-label="🗄️""#), "{page}");
+}
+
+#[tokio::test]
+async fn the_toggle_adds_an_empty_archive_column_when_there_is_no_archive_file() {
+    let (_dir, router, store) = test_app();
+    assert!(!store.archive_path().exists());
+    let res = router.oneshot(get("/ui/board?archive=on")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "a missing archive is empty, never an error");
+    let html = body_text(res).await;
+    assert!(html.contains(r#"data-archive="true""#), "{html}");
+    let column = archive_column(&html).expect("the column renders");
+    assert!(column.contains(">Archive</h2>") && column.contains("Nothing archived yet"), "{column}");
+    assert!(!column.contains("<article"), "{column}");
+}
+
+#[tokio::test]
+async fn the_archive_column_lists_the_archived_tickets_read_only() {
+    let (_dir, router, store) = test_app();
+    std::fs::write(store.archive_path(), ARCHIVE_JSON).unwrap();
+    seed_ticket(&store, "Live work");
+
+    let html = body_text(router.clone().oneshot(get("/ui/board?archive=on")).await.unwrap()).await;
+    let column = archive_column(&html).expect("the column renders");
+    assert!(column.contains("Retired long ago") && column.contains("Retired without an epic"), "{column}");
+    assert!(!column.contains("Live work"), "board tickets belong to their own columns: {column}");
+    assert!(column.contains(r#"badge-sm" title="2 archived in all">2</span>"#), "{column}");
+    assert!(column.contains("border-left-color: #123456"), "the archived epic paints its ticket's stripe: {column}");
+    assert!(column.contains("border-left-color: #9ca3af"), "no epic anywhere means the neutral stripe: {column}");
+    assert!(column.contains(">discarded</span>") && column.contains("⎇ k-90/retired"), "{column}");
+    assert!(!column.contains("hx-get") && !column.contains("ticket-list") && !column.contains("cursor-pointer"), "read-only: {column}");
+    assert!(html.contains(r#"data-draggable="true""#), "the archive is not a filter, so the board still drags");
+
+    // The live board is untouched: the fragment's version is the board's, and the store never sees the archive.
+    assert!(html.contains(r#"data-version="1""#), "{html}");
+    assert!(store.read_board().unwrap().ticket(&TicketId("K-90".into())).is_none());
+}
+
+#[tokio::test]
+async fn the_search_box_narrows_the_archive_column_too() {
+    let (_dir, router, store) = test_app();
+    std::fs::write(store.archive_path(), ARCHIVE_JSON).unwrap();
+    let html = body_text(router.clone().oneshot(get("/ui/board?archive=on&q=label:ux")).await.unwrap()).await;
+    let column = archive_column(&html).expect("the column renders");
+    assert!(column.contains("Retired long ago") && !column.contains("Retired without an epic"), "{column}");
+    assert!(column.contains(r#"title="2 archived in all">1</span>"#), "the badge counts what is shown: {column}");
+
+    let html = body_text(router.oneshot(get("/ui/board?archive=on&q=epic:none")).await.unwrap()).await;
+    let column = archive_column(&html).expect("the column renders");
+    assert!(!column.contains("Retired long ago") && column.contains("Retired without an epic"), "{column}");
+}
+
+#[tokio::test]
+async fn a_corrupt_archive_is_reported_not_swallowed() {
+    let (_dir, router, store) = test_app();
+    std::fs::write(store.archive_path(), "not json").unwrap();
+    let res = router.oneshot(get("/ui/board?archive=on")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let html = body_text(res).await;
+    assert!(html.contains("archive.json"), "the toast names the file: {html}");
+}

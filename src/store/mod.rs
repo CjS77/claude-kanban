@@ -628,6 +628,16 @@ mod tests {
     }
 
     #[test]
+    fn a_missing_archive_reads_as_empty_and_an_old_one_without_epics_still_loads() {
+        let (_dir, store) = scratch_store();
+        assert_eq!(store.read_archive().unwrap(), model::Archive::default());
+        fs::write(store.archive_path(), r#"{"tickets":[]}"#).unwrap();
+        assert_eq!(store.read_archive().unwrap(), model::Archive::default(), "the epics array arrived later than the file");
+        fs::write(store.archive_path(), "{").unwrap();
+        assert!(store.read_archive().is_err(), "a torn archive is an error, not an empty column");
+    }
+
+    #[test]
     fn mutate_bumps_the_version_and_persists() {
         let (_dir, store) = scratch_store();
         let ((), v) = store

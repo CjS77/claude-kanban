@@ -251,7 +251,7 @@ pub struct ItemCtx {
 }
 
 /// The archive column: every ticket `kanban:archive` has retired, rendered like done cards but inert — no detail pane
-/// to open, no list for SortableJS to adopt. `total` is the unfiltered count, so the header can say what the search box
+/// to open, no list for `SortableJS` to adopt. `total` is the unfiltered count, so the header can say what the search box
 /// is hiding.
 #[derive(Debug)]
 pub struct ArchiveCtx {
