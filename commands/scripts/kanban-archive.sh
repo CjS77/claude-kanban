@@ -28,13 +28,19 @@ board="$(dirname "$(git rev-parse --git-common-dir 2>/dev/null)")/.kanban/board.
 [ -f "$board" ] || { echo "no board at $board — run /kanban:init first" >&2; exit 2; }
 dir="$(dirname "$board")"
 archive="$dir/archive.json"
-[ -f "$archive" ] || echo '{"tickets":[]}' > "$archive"
+[ -f "$archive" ] || echo '{"tickets":[],"epics":[]}' > "$archive"
 
-# Which done tickets are old enough to move, held back if a surviving ticket still depends on them.
+# The archive plan: the ticket ids old enough to move, then the epic ids that move with them.
+#  - a ticket is a candidate once it completed before the cutoff; it is held back while any ticket that
+#    will REMAIN still depends on it, so the board never ends up with a dangling depends_on.
+#  - an epic is "done" the way the board derives it: it has tickets and every one of them is in done.
+#    A done epic moves too, but is held back while any ticket that will REMAIN still names it — else
+#    that ticket's .epic would dangle. A later run takes it once its last ticket is gone.
 plan_prog='
-  [ .tickets[] | select((.column.completed_at // "") != "" and .column.completed_at < $c) | .id ] as $cand
-  | ([ .tickets[].id ] - $cand) as $keep0
-  | .tickets as $ts
+  .tickets as $ts
+  | (.epics // []) as $eps
+  | [ $ts[] | select((.column.completed_at // "") != "" and .column.completed_at < $c) | .id ] as $cand
+  | ([ $ts[].id ] - $cand) as $keep0
   | ( { keep: $keep0, changed: true }
       | until(.changed == false;
           .keep as $k
@@ -42,34 +48,48 @@ plan_prog='
           | ( ($k + [ $cand[] | select(IN($needed[])) ]) | unique ) as $k2
           | { keep: $k2, changed: (($k2 | length) != ($k | length)) } )
       | .keep ) as $keep
-  | ($cand - $keep)'
+  | ($cand - $keep) as $atickets
+  | [ $eps[]
+      | .id as $eid
+      | ([ $ts[] | select(.epic == $eid) ]) as $mine
+      | select(($mine | length) > 0 and ([ $mine[] | select(.column.id == "done") ] | length) == ($mine | length))
+      | $eid ] as $done_epics
+  | ([ $ts[] | select(.id | IN($atickets[]) | not) | .epic // empty ]) as $kept_refs
+  | { tickets: $atickets, epics: ($done_epics - $kept_refs) }'
 
-ids="$(jq -c --arg c "$cutoff" "$plan_prog" "$board")"
-count="$(jq 'length' <<<"$ids")"
+plan="$(jq -c --arg c "$cutoff" "$plan_prog" "$board")"
+tids="$(jq -c '.tickets' <<<"$plan")"; eids="$(jq -c '.epics' <<<"$plan")"
+count_t="$(jq '.tickets | length' <<<"$plan")"; count_e="$(jq '.epics | length' <<<"$plan")"
 
-if [ "$count" -eq 0 ]; then
+if [ "$count_t" -eq 0 ] && [ "$count_e" -eq 0 ]; then
   echo "nothing completed before $cutoff to archive (age $age)"
   exit 0
 fi
 
 # Atomic rewrites: temp files in the same dir, then rename. Build the archive from the ORIGINAL
-# board (it still holds the tickets) before overwriting the board.
+# board (it still holds the tickets and epics) before overwriting the board.
 tmp_arc="$(mktemp "$dir/.archive.XXXXXX")"
 tmp_brd="$(mktemp "$dir/.board.XXXXXX")"
 trap 'rm -f "$tmp_arc" "$tmp_brd"' EXIT
 
-jq --argjson ids "$ids" --slurpfile board "$board" '
-  (.tickets // []) as $existing
-  | ($existing | map(.id)) as $have
-  | [ $board[0].tickets[] | select(.id | IN($ids[])) | select(.id | IN($have[]) | not) ] as $new
-  | { tickets: ($existing + $new) }
+jq --argjson tids "$tids" --argjson eids "$eids" --slurpfile board "$board" '
+  (.tickets // []) as $et | (.epics // []) as $ee
+  | ($et | map(.id)) as $havet | ($ee | map(.id)) as $havee
+  | [ $board[0].tickets[]         | select(.id | IN($tids[])) | select(.id | IN($havet[]) | not) ] as $newt
+  | [ ($board[0].epics // [])[]   | select(.id | IN($eids[])) | select(.id | IN($havee[]) | not) ] as $newe
+  | { tickets: ($et + $newt), epics: ($ee + $newe) }
 ' "$archive" > "$tmp_arc"
 
-jq --argjson ids "$ids" '.version += 1 | .tickets |= map(select(.id | IN($ids[]) | not))' "$board" > "$tmp_brd"
+jq --argjson tids "$tids" --argjson eids "$eids" '
+  .version += 1
+  | .tickets |= map(select(.id | IN($tids[]) | not))
+  | .epics   |= map(select(.id | IN($eids[]) | not))
+' "$board" > "$tmp_brd"
 
 mv "$tmp_arc" "$archive"
 mv "$tmp_brd" "$board"
 trap - EXIT
 
-echo "archived $count ticket(s) completed before $cutoff (age $age) to $archive"
-jq -r --argjson ids "$ids" '.tickets[] | select(.id | IN($ids[])) | "  \(.id)  \(.title)"' "$archive"
+echo "archived $count_t ticket(s) and $count_e epic(s) completed before $cutoff (age $age) to $archive"
+jq -r --argjson tids "$tids" '.tickets[] | select(.id | IN($tids[])) | "  \(.id)  \(.title)"' "$archive"
+jq -r --argjson eids "$eids" '.epics[]  | select(.id | IN($eids[])) | "  \(.id)  \(.title) (epic)"' "$archive"

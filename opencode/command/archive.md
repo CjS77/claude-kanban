@@ -20,6 +20,9 @@ What it does, and the guarantees you can rely on when you report back:
 
 - **Only landed work moves.** A ticket has an age only once it's in `done` (it carries `completed_at`); anything still
   in flight has no age and is never touched.
+- **Done epics move with their tickets.** An epic is archived too when it's *done* — it has tickets and every one of
+  them is in `done` — held back while any ticket that *remains* on the board still names it, so `ticket.epic` never
+  dangles. An epic with unfinished (or no) tickets stays.
 - **Dependencies stay intact.** An old ticket is held back while any ticket that *remains* on the board still depends on
   it, so the board never ends up with a dangling `depends_on`. A later run archives it once its dependents are gone —
   so it's normal for a run to leave a few old tickets behind.
