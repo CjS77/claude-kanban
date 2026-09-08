@@ -105,6 +105,20 @@ pub struct BoardParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
+pub struct TicketParams {
+    /// The ticket id, e.g. "K-7".
+    pub ticket: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct EpicParams {
+    /// The epic id, e.g. "EP-1".
+    pub epic: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
 pub struct ClaimParams {
     /// The ticket id, e.g. "K-7".
     pub ticket: String,
@@ -488,6 +502,33 @@ impl KanbanServer {
                 obj.insert("auto_review".into(), config.auto_review().into());
             }
             Ok(value)
+        })
+        .await
+    }
+
+    /// Read a single ticket by id (e.g. "K-7") — a slice instead of the whole board, for a harness that only needs one
+    /// card. The answer is the same shape as one entry of `kanban_board`'s `tickets` array: the ticket's own fields plus
+    /// `blocked`, `auto_merge_effective`, and `claim` when someone is working it. Errors when the id is not on the board.
+    #[tool]
+    async fn kanban_ticket(&self, Parameters(p): Parameters<TicketParams>) -> Result<CallToolResult, ErrorData> {
+        let id = TicketId(p.ticket);
+        self.read(move |store| {
+            let view = derive::board_view(&store.read_board()?, &store.read_claims()?);
+            ticket_value(&view, &id).ok_or_else(|| OpError::NotFound(id.0.clone()))
+        })
+        .await
+    }
+
+    /// Read one epic by id (e.g. "EP-1") plus every ticket that belongs to it — a slice instead of the whole board.
+    /// `epic` is the same shape as one entry of `kanban_board`'s `epics` array (epic fields, derived `column`, and its
+    /// checklist); `tickets` carries each of those tickets in full, the same shape `kanban_ticket` returns. An epic that
+    /// owns no tickets answers with `tickets: []` — that is a real, empty epic. Errors when the id is not on the board.
+    #[tool]
+    async fn kanban_epic(&self, Parameters(p): Parameters<EpicParams>) -> Result<CallToolResult, ErrorData> {
+        let id = EpicId(p.epic);
+        self.read(move |store| {
+            let view = derive::board_view(&store.read_board()?, &store.read_claims()?);
+            epic_value(&view, &id).ok_or_else(|| OpError::NotFound(id.0.clone()))
         })
         .await
     }
@@ -1006,6 +1047,20 @@ fn shape(view: BoardView, column: Option<ColumnId>, include_done: bool) -> serde
 
 fn to_value(view: &BoardView) -> serde_json::Value {
     serde_json::to_value(view).unwrap_or_default()
+}
+
+/// One ticket from a board view, by id — the lookup `kanban_ticket` uses, and `kanban_epic` reuses for its `tickets`.
+fn ticket_value(view: &BoardView, id: &TicketId) -> Option<serde_json::Value> {
+    view.tickets.iter().find(|t| t.ticket.id == *id).map(|t| serde_json::to_value(t).unwrap_or_default())
+}
+
+/// One epic plus the tickets that belong to it, from a board view. `epic` mirrors an entry of `kanban_board`'s `epics`
+/// array (including its own checklist `tickets`); the outer `tickets` carries each member ticket in full, exactly as
+/// `kanban_ticket` would return it.
+fn epic_value(view: &BoardView, id: &EpicId) -> Option<serde_json::Value> {
+    let epic = view.epics.iter().find(|e| e.epic.id == *id)?;
+    let tickets: Vec<_> = view.tickets.iter().filter(|t| t.ticket.epic.as_ref() == Some(id)).collect();
+    Some(serde_json::json!({ "epic": epic, "tickets": tickets }))
 }
 
 /// Keep only what sits in one column. Epics are filtered by their *derived* column, exactly as before.
