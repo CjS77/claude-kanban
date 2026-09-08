@@ -7,6 +7,9 @@ description: "Fetch one epic and all its tickets from the board as JSON, by numb
 Sibling to `/kanban:ticket`. The board is a single, ever-growing `.kanban/board.json`; loading it to see what's under
 one epic burns tokens on every unrelated card. This pulls out the epic and the tickets that belong to it.
 
+If the `kanban_dev` MCP server is connected, call its `kanban_epic` tool directly instead of running the helper below —
+same data, no shell-out. This command remains the way in for a harness (or a session) without that MCP connection.
+
 Run the helper, passing the number the user gave (`3`, `EP-3` and `ep-3` all mean epic **EP-3**):
 
 ```bash

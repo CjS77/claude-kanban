@@ -7,6 +7,9 @@ description: "Fetch one ticket from the board as JSON, by number — so you read
 The board is a single, ever-growing `.kanban/board.json`. Loading it to find one card burns tokens on every unrelated
 ticket. This pulls out just the one you asked for.
 
+If the `kanban_dev` MCP server is connected, call its `kanban_ticket` tool directly instead of running the helper below
+— same data, no shell-out. This command remains the way in for a harness (or a session) without that MCP connection.
+
 Run the helper, passing the number the user gave (`48`, `K-48` and `k-48` all mean ticket **K-48**):
 
 ```bash
