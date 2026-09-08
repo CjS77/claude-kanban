@@ -280,6 +280,23 @@ pub struct NoteParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
+pub struct ReviewParams {
+    /// The review ticket to judge, e.g. "K-7".
+    pub ticket: String,
+    /// The verdict: `accept` (clear the branch to land, card stays in review), `request_changes` (send it back to the
+    /// top of doing carrying the comment as the rework spec), or `discard` (retire it unlanded).
+    pub verdict: String,
+    /// The reviewer's message. **Required** for `request_changes` (it becomes the `changes requested:` note that is the
+    /// spec for the next round) and for `discard` (the reason). Optional for `accept` — record detailed findings as
+    /// `kanban_note`s first; this is only the one-line verdict.
+    #[serde(default)]
+    pub comment: Option<String>,
+    /// The board version from your latest `kanban_board` read.
+    pub expected_version: u64,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
 pub struct NewTicketParam {
     pub title: String,
     /// Markdown body — a full spec, since these land in review.
@@ -406,6 +423,10 @@ impl KanbanServer {
     /// `minesweeper: true` means delegation mode is live: claiming a ready ticket mirrors it to a labelled GitHub issue
     /// for an external daemon — never start a worktree or implement it yourself; the board tracks the daemon's PR back
     /// through review to done.
+    ///
+    /// `auto_review: true` means a `/kanban:review` loop may press a verdict on a review ticket with `kanban_review`
+    /// (accept / request changes / discard); `false` (the default) keeps the verdict the human's and makes that tool
+    /// refuse.
     #[tool]
     async fn kanban_board(&self, Parameters(p): Parameters<BoardParams>) -> Result<CallToolResult, ErrorData> {
         let column = match p.column.as_deref() {
@@ -424,6 +445,7 @@ impl KanbanServer {
                 obj.insert("models".into(), config.models().into());
                 obj.insert("implement_model".into(), config.implement_model().into());
                 obj.insert("refine_model".into(), config.refine_model().into());
+                obj.insert("auto_review".into(), config.auto_review().into());
             }
             Ok(value)
         })
@@ -635,6 +657,32 @@ impl KanbanServer {
         self.apply(Some(p.expected_version), op).await
     }
 
+    /// Press a review verdict on a ticket — accept, request changes, or discard — the way a human would in the browser.
+    /// This is a **guarded** tool for a `/kanban:review` loop, not part of the work loop: it applies **only** when the
+    /// board's `auto_review` is on. With `auto_review` off (the default) it refuses, because the verdict is the human's;
+    /// record your assessment with `kanban_note` and leave the card in review for them.
+    ///
+    /// - `accept` — clears the branch to land (the card stays in `review`; the sweep lands it, exactly as pressing
+    ///   Accept does). Not "done": there is still no proof the code reached main.
+    /// - `request_changes` — needs a `comment`; sends the card to the top of `doing` carrying it as the
+    ///   `changes requested:` note that a worker reads as the rework spec.
+    /// - `discard` — retires it in `done` unlanded (`discarded: true`), `comment` folded in as the reason.
+    ///
+    /// Write your detailed findings as `kanban_note`s **before** calling this; `comment` is the one-line verdict, not
+    /// the review.
+    #[tool]
+    async fn kanban_review(&self, Parameters(p): Parameters<ReviewParams>) -> Result<CallToolResult, ErrorData> {
+        let store = self.store.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            let config = Config::load(store.dir())?;
+            let op = review_verdict_op(config.auto_review(), TicketId(p.ticket), &p.verdict, p.comment.as_deref())?;
+            ops::apply(&store, Some(p.expected_version), op)
+        })
+        .await
+        .map_err(|e| ErrorData::internal_error(format!("task failed: {e}"), None))?;
+        Ok(shape_applied(result))
+    }
+
     /// Bind a ticket to a work item in another system (e.g. the GitHub issue it was mirrored to) — used by the delegate
     /// flow. Bound tickets are worked elsewhere: they never get a worktree here and `kanban_next` skips them. Omit provider
     /// to unbind.
@@ -818,6 +866,33 @@ fn nothing_eligible(todo: &[(TicketId, String)], stalled: &[(TicketId, String)])
 }
 
 /// Shape an applied op for the wire: the op's own result, plus the board's new version and any ids it minted.
+/// The author stamped on a verdict pressed by a review loop, so a note reads "accepted by auto-review" — honest that no
+/// human made the call.
+const REVIEW_AUTHOR: &str = "auto-review";
+
+/// Map a `kanban_review` request to the verdict op, gated on the board's `auto_review`. Pure so the gate and the
+/// verdict routing are unit-testable without a store: the tool loads the flag and applies whatever this returns.
+fn review_verdict_op(auto_review: bool, id: TicketId, verdict: &str, comment: Option<&str>) -> Result<Op, OpError> {
+    if !auto_review {
+        return Err(OpError::Invalid(format!(
+            "auto_review is off for this board — the verdict on {id} is the human's to give in the browser. Record your \
+             assessment with kanban_note and leave the card in review."
+        )));
+    }
+    let comment = comment.map(str::trim).filter(|c| !c.is_empty());
+    match verdict {
+        "accept" => Ok(Op::AcceptReview { id, by: REVIEW_AUTHOR.into() }),
+        "request_changes" => match comment {
+            Some(feedback) => Ok(Op::RequestChanges { id, feedback: feedback.to_owned(), by: REVIEW_AUTHOR.into() }),
+            None => Err(OpError::Invalid("request_changes needs a comment — say what has to change; it becomes the rework spec".into())),
+        },
+        "discard" => Ok(Op::DiscardTicket { id, reason: comment.unwrap_or("discarded by auto-review").to_owned() }),
+        other => Err(OpError::Invalid(format!(
+            "unknown verdict {other:?} — use \"accept\", \"request_changes\", or \"discard\""
+        ))),
+    }
+}
+
 fn shape_applied(result: Result<Applied, OpError>) -> CallToolResult {
     match result {
         Ok(Applied { version, created_ids, mut result }) => {
@@ -1018,6 +1093,39 @@ mod tests {
 
     fn ids(value: &serde_json::Value, key: &str) -> Vec<String> {
         value[key].as_array().unwrap().iter().map(|t| t["id"].as_str().unwrap().to_string()).collect()
+    }
+
+    #[test]
+    fn review_verdict_is_refused_unless_auto_review_is_on() {
+        let id = TicketId("K-7".into());
+        // Off: every verdict refuses with the "human's to give" message, whatever the verdict or comment.
+        for verdict in ["accept", "request_changes", "discard"] {
+            let err = review_verdict_op(false, id.clone(), verdict, Some("x")).unwrap_err();
+            assert!(matches!(&err, OpError::Invalid(m) if m.contains("auto_review is off")), "{verdict}: {err}");
+        }
+    }
+
+    #[test]
+    fn review_verdict_maps_each_verdict_to_its_op_when_on() {
+        let id = TicketId("K-7".into());
+        assert!(matches!(
+            review_verdict_op(true, id.clone(), "accept", None).unwrap(),
+            Op::AcceptReview { by, .. } if by == REVIEW_AUTHOR
+        ));
+        assert!(matches!(
+            review_verdict_op(true, id.clone(), "request_changes", Some("  tighten naming  ")).unwrap(),
+            Op::RequestChanges { feedback, by, .. } if feedback == "tighten naming" && by == REVIEW_AUTHOR
+        ));
+        assert!(matches!(
+            review_verdict_op(true, id.clone(), "discard", Some("dead end")).unwrap(),
+            Op::DiscardTicket { reason, .. } if reason == "dead end"
+        ));
+        // request_changes with no usable comment is refused — the note is the rework spec, so it cannot be empty.
+        assert!(matches!(review_verdict_op(true, id.clone(), "request_changes", Some("   ")), Err(OpError::Invalid(_))));
+        assert!(matches!(review_verdict_op(true, id.clone(), "request_changes", None), Err(OpError::Invalid(_))));
+        // discard falls back to a default reason; an unknown verdict is refused.
+        assert!(matches!(review_verdict_op(true, id.clone(), "discard", None).unwrap(), Op::DiscardTicket { .. }));
+        assert!(matches!(review_verdict_op(true, id, "approve", None), Err(OpError::Invalid(_))));
     }
 
     #[test]

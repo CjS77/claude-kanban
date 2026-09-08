@@ -509,6 +509,7 @@ pub struct SettingsForm {
     models: String,
     implement_model: String,
     refine_model: String,
+    auto_review: String,
 }
 
 impl SettingsForm {
@@ -542,6 +543,8 @@ impl SettingsForm {
             models: self.models.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_owned).collect(),
             implement_model: Some(self.implement_model.trim()).filter(|s| !s.is_empty()).map(str::to_owned),
             refine_model: Some(self.refine_model.trim()).filter(|s| !s.is_empty()).map(str::to_owned),
+            // A checkbox posts nothing when unchecked, so empty means "unset" here like minesweeper.
+            auto_review: (!self.auto_review.trim().is_empty()).then_some(true),
         })
     }
 }

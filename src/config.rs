@@ -79,6 +79,11 @@ pub struct Config {
     /// The model that refines a stub naming none of its own. Same rules as [`Config::implement_model`]; the split
     /// exists because writing a spec and writing the code it describes are not worth the same model.
     pub refine_model: Option<String>,
+    /// Let a `/kanban:review` loop press a verdict on a review ticket — accept, request changes, or discard — instead
+    /// of only writing its assessment as a note. Absent → off: the review still runs and comments, but the verdict
+    /// stays the human's, and `kanban_review` refuses. On is a deliberate per-project choice to let the machine judge
+    /// its own work; the review command spells the hazard out. Config-only: no flag or env var.
+    pub auto_review: Option<bool>,
 }
 
 impl Config {
@@ -176,6 +181,13 @@ impl Config {
     pub fn refine_model(&self) -> Option<String> {
         self.refine_model.as_deref().map(str::trim).filter(|m| !m.is_empty()).map(str::to_owned)
     }
+
+    /// Whether a review loop may press verdicts on this board: absent collapses to off, exactly like
+    /// [`Config::minesweeper`]. Off keeps the verdict the human's and makes `kanban_review` refuse.
+    #[must_use]
+    pub fn auto_review(&self) -> bool {
+        self.auto_review.unwrap_or(false)
+    }
 }
 
 #[cfg(test)]
@@ -188,6 +200,13 @@ mod tests {
         let cfg = Config::load(dir.path()).unwrap();
         assert!(cfg.worktree_root.is_none());
         assert!(cfg.copy_to_worktrees.is_empty());
+    }
+
+    #[test]
+    fn auto_review_defaults_off_and_reads_the_flag() {
+        assert!(!Config::default().auto_review(), "absent means the verdict stays the human's");
+        assert!(!Config { auto_review: Some(false), ..Config::default() }.auto_review());
+        assert!(Config { auto_review: Some(true), ..Config::default() }.auto_review());
     }
 
     #[test]

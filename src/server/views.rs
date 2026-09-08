@@ -808,6 +808,8 @@ pub struct SettingsTpl {
     /// The role defaults, raw again: empty means "inherit the session model", which is what the accessors would hide.
     pub implement_model: String,
     pub refine_model: String,
+    /// Whether a /kanban:review loop may press verdicts on this board.
+    pub auto_review: bool,
     /// True right after a save — shows the confirmation (and the port-needs-restart caveat).
     pub saved: bool,
 }
@@ -831,6 +833,7 @@ pub fn settings(config: &crate::config::Config, saved: bool) -> SettingsTpl {
         models: config.models.join("\n"),
         implement_model: config.implement_model.clone().unwrap_or_default(),
         refine_model: config.refine_model.clone().unwrap_or_default(),
+        auto_review: config.auto_review(),
         saved,
     }
 }

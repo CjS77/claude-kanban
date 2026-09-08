@@ -100,7 +100,8 @@ fn seeded_config(store_dir: &Path) -> String {
     format!(
         "{{\n  \"worktree_root\": {root},\n  \"copy_to_worktrees\": [],\n  \"max_workers\": 1,\n  \"idle_time\": 300,\n  \
          \"port\": null,\n  \"main_branch\": {main},\n  \"poll_interval\": 60,\n  \"minesweeper\": false,\n  \
-         \"minesweeper_label\": {label},\n  \"minesweeper_flag_labels\": {flags},\n  \"models\": []\n}}\n",
+         \"minesweeper_label\": {label},\n  \"minesweeper_flag_labels\": {flags},\n  \"models\": [],\n  \
+         \"auto_review\": false\n}}\n",
         root = serde_json::json!(crate::config::DEFAULT_WORKTREE_ROOT),
         main = serde_json::json!(main),
         label = serde_json::json!(crate::config::DEFAULT_MINESWEEPER_LABEL),
@@ -426,6 +427,7 @@ mod tests {
         assert!(config.port.is_none(), "port seeds as null: that is what lets serve try 4747 and then hunt");
         assert_eq!(config.poll_interval(), Some(std::time::Duration::from_secs(60)));
         assert!(!config.minesweeper(), "delegation seeds off — turning it on is a per-project choice");
+        assert!(!config.auto_review(), "auto-review seeds off — letting the machine judge its own work is opt-in");
         assert_eq!(config.minesweeper_label(), crate::config::DEFAULT_MINESWEEPER_LABEL);
 
         // The seeded file is fully defined: every dial present, port explicitly null, main_branch pinned concretely.
@@ -442,6 +444,7 @@ mod tests {
             "minesweeper",
             "minesweeper_label",
             "minesweeper_flag_labels",
+            "auto_review",
         ];
         let missing: Vec<_> = keys.iter().filter(|key| !obj.contains_key(**key)).collect();
         assert!(missing.is_empty(), "seeded config missing {missing:?}");

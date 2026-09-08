@@ -26,6 +26,7 @@ const COMMANDS = {
   "kanban:ticket": "ticket.md",
   "kanban:epic": "epic.md",
   "kanban:archive": "archive.md",
+  "kanban:review": "review.md",
 }
 
 // Claude Code's five effort levels → the reasoningEffort option opencode passes through to the
@@ -172,6 +173,19 @@ export const KanbanPlugin = async ({ directory, worktree }) => {
           mode: "subagent",
           prompt: TOOL_NOTE + body,
           options: { reasoningEffort },
+        }
+      }
+
+      // The code reviewer for /kanban:review: one fixed subagent, no per-effort or per-model twins — its own prompt
+      // pins the effort in frontmatter, which opencode ignores, so we set reasoningEffort here to match (high: review
+      // is worth the care). Inherits the session model like the effort agents.
+      if (!config.agent["kanban-reviewer"]) {
+        const { description, body } = await parse(path.join(root, "agents", "kanban-reviewer.md"))
+        config.agent["kanban-reviewer"] = {
+          description,
+          mode: "subagent",
+          prompt: TOOL_NOTE + body,
+          options: { reasoningEffort: "high" },
         }
       }
 

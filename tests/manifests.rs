@@ -88,7 +88,7 @@ fn opencode_plugin_wires_the_same_surface() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let plugin = fs::read_to_string(root.join("opencode/index.js")).expect("opencode/index.js is the opencode entry point");
 
-    for name in ["kanban:init", "kanban:open", "kanban:work", "kanban:delegate", "kanban:ticket", "kanban:epic", "kanban:archive"] {
+    for name in ["kanban:init", "kanban:open", "kanban:work", "kanban:delegate", "kanban:ticket", "kanban:epic", "kanban:archive", "kanban:review"] {
         assert!(plugin.contains(&format!("\"{name}\"")), "index.js must register the {name} command");
     }
     for level in ["low", "medium", "high", "xhigh", "max"] {
@@ -96,6 +96,9 @@ fn opencode_plugin_wires_the_same_surface() {
         let agent = root.join(format!("agents/kanban-effort-{level}.md"));
         assert!(agent.is_file(), "index.js reads the shared agent prompt {}", agent.display());
     }
+    // The /kanban:review reviewer is one fixed shared agent — Claude Code auto-discovers it, opencode injects it.
+    assert!(plugin.contains("kanban-reviewer"), "index.js must inject the kanban-reviewer subagent for /kanban:review");
+    assert!(root.join("agents/kanban-reviewer.md").is_file(), "the shared kanban-reviewer agent prompt must exist");
     assert!(plugin.contains("kanban-mcp.cmd"), "index.js must pick the .cmd launcher on Windows");
     assert!(plugin.contains("kanban-rules.md"), "index.js must inject the workflow rules file");
     assert!(plugin.contains("config.json"), "index.js must read the board config for the models vocabulary");
@@ -147,7 +150,7 @@ fn the_opencode_commands_drive_the_binary_through_the_launcher() {
             );
         });
     }
-    for name in ["work", "delegate"] {
+    for name in ["work", "delegate", "review"] {
         let rel = format!("opencode/command/{name}.md");
         let body = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(&rel)).unwrap_or_else(|e| panic!("{rel} must exist: {e}"));
         assert!(body.contains("description:"), "{rel} must carry a description");

@@ -56,6 +56,13 @@
             <span class="text-xs opacity-60">writes stub specs; empty leaves both to whatever the worker session runs</span>
         </label>
     </div>
+    <div class="divider my-0 text-xs opacity-60">Automated review</div>
+    <label class="flex items-center justify-between gap-3 text-sm">
+        <span>Let /kanban:review press verdicts
+            <span class="block text-xs opacity-60">a review loop may accept, request changes, or discard on its own — the machine judging its own work. Off keeps the verdict yours; the loop still comments</span>
+        </span>
+        <input type="checkbox" name="auto_review" class="toggle toggle-sm" {% if auto_review %}checked{% endif %}>
+    </label>
     <div class="divider my-0 text-xs opacity-60">Minesweeper delegation</div>
     <label class="flex items-center justify-between gap-3 text-sm">
         <span>Delegate ready tickets
