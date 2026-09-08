@@ -5,6 +5,22 @@ All notable changes to this project are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.6.0] - 2026-09-08
+
+### Added
+
+- **`/kanban:review` command.** A second loop, sibling to `/kanban:work`, that watches the review column. When a
+  ticket lands there it launches a read-only reviewer subagent to check the branch's diff against the ticket's spec,
+  writes the findings onto the card as a note, and recommends a verdict. A new `auto_review` board setting decides
+  whether the loop may press that verdict: `off` (the default) leaves the verdict to the human's browser button, while
+  `on` lets the loop apply it via the new `kanban_review` tool — `accept` (clears the branch to land),
+  `request_changes` (back to doing carrying the review as the rework spec), or `discard`. Works on both harnesses; the
+  orchestrator stays the single board-writer.
+- **`kanban:archive` archives epics too.** An epic is archived alongside its tickets once it is done — it has tickets
+  and every one is in done. A done epic is held back while any ticket still on the board names it, so the board never
+  ends up with a dangling `ticket.epic`; a later run takes it once its last ticket is gone. `archive.json` grows an
+  append-only `epics` array with the same never-remove/overwrite/duplicate guarantee as its tickets.
+
 ## [3.5.0] - 2026-09-08
 
 ### Added
