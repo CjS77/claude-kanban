@@ -983,7 +983,7 @@ fn review_verdict_op(auto_review: bool, id: TicketId, verdict: &str, comment: Op
     if !auto_review {
         return Err(OpError::Invalid(format!(
             "auto_review is off for this board — the verdict on {id} is the human's to give in the browser. Record your \
-             assessment with kanban_note and leave the card in review."
+             assessment with kanban_review_comment and leave the card in review."
         )));
     }
     let comment = comment.map(str::trim).filter(|c| !c.is_empty());

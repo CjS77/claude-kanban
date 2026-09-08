@@ -44,3 +44,9 @@ the work needs. The orchestrator calls `kanban_refine` with what you return.
   orchestrator create follow-ups.
 - If you get genuinely stuck, say so plainly in your report rather than half-finishing — the orchestrator will note it
   and release the ticket.
+- **Write for a reader who never saw the previous version.** A code comment, note or refined spec that explains
+  something by naming what it replaced — "moved out of the filter cluster", "instead of the old loader", "the previous
+  version cached this" — names something that stops existing the moment the change lands. Say what the code does and
+  why it has to be this way; git history already records what it was. A refined spec is the sharpest case: the body you
+  return replaces the stub's text outright, so "as the stub said" points at wording your own call deletes. The
+  exception is a constraint that is still live: a migration path, a compatibility shim, a format still in the wild.

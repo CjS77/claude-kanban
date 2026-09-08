@@ -315,6 +315,9 @@ A stub is a spec to write, not code to build. When `kanban_next` says `action: "
 4. `kanban_refine` with the fleshed-out `body` (and a sharper `title` if you found one). If the stub is really several
    units of work, pass `split_tickets`/`split_epics` in the same call — it is atomic. The tool lands everything in
    `review`, returns the card to the top of `todo`, and drops your claim.
+   **The body you send replaces the stub's text outright**, so write it as a spec that stands on its own. "As the stub
+   said", "unlike the original description", "the ticket previously asked for" — all point at wording this very call
+   deletes, leaving the implementer chasing a sentence that no longer exists.
 5. Continue the loop. Don't implement what you just specced — the human vets `review` tickets and promotes to `ready`.
 
 ## Rules
@@ -344,6 +347,11 @@ A stub is a spec to write, not code to build. When `kanban_next` says `action: "
 - If genuinely stuck, `kanban_note` why, `kanban_release` the ticket (it returns to the top of todo), clean up with
   `kanban_worktree_finish`, and move to the next ticket. A ticket released mid-rework keeps its `changes_requested`
   flag on purpose — the feedback did not stop existing because you handed the card back.
+- **Write for a reader who never saw the previous version.** A code comment, note or spec that explains something by
+  naming what it replaced — "moved out of the filter cluster", "we do this instead of the old loader", "the previous
+  version cached this" — names something that stops existing the moment the change lands, leaving a reference nobody
+  can resolve. Say what the code does and why it has to be this way; git history already records what it was. The
+  exception is a constraint that is still live: a migration path, a compatibility shim, a format still in the wild.
 - **Never press a human's verdict for them.** Accept, Request changes and Discard are the reviewer's, made in the
   browser. You address feedback; you never decide that it was addressed well enough.
 - At the end of the loop, summarise: tickets completed, branches created (and PRs, with `--push`), tickets released

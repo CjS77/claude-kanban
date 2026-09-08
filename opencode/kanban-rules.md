@@ -37,4 +37,10 @@ board); on a version conflict, re-read and retry. `auto_merge` makes `/kanban:wo
 branch into main when it reaches review, without a human seeing the merge. Never set it on tickets you create unless
 the user explicitly asked for it. kanban_board omits done tickets by default and returns a `done` summary of their
 ids instead — their specs and progress logs are the bulk of the board and finished work is not input to your next
-decision; pass include_done=true, or column="done", when you actually need to read them.
+decision; pass include_done=true, or column="done", when you actually need to read them. Write code comments, notes,
+specs and review entries for a reader who never saw the previous version: explaining something by naming what it
+replaced — "moved out of the filter cluster", "instead of the old loader", "the previous version cached this" — names
+something that stops existing the moment the change lands, and a refined body replaces the stub's text outright, so
+"as the stub said" points at wording your own call deletes. Say what the code does and why it has to be this way; git
+history already records what it was. The exception is a constraint that is still live: a migration path, a
+compatibility shim, a format still in the wild.

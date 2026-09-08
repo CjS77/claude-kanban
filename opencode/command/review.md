@@ -86,5 +86,10 @@ Repeat until the user stops you (a ticket-id argument or `--one` ends it after o
 - **This loop complements `/kanban:work`, it doesn't replace it.** An `accept` you press surfaces to a work loop as
   `action: "land"`; a `request_changes` surfaces as `action: "rework"`. Running both is the intended workflow: one
   builds, one judges.
+- **A review entry is read by someone looking at the current code.** Judge what is in front of you and say what it
+  should be — not what the branch replaced. "This used to live in the filter cluster", "the old handler did this
+  properly" and "restoring the previous behaviour" all describe code the reader cannot open, and a `request_changes`
+  written that way becomes a rework spec pointing at nothing. Referring to an earlier *review* round is fine — the log
+  is append-only, so those entries are still there — but never explain the code by what it was.
 - At the end, summarise: tickets reviewed, the verdict each got (or the recommendation left for the human when
   `auto_review` is off), and anything a reviewer couldn't judge.

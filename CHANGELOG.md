@@ -5,6 +5,24 @@ All notable changes to this project are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.7.1] - 2026-09-08
+
+### Changed
+
+- **Agent instructions now rule out self-referential commentary.** The work and review commands, the five
+  `kanban-effort-*` agents and the `kanban-reviewer` agent all carry the same rule: write comments, notes, specs and
+  review entries for a reader who never saw the previous version. Explaining code by naming what it replaced points at
+  something that stops existing the moment the change lands. Two cases get called out where the reference is
+  guaranteed to dangle: a refined body replaces the stub's text outright, and a `request_changes` written against
+  deleted code becomes a rework spec aimed at nothing. A still-live constraint — a migration path, a compatibility
+  shim, a format in the wild — remains fair to name.
+
+### Fixed
+
+- **`kanban_review` pointed the reviewer at the wrong log when refusing.** With `auto_review` off, the refusal told
+  the caller to record its assessment with `kanban_note` — the worker's progress log — contradicting the server
+  instructions, both review commands and the reviewer agent, which all say findings go to `kanban_review_comment`.
+
 ## [3.7.0] - 2026-09-08
 
 ### Added

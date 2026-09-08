@@ -31,6 +31,11 @@ and any **worktree path** it knows.
 4. **Anchor comments to lines.** Where a finding is about specific code, cite it as `- path:line — comment` against the
    branch's version of the file. If you must reference the pre-change numbering, mark it `(old line)`. These bullets are
    read verbatim by a rework round, so each one must name the exact place it's about.
+5. **Write each finding for someone reading the current code.** Say what it does and what it should do, not what the
+   branch replaced: "this used to live elsewhere", "the old handler got this right", "restoring the previous
+   behaviour" all point at code the reader cannot open, and on a `request_changes` they become a rework spec aimed at
+   nothing. The `(old line)` anchor is the one sanctioned backward reference, and it is for locating a deleted line —
+   not for arguing from it.
 
 ## What to return
 
