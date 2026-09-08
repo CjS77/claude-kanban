@@ -5,6 +5,15 @@ All notable changes to this project are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.0] - 2026-09-08
+
+### Added
+
+- **`kanban:archive` command.** Moves old done tickets off the board, keeping the done column focused on recent work
+  rather than the full landed history.
+- **`kanban:ticket` and `kanban:epic` read commands.** Read a single ticket or epic from the board directly, without
+  having to open the browser view.
+
 ## [3.4.0] - 2026-08-31
 
 ### Added
