@@ -5,7 +5,7 @@ All notable changes to this project are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.7.0] - 2026-09-08
 
 ### Added
 
@@ -23,6 +23,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   rendering made inert — nothing to open, nothing to drag — and the search box and epic dropdown narrow them like the
   rest of the board. Display only: the archive is never joined into the board or shown to the MCP tools. The toggle is
   remembered across reloads; a missing archive is an empty column, not an error.
+- **`kanban_ticket` and `kanban_epic` MCP tools.** The typed equivalents of the `kanban:ticket` and `kanban:epic`
+  skill commands, for harnesses (notably opencode) that call the MCP server directly instead of running the shell
+  skills — a single ticket, or an epic plus its tickets, instead of wading through the whole board.
 
 ### Changed
 
