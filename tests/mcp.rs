@@ -154,6 +154,78 @@ fn the_mcp_face_reads_claims_and_recovers_from_conflicts() {
     assert_eq!(refined["structuredContent"]["created"], json!(["K-3", "K-4"]), "{refined}");
 }
 
+#[test]
+fn kanban_ticket_and_kanban_epic_read_a_single_slice() {
+    use claude_kanban::{
+        ops::{self, Op},
+        store::model::{EpicId, Status},
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let store_dir = dir.path().join(".kanban");
+    let store = claude_kanban::store::Store::at(&store_dir);
+    store.init().unwrap();
+
+    ops::apply(&store, None, Op::CreateEpic { title: "auth".into(), color: None, body: "epic body".into(), status: Status::Ready, auto_merge: false })
+        .unwrap();
+    let create = |title: &str, epic: Option<EpicId>| Op::CreateTicket {
+        title: title.into(),
+        body: "some spec text".into(),
+        epic,
+        labels: vec![],
+        depends_on: vec![],
+        status: Status::Ready,
+        model: None,
+        effort: None,
+        auto_merge: false,
+    };
+    ops::apply(&store, None, create("in the epic", Some(EpicId("EP-1".into())))).unwrap();
+    ops::apply(&store, None, create("outside the epic", None)).unwrap();
+
+    let mut mcp = McpSession::start(&store_dir);
+
+    // Both tools are advertised.
+    let tools = mcp.request(1, "tools/list", &json!({}));
+    let names: Vec<&str> = tools["result"]["tools"].as_array().unwrap().iter().filter_map(|t| t["name"].as_str()).collect();
+    assert!(names.contains(&"kanban_ticket"), "missing kanban_ticket; got {names:?}");
+    assert!(names.contains(&"kanban_epic"), "missing kanban_epic; got {names:?}");
+
+    // Found: a ticket by id, the same shape as one entry of kanban_board's tickets array.
+    let ticket = mcp.call_tool(2, "kanban_ticket", &json!({ "ticket": "K-1" }));
+    let content = &ticket["structuredContent"];
+    assert_eq!(content["id"], "K-1");
+    assert_eq!(content["title"], "in the epic");
+    assert_eq!(content["blocked"], false);
+    assert_eq!(content["auto_merge_effective"], false);
+
+    // Not found: a clear tool error naming the missing id, not a panic or a protocol error.
+    let missing = mcp.call_tool(3, "kanban_ticket", &json!({ "ticket": "K-99" }));
+    assert_eq!(missing["isError"], true, "{missing}");
+    assert!(missing["content"][0]["text"].as_str().unwrap().contains("K-99"), "{missing}");
+
+    // Found: the epic plus its tickets in full — not just the checklist kanban_board's epics array carries.
+    let epic = mcp.call_tool(4, "kanban_epic", &json!({ "epic": "EP-1" }));
+    let content = &epic["structuredContent"];
+    assert_eq!(content["epic"]["id"], "EP-1");
+    assert_eq!(content["epic"]["title"], "auth");
+    assert_eq!(content["epic"]["column"], "todo", "the epic's derived column rides along, like kanban_board's");
+    let ticket_ids: Vec<&str> = content["tickets"].as_array().unwrap().iter().map(|t| t["id"].as_str().unwrap()).collect();
+    assert_eq!(ticket_ids, ["K-1"], "only the ticket that belongs to the epic: {content}");
+    assert_eq!(content["tickets"][0]["title"], "in the epic");
+    assert_eq!(content["tickets"][0]["body"], "some spec text", "the full ticket, not just a checklist line: {content}");
+
+    // Not found: the same clear error shape as kanban_ticket.
+    let missing_epic = mcp.call_tool(5, "kanban_epic", &json!({ "epic": "EP-99" }));
+    assert_eq!(missing_epic["isError"], true, "{missing_epic}");
+    assert!(missing_epic["content"][0]["text"].as_str().unwrap().contains("EP-99"), "{missing_epic}");
+
+    // An epic that owns no tickets answers with an empty array — a real, empty epic, not an omission.
+    ops::apply(&store, None, Op::CreateEpic { title: "empty".into(), color: None, body: String::new(), status: Status::Ready, auto_merge: false })
+        .unwrap();
+    let empty = mcp.call_tool(6, "kanban_epic", &json!({ "epic": "EP-2" }));
+    assert_eq!(empty["structuredContent"]["tickets"], json!([]), "{empty}");
+}
+
 /// A board with one landed ticket carrying a fat spec and a progress log — the shape that dominates a real board — plus
 /// one live ticket to prove the default read still answers with the work that matters. Returns the store directory.
 fn seed_a_fat_done_ticket(dir: &std::path::Path) -> std::path::PathBuf {
