@@ -30,6 +30,8 @@ What it does, and the guarantees you can rely on when you report back:
 - **The archive is append-only.** Tickets already in `archive.json` are never removed, overwritten, or duplicated.
 - **The board version is bumped** and the files are written atomically, so a board being served live in the browser
   reloads to the smaller board on its own.
+- **Nothing is out of sight.** The 🗄️ toggle in the board's toolbar shows the archive as a read-only fifth column, read
+  from `archive.json` on every render, so a run's result is visible in the browser straight away.
 
 It prints how many tickets it moved (and their ids/titles), or `nothing … to archive` when none are old enough. Relay
 that. Exit codes: **2** no `.kanban/` yet (tell the user to run `/kanban:init`), **3** the age wasn't `{n}d`/`{n}m`/`{n}y`,

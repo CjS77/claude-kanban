@@ -18,6 +18,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   allowed — `auto_review` gates only the verdict (`kanban_review`), never the review.
 - **Add to review** button on the review pane: file the comment box and any pending inline comments without giving a
   verdict.
+- **Archive column.** A 🗄️ toggle in the toolbar adds a fifth column after done listing every ticket `kanban:archive`
+  has moved into `.kanban/archive.json`, read fresh on each render so it follows the file. The cards are the done
+  rendering made inert — nothing to open, nothing to drag — and the search box and epic dropdown narrow them like the
+  rest of the board. Display only: the archive is never joined into the board or shown to the MCP tools. The toggle is
+  remembered across reloads; a missing archive is an empty column, not an error.
 
 ### Changed
 
