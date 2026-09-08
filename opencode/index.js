@@ -1,6 +1,6 @@
 // claude-kanban as an opencode plugin. opencode reads none of the Claude Code manifests — not
 // .claude-plugin/plugin.json, not .mcp.json, not commands/ or agents/ — so this file injects the same
-// surface through the plugin API's config hook: the `kanban` MCP server, the four /kanban:* commands,
+// surface through the plugin API's config hook: the `kanban` MCP server, the /kanban:* commands,
 // the five kanban-effort-* subagents — plus model-pinned kanban-model-* twins for each provider/model
 // entry in the board's `models` config — and (in projects that have a board) the workflow rules file.
 //
@@ -23,6 +23,9 @@ const COMMANDS = {
   "kanban:open": "open.md",
   "kanban:work": "work.md",
   "kanban:delegate": "delegate.md",
+  "kanban:ticket": "ticket.md",
+  "kanban:epic": "epic.md",
+  "kanban:archive": "archive.md",
 }
 
 // Claude Code's five effort levels → the reasoningEffort option opencode passes through to the

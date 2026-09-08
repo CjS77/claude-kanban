@@ -88,7 +88,7 @@ fn opencode_plugin_wires_the_same_surface() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let plugin = fs::read_to_string(root.join("opencode/index.js")).expect("opencode/index.js is the opencode entry point");
 
-    for name in ["kanban:init", "kanban:open", "kanban:work", "kanban:delegate"] {
+    for name in ["kanban:init", "kanban:open", "kanban:work", "kanban:delegate", "kanban:ticket", "kanban:epic", "kanban:archive"] {
         assert!(plugin.contains(&format!("\"{name}\"")), "index.js must register the {name} command");
     }
     for level in ["low", "medium", "high", "xhigh", "max"] {
