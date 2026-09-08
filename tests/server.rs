@@ -1227,9 +1227,9 @@ mod docs_ui {
         for title in SEED_TITLES {
             assert!(html.contains(title), "the TOC must list {title}: {html}");
         }
-        // Alphabetically first is getting-started.md — its article is primed for glue.js to render.
+        // Alphabetically first is automation.md — its article is primed for glue.js to render.
         assert!(
-            html.contains(r#"data-md-src="/raw/docs/getting-started.md""#),
+            html.contains(r#"data-md-src="/raw/docs/automation.md""#),
             "the leading entry's article must be primed: {html}"
         );
         // The dialog closes via a form method="dialog" button, the same shape the diff modal uses.
