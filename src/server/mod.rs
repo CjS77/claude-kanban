@@ -13,7 +13,10 @@ pub mod views;
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
 use anyhow::Context;
-use axum::{Router, middleware, routing::get, routing::post};
+use axum::{
+    Router, middleware,
+    routing::{get, post},
+};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use tower_http::trace::TraceLayer;
@@ -82,7 +85,10 @@ async fn run(store: Store, port: Option<u16>, no_open: bool, assets_dir: Option<
     });
 
     let pid_file = store.dir().join("serve.pid");
-    let _ = std::fs::write(&pid_file, serde_json::json!({ "pid": std::process::id(), "port": port }).to_string());
+    let _ = std::fs::write(
+        &pid_file,
+        serde_json::json!({ "pid": std::process::id(), "port": port }).to_string(),
+    );
 
     let url = format!("http://127.0.0.1:{port}/");
     println!("Serving the board on {url}  (ctrl-c to stop)");
@@ -114,7 +120,11 @@ async fn run(store: Store, port: Option<u16>, no_open: bool, assets_dir: Option<
 /// serve still never signals its own writes in-process. Errors are logged and never fatal: the next tick starts fresh.
 /// `interval_override` pins the cadence for tests; production passes `None` and follows the config.
 #[must_use]
-pub fn spawn_poller(store: Store, shutdown: CancellationToken, interval_override: Option<std::time::Duration>) -> tokio::task::JoinHandle<()> {
+pub fn spawn_poller(
+    store: Store,
+    shutdown: CancellationToken,
+    interval_override: Option<std::time::Duration>,
+) -> tokio::task::JoinHandle<()> {
     const DISABLED_RECHECK: std::time::Duration = std::time::Duration::from_secs(60);
     tokio::spawn(async move {
         run_pass(&store, false).await;
@@ -141,7 +151,11 @@ async fn run_pass(store: &Store, with_gh: bool) {
     let store = store.clone();
     let outcome = tokio::task::spawn_blocking(move || {
         let swept = crate::land::sweep(&store)?;
-        let polled = if with_gh { crate::land::poll(&store)? + crate::minesweeper::poll(&store)? } else { 0 };
+        let polled = if with_gh {
+            crate::land::poll(&store)? + crate::minesweeper::poll(&store)?
+        } else {
+            0
+        };
         anyhow::Ok((swept, polled))
     })
     .await;
@@ -264,7 +278,10 @@ fn pid_alive(pid: u32) -> bool {
 /// A friendlier bind error: if a pid file exists, another `serve` is probably already running.
 fn bind_failure_hint(store: &Store, port: u16) -> String {
     let pid_file = store.dir().join("serve.pid");
-    match std::fs::read_to_string(&pid_file).ok().and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()) {
+    match std::fs::read_to_string(&pid_file)
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+    {
         Some(info) => format!(
             "could not bind port {port} — a serve already seems to be running (pid {}, port {}; {} if it isn't)",
             info["pid"],
@@ -286,7 +303,10 @@ fn project_title(store: &Store) -> String {
 
 /// Who a UI drag into `doing` names as owner.
 fn ui_owner(store: &Store) -> String {
-    let repo = store.dir().parent().map_or_else(|| PathBuf::from("."), std::path::Path::to_path_buf);
+    let repo = store
+        .dir()
+        .parent()
+        .map_or_else(|| PathBuf::from("."), std::path::Path::to_path_buf);
     crate::git::git(&repo, &["config", "user.name"])
         .ok()
         .filter(|name| !name.is_empty())

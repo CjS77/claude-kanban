@@ -48,7 +48,9 @@ impl Query {
     /// Parse a raw query string. Never fails; a blank query yields no terms.
     #[must_use]
     pub fn parse(raw: &str) -> Query {
-        Query { terms: fragments(raw).into_iter().filter_map(term).collect() }
+        Query {
+            terms: fragments(raw).into_iter().filter_map(term).collect(),
+        }
     }
 
     /// True iff this query admits every ticket — i.e. it has no terms.
@@ -147,7 +149,9 @@ fn needle(s: &str) -> Option<String> {
 /// status a prefix fits wins.
 fn status(value: &str) -> Option<Status> {
     let v = needle(value)?;
-    [Status::Draft, Status::Stub, Status::Review, Status::Ready].into_iter().find(|s| s.as_str().starts_with(&v))
+    [Status::Draft, Status::Stub, Status::Review, Status::Ready]
+        .into_iter()
+        .find(|s| s.as_str().starts_with(&v))
 }
 
 /// An effort level by name, or by any prefix of one (`effort:x` → xhigh), resolving in [`Effort::ALL`] order like
@@ -274,16 +278,32 @@ mod tests {
     }
 
     fn view(t: Ticket) -> TicketView {
-        TicketView { ticket: t, blocked: false, auto_merge_effective: false, claim: None }
+        TicketView {
+            ticket: t,
+            blocked: false,
+            auto_merge_effective: false,
+            claim: None,
+        }
     }
 
     fn done(discarded: bool) -> Column {
-        Column::Done { branch: Some("k-1/work".into()), completed_at: Utc::now(), discarded }
+        Column::Done {
+            branch: Some("k-1/work".into()),
+            completed_at: Utc::now(),
+            discarded,
+        }
     }
 
     fn epic_view(id: &str, title: &str) -> EpicView {
         EpicView {
-            epic: Epic { id: EpicId(id.into()), title: title.into(), color: "#fff".into(), status: Status::Ready, body: "the plan".into(), auto_merge: false },
+            epic: Epic {
+                id: EpicId(id.into()),
+                title: title.into(),
+                color: "#fff".into(),
+                status: Status::Ready,
+                body: "the plan".into(),
+                auto_merge: false,
+            },
             column: ColumnId::Todo,
             tickets: vec![],
         }
@@ -292,9 +312,14 @@ mod tests {
     /// The dragging invariant's first half: nothing that hides no cards may report itself as a filter.
     #[test]
     fn blank_and_punctuation_only_queries_are_empty() {
-        let filtering: Vec<&str> =
-            ["", "   ", ",,", " , ", "\t\n", ",  ,,   ,", "\"\""].into_iter().filter(|raw| !Query::parse(raw).is_empty()).collect();
-        assert!(filtering.is_empty(), "these hide nothing, so they must parse to no terms: {filtering:?}");
+        let filtering: Vec<&str> = ["", "   ", ",,", " , ", "\t\n", ",  ,,   ,", "\"\""]
+            .into_iter()
+            .filter(|raw| !Query::parse(raw).is_empty())
+            .collect();
+        assert!(
+            filtering.is_empty(),
+            "these hide nothing, so they must parse to no terms: {filtering:?}"
+        );
     }
 
     /// The other half: a query with no terms admits every ticket, whatever shape it is in.
@@ -310,7 +335,10 @@ mod tests {
 
     #[test]
     fn unknown_keys_degrade_to_free_text() {
-        assert_eq!(Query::parse("fix: the login bug").terms, vec![Term::Text("fix: the login bug".into())]);
+        assert_eq!(
+            Query::parse("fix: the login bug").terms,
+            vec![Term::Text("fix: the login bug".into())]
+        );
 
         let mut t = ticket("K-1", "Nothing to see");
         t.body = "We should FIX: the Login Bug before release".into();
@@ -340,7 +368,10 @@ mod tests {
         t.body = "Realtime results as you type".into();
         t.labels = vec!["UX".into()];
         t.external = Some(External::github_issue(42));
-        t.column = Column::Review { branch: Some("k-27/search-bar".into()) };
+        t.column = Column::Review {
+            owner: None,
+            branch: Some("k-27/search-bar".into()),
+        };
         let v = view(t);
 
         let missed: Vec<&str> = ["k-27", "search bar", "realtime results", "ux", "search-bar", "github issue#42"]
@@ -354,7 +385,11 @@ mod tests {
     #[test]
     fn free_text_ignores_notes_but_the_note_key_finds_them() {
         let mut t = ticket("K-1", "Quiet title");
-        t.notes = vec![Note { at: Utc::now(), author: Some("claude".into()), text: "worktree started".into() }];
+        t.notes = vec![Note {
+            at: Utc::now(),
+            author: Some("claude".into()),
+            text: "worktree started".into(),
+        }];
         let v = view(t);
         assert!(!Query::parse("worktree").matches(&v, &[]), "notes stay out of free text");
         assert!(Query::parse("note: worktree").matches(&v, &[]), "the opt-in key finds them");
@@ -369,11 +404,18 @@ mod tests {
         let (landed, binned) = (view(landed), view(binned));
 
         assert!(Query::parse("landed: true").matches(&landed, &[]));
-        assert!(!Query::parse("landed: true").matches(&binned, &[]), "a discarded ticket never landed");
+        assert!(
+            !Query::parse("landed: true").matches(&binned, &[]),
+            "a discarded ticket never landed"
+        );
         assert!(Query::parse("discarded:yes").matches(&binned, &[]));
         assert!(!Query::parse("discarded:yes").matches(&landed, &[]));
         // Both sit in the done column, whatever their fate.
-        assert!(["col:done", "column: DONE"].into_iter().all(|q| Query::parse(q).matches(&binned, &[])));
+        assert!(
+            ["col:done", "column: DONE"]
+                .into_iter()
+                .all(|q| Query::parse(q).matches(&binned, &[]))
+        );
     }
 
     #[test]
@@ -413,7 +455,10 @@ mod tests {
         assert!(Query::parse("model: OPUS").matches(&v, &[]));
         assert!(!Query::parse("model:sonnet").matches(&v, &[]));
         assert!(Query::parse("effort:xhigh").matches(&v, &[]));
-        assert!(!Query::parse("effort:high").matches(&v, &[]), "xhigh is not high — the enum compares exactly");
+        assert!(
+            !Query::parse("effort:high").matches(&v, &[]),
+            "xhigh is not high — the enum compares exactly"
+        );
 
         // A ticket expressing no preference is matched by neither term, rather than by every one.
         let plain = view(ticket("K-10", "Ordinary"));
@@ -430,11 +475,22 @@ mod tests {
         assert!(Query::parse("status: ready").matches_epic(&e));
 
         let ticket_only = [
-            "label: ux", "col: todo", "landed: false", "discarded:no", "blocked:false", "id: EP-1", "note: anything", "model: opus",
-            "effort: max", "auto-merge:false",
+            "label: ux",
+            "col: todo",
+            "landed: false",
+            "discarded:no",
+            "blocked:false",
+            "id: EP-1",
+            "note: anything",
+            "model: opus",
+            "effort: max",
+            "auto-merge:false",
         ];
         let leaked: Vec<&str> = ticket_only.into_iter().filter(|q| Query::parse(q).matches_epic(&e)).collect();
-        assert!(leaked.is_empty(), "a ticket-only term cannot be satisfied by an epic, so it must hide the card: {leaked:?}");
+        assert!(
+            leaked.is_empty(),
+            "a ticket-only term cannot be satisfied by an epic, so it must hide the card: {leaked:?}"
+        );
     }
 
     #[test]
@@ -493,7 +549,10 @@ mod tests {
         let mut t = ticket("K-1", "Filed under None");
         t.epic = Some(EpicId("EP-9".into()));
         let v = view(t);
-        assert!(!Query::parse("epic: none").matches(&v, &epics), "none is reserved, not a title lookup");
+        assert!(
+            !Query::parse("epic: none").matches(&v, &epics),
+            "none is reserved, not a title lookup"
+        );
         assert!(Query::parse("epic: ep-9").matches(&v, &epics), "its id still reaches it");
     }
 
@@ -501,7 +560,10 @@ mod tests {
     /// its own field is false, which is exactly the case the filter exists to surface.
     #[test]
     fn auto_merge_matches_the_effective_flag_under_every_spelling() {
-        let flagged = TicketView { auto_merge_effective: true, ..view(ticket("K-1", "Merges itself")) };
+        let flagged = TicketView {
+            auto_merge_effective: true,
+            ..view(ticket("K-1", "Merges itself"))
+        };
         let plain = view(ticket("K-2", "Waits for a human"));
 
         let spellings = ["auto-merge:true", "automerge: YES", "auto_merge:on", "AUTO-MERGE: 1"];
@@ -509,7 +571,10 @@ mod tests {
             .into_iter()
             .filter(|q| !Query::parse(q).matches(&flagged, &[]) || Query::parse(q).matches(&plain, &[]))
             .collect();
-        assert!(wrong.is_empty(), "every spelling must admit only the auto-merging ticket: {wrong:?}");
+        assert!(
+            wrong.is_empty(),
+            "every spelling must admit only the auto-merging ticket: {wrong:?}"
+        );
 
         // False is the inverse, not a no-op, and a value that isn't a boolean degrades like any other.
         assert_eq!(Query::parse("auto-merge:false").terms, vec![Term::AutoMerge(false)]);
@@ -521,7 +586,10 @@ mod tests {
     #[test]
     fn epic_none_hides_epic_cards() {
         let e = epic_view("EP-1", "Board UI");
-        assert!(!Query::parse("epic:none").matches_epic(&e), "an epic card is the opposite of unfiled");
+        assert!(
+            !Query::parse("epic:none").matches_epic(&e),
+            "an epic card is the opposite of unfiled"
+        );
         assert!(!Query::parse("epic:null").matches_epic(&e));
     }
 }

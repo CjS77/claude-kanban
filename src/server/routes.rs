@@ -20,8 +20,7 @@ use crate::{
     ops::{self, Op, TicketPatch, VerdictReview},
     pr,
     store::{
-        Store, StoreError,
-        derive,
+        Store, StoreError, derive,
         model::{ColumnId, Effort, EpicId, ReviewKind, Status, TicketId},
     },
     worktree,
@@ -40,11 +39,19 @@ pub struct AppError {
 
 impl AppError {
     pub(super) fn not_found(what: &str) -> AppError {
-        AppError { status: StatusCode::NOT_FOUND, message: format!("{what} not found"), refresh: false }
+        AppError {
+            status: StatusCode::NOT_FOUND,
+            message: format!("{what} not found"),
+            refresh: false,
+        }
     }
 
     fn bad_request(message: impl Into<String>) -> AppError {
-        AppError { status: StatusCode::UNPROCESSABLE_ENTITY, message: message.into(), refresh: false }
+        AppError {
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            message: message.into(),
+            refresh: false,
+        }
     }
 }
 
@@ -52,7 +59,11 @@ impl From<ops::OpError> for AppError {
     fn from(e: ops::OpError) -> AppError {
         use ops::OpError;
         if e.version_conflict().is_some() {
-            return AppError { status: StatusCode::CONFLICT, message: "Board changed under you — try again".into(), refresh: true };
+            return AppError {
+                status: StatusCode::CONFLICT,
+                message: "Board changed under you — try again".into(),
+                refresh: true,
+            };
         }
         let status = match &e {
             OpError::NotFound(_) => StatusCode::NOT_FOUND,
@@ -60,19 +71,31 @@ impl From<ops::OpError> for AppError {
             OpError::Invalid(_) | OpError::External(_) => StatusCode::UNPROCESSABLE_ENTITY,
             OpError::Store(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
-        AppError { status, message: e.to_string(), refresh: false }
+        AppError {
+            status,
+            message: e.to_string(),
+            refresh: false,
+        }
     }
 }
 
 impl From<StoreError> for AppError {
     fn from(e: StoreError) -> AppError {
-        AppError { status: StatusCode::INTERNAL_SERVER_ERROR, message: e.to_string(), refresh: false }
+        AppError {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: e.to_string(),
+            refresh: false,
+        }
     }
 }
 
 impl From<askama::Error> for AppError {
     fn from(e: askama::Error) -> AppError {
-        AppError { status: StatusCode::INTERNAL_SERVER_ERROR, message: format!("template error: {e}"), refresh: false }
+        AppError {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: format!("template error: {e}"),
+            refresh: false,
+        }
     }
 }
 
@@ -98,9 +121,11 @@ async fn blocking<T: Send + 'static>(
     f: impl FnOnce(&Store) -> Result<T, AppError> + Send + 'static,
 ) -> Result<T, AppError> {
     let store = app.store.clone();
-    tokio::task::spawn_blocking(move || f(&store))
-        .await
-        .map_err(|e| AppError { status: StatusCode::INTERNAL_SERVER_ERROR, message: format!("task failed: {e}"), refresh: false })?
+    tokio::task::spawn_blocking(move || f(&store)).await.map_err(|e| AppError {
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+        message: format!("task failed: {e}"),
+        refresh: false,
+    })?
 }
 
 /// The board version the client was looking at, from the header glue.js stamps on every mutation.
@@ -246,7 +271,11 @@ pub async fn raw_ticket(State(app): State<AppState>, Path(id): Path<String>) -> 
     blocking(&app, move |store| {
         let board = store.read_board()?;
         let ticket = board.ticket(&TicketId(id.clone())).ok_or_else(|| AppError::not_found(&id))?;
-        Ok(([(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")], ticket.body.clone()).into_response())
+        Ok((
+            [(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+            ticket.body.clone(),
+        )
+            .into_response())
     })
     .await
 }
@@ -296,7 +325,11 @@ pub async fn create_ticket(
     // "Hand to minesweeper" implies the spec is ready to be worked — the checkbox overrides the status dropdown, and
     // the handoff itself is best-effort after the create: its failures land as a note on the card, never a failed POST.
     let hand_over = cfg!(feature = "minesweeper") && !form.minesweeper.trim().is_empty();
-    let status = if hand_over { crate::store::model::Status::Ready } else { parse_status(&form.status)? };
+    let status = if hand_over {
+        crate::store::model::Status::Ready
+    } else {
+        parse_status(&form.status)?
+    };
     let op = Op::CreateTicket {
         title: form.title,
         body: form.body,
@@ -368,7 +401,14 @@ pub async fn update_ticket(
     let version = client_version(&headers)?;
     blocking(&app, move |store| {
         ops::apply(store, Some(version), op)?;
-        ops::apply(store, None, Op::SetTicketStatus { id: id.clone(), status: crate::store::model::Status::Ready })?;
+        ops::apply(
+            store,
+            None,
+            Op::SetTicketStatus {
+                id: id.clone(),
+                status: crate::store::model::Status::Ready,
+            },
+        )?;
         crate::minesweeper::hand_over(store, &id);
         rendered_detail(store, &id)
     })
@@ -392,7 +432,13 @@ pub async fn move_ticket(
 ) -> Result<StatusCode, AppError> {
     let to = parse_column(&form.to)?;
     let id = TicketId(id);
-    let op = Op::MoveTicket { id: id.clone(), to, position: form.position, owner: Some(app.ui_owner.clone()), branch: None };
+    let op = Op::MoveTicket {
+        id: id.clone(),
+        to,
+        position: form.position,
+        owner: Some(app.ui_owner.clone()),
+        branch: None,
+    };
     // A drag into review arms the landing proof exactly as the MCP close-out does, and the branch it names can be gone
     // before the next poller tick — so observe the tip here (see `land::observe_entering_review`). A drag into doing is
     // the delegation moment when the minesweeper toggle is on.
@@ -417,7 +463,10 @@ pub async fn ticket_status(
     Form(form): Form<StatusForm>,
 ) -> Result<Html<String>, AppError> {
     let id = TicketId(id);
-    let op = Op::SetTicketStatus { id: id.clone(), status: parse_status(&form.status)? };
+    let op = Op::SetTicketStatus {
+        id: id.clone(),
+        status: parse_status(&form.status)?,
+    };
     mutate_then_detail(&app, &headers, op, id).await
 }
 
@@ -436,14 +485,13 @@ async fn current_auto_merge(app: &AppState, id: &TicketId) -> Result<bool, AppEr
 /// The auto-merge toggle: its own route and its own confirm, deliberately not a checkbox on the edit form — that form
 /// has one blanket Save, so a confirm there would fire on every unrelated edit. Only the ticket's own flag is written,
 /// so a click on an epic-granted ticket clears nothing; the confirm text says as much before it fires.
-pub async fn ticket_auto_merge(
-    State(app): State<AppState>,
-    Path(id): Path<String>,
-    headers: HeaderMap,
-) -> Result<Html<String>, AppError> {
+pub async fn ticket_auto_merge(State(app): State<AppState>, Path(id): Path<String>, headers: HeaderMap) -> Result<Html<String>, AppError> {
     let id = TicketId(id);
     let on = current_auto_merge(&app, &id).await?;
-    let patch = TicketPatch { auto_merge: Some(!on), ..TicketPatch::default() };
+    let patch = TicketPatch {
+        auto_merge: Some(!on),
+        ..TicketPatch::default()
+    };
     mutate_then_detail(&app, &headers, Op::UpdateTicket { id: id.clone(), patch }, id).await
 }
 
@@ -459,7 +507,11 @@ pub async fn add_note(
     Form(form): Form<NoteForm>,
 ) -> Result<Html<String>, AppError> {
     let id = TicketId(id);
-    let op = Op::AddNote { id: id.clone(), text: form.text, author: Some(app.ui_owner.clone()) };
+    let op = Op::AddNote {
+        id: id.clone(),
+        text: form.text,
+        author: Some(app.ui_owner.clone()),
+    };
     mutate_then_detail(&app, &headers, op, id).await
 }
 
@@ -472,8 +524,20 @@ pub async fn create_pr(State(app): State<AppState>, Path(id): Path<String>) -> R
     let author = app.ui_owner.clone();
     blocking(&app, move |store| {
         let report = pr::create_pr(store, &id).map_err(|e| AppError::bad_request(format!("{e:#}")))?;
-        let text = if report.created { format!("PR created: {}", report.url) } else { format!("PR already open: {}", report.url) };
-        ops::apply(store, None, Op::AddNote { id: id.clone(), text, author: Some(author) })?;
+        let text = if report.created {
+            format!("PR created: {}", report.url)
+        } else {
+            format!("PR already open: {}", report.url)
+        };
+        ops::apply(
+            store,
+            None,
+            Op::AddNote {
+                id: id.clone(),
+                text,
+                author: Some(author),
+            },
+        )?;
         rendered_detail(store, &id)
     })
     .await
@@ -493,7 +557,10 @@ pub async fn ticket_diff(State(app): State<AppState>, Path(id): Path<String>) ->
 }
 
 pub async fn settings(State(app): State<AppState>) -> Result<Html<String>, AppError> {
-    blocking(&app, |store| Ok(Html(views::settings(&crate::config::Config::load(store.dir())?, false).render()?))).await
+    blocking(&app, |store| {
+        Ok(Html(views::settings(&crate::config::Config::load(store.dir())?, false).render()?))
+    })
+    .await
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -523,11 +590,19 @@ impl SettingsForm {
             if raw.is_empty() {
                 return Ok(None);
             }
-            raw.parse().map(Some).map_err(|_| AppError::bad_request(format!("{field} must be a whole number (or empty)")))
+            raw.parse()
+                .map(Some)
+                .map_err(|_| AppError::bad_request(format!("{field} must be a whole number (or empty)")))
         }
         Ok(crate::config::Config {
             worktree_root: Some(self.worktree_root.trim()).filter(|s| !s.is_empty()).map(Into::into),
-            copy_to_worktrees: self.copy_to_worktrees.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_owned).collect(),
+            copy_to_worktrees: self
+                .copy_to_worktrees
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(str::to_owned)
+                .collect(),
             max_workers: num(&self.max_workers, "max_workers")?,
             idle_time: num(&self.idle_time, "idle_time")?,
             port: num(&self.port, "port")?,
@@ -543,7 +618,13 @@ impl SettingsForm {
                 .filter(|l| !l.is_empty())
                 .map(str::to_owned)
                 .collect(),
-            models: self.models.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_owned).collect(),
+            models: self
+                .models
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(str::to_owned)
+                .collect(),
             implement_model: Some(self.implement_model.trim()).filter(|s| !s.is_empty()).map(str::to_owned),
             refine_model: Some(self.refine_model.trim()).filter(|s| !s.is_empty()).map(str::to_owned),
             // A checkbox posts nothing when unchecked, so empty means "unset" here like minesweeper.
@@ -595,13 +676,23 @@ fn inline_entries(raw: &str) -> Result<Vec<ReviewKind>, AppError> {
         serde_json::from_str(raw).map_err(|e| AppError::bad_request(format!("inline comments are not valid JSON: {e}")))?;
     items
         .into_iter()
-        .map(|i| Ok(ReviewKind::Inline { path: i.path, line: i.line, side: i.side.parse().map_err(AppError::bad_request)?, text: i.text }))
+        .map(|i| {
+            Ok(ReviewKind::Inline {
+                path: i.path,
+                line: i.line,
+                side: i.side.parse().map_err(AppError::bad_request)?,
+                text: i.text,
+            })
+        })
         .collect()
 }
 
 /// What a verdict carries onto the review log: the comment box and the inline comments drained with it.
 fn verdict_review(form: &ReviewForm) -> Result<VerdictReview, AppError> {
-    Ok(VerdictReview { text: form.comment.trim().to_owned(), inline: inline_entries(&form.inline)? })
+    Ok(VerdictReview {
+        text: form.comment.trim().to_owned(),
+        inline: inline_entries(&form.inline)?,
+    })
 }
 
 /// The Add to review button: the comment box and any inline comments go onto the review log with no verdict. The op
@@ -619,7 +710,11 @@ pub async fn review_comment(
         .into_iter()
         .chain((!comment.is_empty()).then(|| ReviewKind::Comment { text: comment.to_owned() }))
         .collect();
-    let op = Op::AddReview { id: id.clone(), author: app.ui_owner.clone(), entries };
+    let op = Op::AddReview {
+        id: id.clone(),
+        author: app.ui_owner.clone(),
+        entries,
+    };
     blocking(&app, move |store| {
         ops::apply(store, Some(version), op)?;
         rendered_review(store, &id)
@@ -658,8 +753,15 @@ fn rendered_review(store: &Store, id: &TicketId) -> Result<Html<String>, AppErro
     let worktree_dirty = worktree::dirty_worktree(store, id).is_some();
     let landing = crate::land::explain(store, id);
     let can_diff = diff::eligible(store, ticket);
-    let tpl = views::review(&board, id, worktree_path.map(|p| p.display().to_string()), worktree_dirty, landing, can_diff)
-        .ok_or_else(|| AppError::bad_request(format!("{id} is not a review ticket to judge here")))?;
+    let tpl = views::review(
+        &board,
+        id,
+        worktree_path.map(|p| p.display().to_string()),
+        worktree_dirty,
+        landing,
+        can_diff,
+    )
+    .ok_or_else(|| AppError::bad_request(format!("{id} is not a review ticket to judge here")))?;
     Ok(Html(tpl.render()?))
 }
 
@@ -678,7 +780,11 @@ pub async fn review_accept(
 ) -> Result<Html<String>, AppError> {
     let id = TicketId(id);
     let version = client_version(&headers)?;
-    let op = Op::AcceptReview { id: id.clone(), by: app.ui_owner.clone(), review: verdict_review(&form)? };
+    let op = Op::AcceptReview {
+        id: id.clone(),
+        by: app.ui_owner.clone(),
+        review: verdict_review(&form)?,
+    };
     blocking(&app, move |store| {
         ops::apply(store, Some(version), op)?;
         // Back to the review pane, not the detail pane: the card is still in review, and the pane now says what it is
@@ -697,7 +803,11 @@ pub async fn review_changes(
     Form(form): Form<ReviewForm>,
 ) -> Result<Html<String>, AppError> {
     let id = TicketId(id);
-    let op = Op::RequestChanges { id: id.clone(), by: app.ui_owner.clone(), review: verdict_review(&form)? };
+    let op = Op::RequestChanges {
+        id: id.clone(),
+        by: app.ui_owner.clone(),
+        review: verdict_review(&form)?,
+    };
     mutate_then_detail(&app, &headers, op, id).await
 }
 
@@ -714,7 +824,12 @@ pub async fn discard_ticket(
     } else {
         format!("discarded from the board by {}: {comment}", app.ui_owner)
     };
-    let op = Op::DiscardTicket { id: id.clone(), reason, by: app.ui_owner.clone(), review: verdict_review(&form)? };
+    let op = Op::DiscardTicket {
+        id: id.clone(),
+        reason,
+        by: app.ui_owner.clone(),
+        review: verdict_review(&form)?,
+    };
     let version = client_version(&headers)?;
     blocking(&app, move |store| {
         ops::apply(store, Some(version), op)?;
@@ -741,9 +856,18 @@ pub struct CreateEpicForm {
     status: String,
 }
 
-pub async fn create_epic(State(app): State<AppState>, headers: HeaderMap, Form(form): Form<CreateEpicForm>) -> Result<StatusCode, AppError> {
-    let op =
-        Op::CreateEpic { title: form.title, color: opt(form.color), body: form.body, status: parse_status(&form.status)?, auto_merge: false };
+pub async fn create_epic(
+    State(app): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<CreateEpicForm>,
+) -> Result<StatusCode, AppError> {
+    let op = Op::CreateEpic {
+        title: form.title,
+        color: opt(form.color),
+        body: form.body,
+        status: parse_status(&form.status)?,
+        auto_merge: false,
+    };
     mutate(&app, &headers, op).await
 }
 
@@ -763,7 +887,12 @@ pub async fn update_epic(
     Form(form): Form<UpdateEpicForm>,
 ) -> Result<Html<String>, AppError> {
     let id = EpicId(id);
-    let patch = crate::ops::EpicPatch { title: Some(form.title), color: opt(form.color), body: Some(form.body), auto_merge: None };
+    let patch = crate::ops::EpicPatch {
+        title: Some(form.title),
+        color: opt(form.color),
+        body: Some(form.body),
+        auto_merge: None,
+    };
     let op = Op::UpdateEpic { id: id.clone(), patch };
     let version = client_version(&headers)?;
     blocking(&app, move |store| {
@@ -781,7 +910,10 @@ pub async fn epic_status(
     Form(form): Form<StatusForm>,
 ) -> Result<Html<String>, AppError> {
     let id = EpicId(id);
-    let op = Op::SetEpicStatus { id: id.clone(), status: parse_status(&form.status)? };
+    let op = Op::SetEpicStatus {
+        id: id.clone(),
+        status: parse_status(&form.status)?,
+    };
     let version = client_version(&headers)?;
     blocking(&app, move |store| {
         ops::apply(store, Some(version), op)?;
@@ -797,8 +929,15 @@ pub async fn epic_auto_merge(State(app): State<AppState>, Path(id): Path<String>
     let id = EpicId(id);
     let version = client_version(&headers)?;
     blocking(&app, move |store| {
-        let on = store.read_board()?.epic(&id).ok_or_else(|| AppError::not_found(&id.to_string()))?.auto_merge;
-        let patch = crate::ops::EpicPatch { auto_merge: Some(!on), ..crate::ops::EpicPatch::default() };
+        let on = store
+            .read_board()?
+            .epic(&id)
+            .ok_or_else(|| AppError::not_found(&id.to_string()))?
+            .auto_merge;
+        let patch = crate::ops::EpicPatch {
+            auto_merge: Some(!on),
+            ..crate::ops::EpicPatch::default()
+        };
         ops::apply(store, Some(version), Op::UpdateEpic { id: id.clone(), patch })?;
         let tpl = views::epic_detail(&store.read_board()?, &id).ok_or_else(|| AppError::not_found(&id.to_string()))?;
         Ok(Html(tpl.render()?))

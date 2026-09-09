@@ -41,7 +41,10 @@ pub fn list_docs() -> Vec<DocEntry> {
         .filter_map(|f| {
             let bytes = DocsEmbed::get(&f)?.data.into_owned();
             let title = derive_title(&bytes, &f);
-            Some(DocEntry { file: f.into_owned(), title })
+            Some(DocEntry {
+                file: f.into_owned(),
+                title,
+            })
         })
         .collect();
     entries.sort_by(|a, b| a.file.cmp(&b.file));
@@ -49,7 +52,10 @@ pub fn list_docs() -> Vec<DocEntry> {
 }
 
 fn is_top_level_markdown(path: &str) -> bool {
-    !path.contains('/') && std::path::Path::new(path).extension().is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+    !path.contains('/')
+        && std::path::Path::new(path)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
 }
 
 /// The article's human title: the first `# H1` in the file, falling back to a humanised filename when the file has no

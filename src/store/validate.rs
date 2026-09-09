@@ -23,13 +23,13 @@ pub fn validate(board: &Board) -> Result<(), Vec<String>> {
 }
 
 fn check_columns(board: &Board) -> impl Iterator<Item = String> + '_ {
-    ColumnId::ALL.into_iter().filter_map(|id| {
-        match board.columns.iter().filter(|c| c.id == id).count() {
+    ColumnId::ALL
+        .into_iter()
+        .filter_map(|id| match board.columns.iter().filter(|c| c.id == id).count() {
             0 => Some(format!("columns: missing metadata for '{id}'")),
             1 => None,
             n => Some(format!("columns: '{id}' defined {n} times")),
-        }
-    })
+        })
 }
 
 fn check_unique_ids(board: &Board) -> impl Iterator<Item = String> + '_ {
@@ -48,15 +48,10 @@ fn duplicates<'a>(ids: impl Iterator<Item = &'a str>) -> Vec<String> {
 
 fn check_epic_refs(board: &Board) -> impl Iterator<Item = String> + '_ {
     let epic_ids: HashSet<&str> = board.epics.iter().map(|e| e.id.0.as_str()).collect();
-    board
-        .tickets
-        .iter()
-        .filter_map(move |t| match &t.epic {
-            Some(epic) if !epic_ids.contains(epic.0.as_str()) => {
-                Some(format!("{}: epic '{}' does not exist", t.id, epic))
-            }
-            _ => None,
-        })
+    board.tickets.iter().filter_map(move |t| match &t.epic {
+        Some(epic) if !epic_ids.contains(epic.0.as_str()) => Some(format!("{}: epic '{}' does not exist", t.id, epic)),
+        _ => None,
+    })
 }
 
 /// Dangling and self references, then Kahn's algorithm for cycles. Reference errors don't hide the cycle check: unknown ids
@@ -114,8 +109,7 @@ fn find_cycle_members(board: &Board) -> Option<Vec<String>> {
     if peeled == board.tickets.len() {
         return None;
     }
-    let mut stuck: Vec<String> =
-        in_degree.iter().filter(|&(_, &d)| d > 0).map(|(id, _)| id.0.clone()).collect();
+    let mut stuck: Vec<String> = in_degree.iter().filter(|&(_, &d)| d > 0).map(|(id, _)| id.0.clone()).collect();
     stuck.sort();
     Some(stuck)
 }
@@ -168,7 +162,10 @@ mod tests {
     #[test]
     fn duplicate_column_metadata_is_rejected() {
         let mut board = Board::empty();
-        board.columns.push(ColumnMeta { id: ColumnId::Todo, title: "Again".into() });
+        board.columns.push(ColumnMeta {
+            id: ColumnId::Todo,
+            title: "Again".into(),
+        });
         assert!(validate(&board).unwrap_err().iter().any(|p| p.contains("'todo' defined 2 times")));
     }
 
@@ -184,7 +181,10 @@ mod tests {
         board.tickets[0].epic = Some(EpicId("EP-9".into()));
         let problems = validate(&board).unwrap_err();
         assert!(problems.iter().any(|p| p.contains("epic 'EP-9' does not exist")), "{problems:?}");
-        assert!(problems.iter().any(|p| p.contains("depends_on 'K-99' does not exist")), "{problems:?}");
+        assert!(
+            problems.iter().any(|p| p.contains("depends_on 'K-99' does not exist")),
+            "{problems:?}"
+        );
     }
 
     #[test]
@@ -195,7 +195,12 @@ mod tests {
 
     #[test]
     fn a_cycle_is_rejected_and_names_its_members() {
-        let board = board_with(vec![ticket("K-1", &["K-2"]), ticket("K-2", &["K-3"]), ticket("K-3", &["K-1"]), ticket("K-4", &[])]);
+        let board = board_with(vec![
+            ticket("K-1", &["K-2"]),
+            ticket("K-2", &["K-3"]),
+            ticket("K-3", &["K-1"]),
+            ticket("K-4", &[]),
+        ]);
         let problems = validate(&board).unwrap_err();
         let cycle = problems.iter().find(|p| p.contains("cycle")).expect("cycle reported");
         assert!(cycle.contains("K-1") && cycle.contains("K-2") && cycle.contains("K-3"), "{cycle}");
@@ -204,14 +209,26 @@ mod tests {
 
     #[test]
     fn a_diamond_dependency_is_fine() {
-        let board = board_with(vec![ticket("K-1", &[]), ticket("K-2", &["K-1"]), ticket("K-3", &["K-1"]), ticket("K-4", &["K-2", "K-3"])]);
+        let board = board_with(vec![
+            ticket("K-1", &[]),
+            ticket("K-2", &["K-1"]),
+            ticket("K-3", &["K-1"]),
+            ticket("K-4", &["K-2", "K-3"]),
+        ]);
         assert!(validate(&board).is_ok());
     }
 
     #[test]
     fn a_valid_epic_reference_passes() {
         let mut board = board_with(vec![ticket("K-1", &[])]);
-        board.epics.push(Epic { id: EpicId("EP-1".into()), title: "e".into(), color: "#fff".into(), status: Status::Ready, body: String::new(), auto_merge: false });
+        board.epics.push(Epic {
+            id: EpicId("EP-1".into()),
+            title: "e".into(),
+            color: "#fff".into(),
+            status: Status::Ready,
+            body: String::new(),
+            auto_merge: false,
+        });
         board.tickets[0].epic = Some(EpicId("EP-1".into()));
         assert!(validate(&board).is_ok());
     }

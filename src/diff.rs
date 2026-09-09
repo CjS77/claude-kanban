@@ -59,7 +59,9 @@ pub struct DiffLine {
 /// where there is no remote to push to. Checked live per detail-pane render, never cached (one subprocess is cheap).
 #[must_use]
 pub fn eligible(store: &Store, ticket: &Ticket) -> bool {
-    let Column::Review { branch: Some(branch) } = &ticket.column else { return false };
+    let Column::Review { branch: Some(branch), .. } = &ticket.column else {
+        return false;
+    };
     if ticket.external.is_some() {
         return false; // external tickets are worked elsewhere; their branch may not be on this machine at all
     }
@@ -83,7 +85,7 @@ pub fn compute(store: &Store, id: &TicketId) -> anyhow::Result<Diff> {
     let repo = worktree::repo_root(store)?;
     let board = store.read_board()?;
     let ticket = board.ticket(id).with_context(|| format!("{id} not found on the board"))?;
-    let Column::Review { branch: Some(branch) } = &ticket.column else {
+    let Column::Review { branch: Some(branch), .. } = &ticket.column else {
         anyhow::bail!("{id} is not a review ticket with a branch — nothing to diff");
     };
     if !git::branch_exists(&repo, branch) {
@@ -94,7 +96,11 @@ pub fn compute(store: &Store, id: &TicketId) -> anyhow::Result<Diff> {
         .context("no main branch is configured or detectable to diff against")?;
 
     let files = parse(&git::diff(&repo, &main, branch)?)?;
-    Ok(Diff { branch: branch.clone(), main, files })
+    Ok(Diff {
+        branch: branch.clone(),
+        main,
+        files,
+    })
 }
 
 /// Turn a unified diff into the view-model. Split from [`compute`] so it can be unit-tested against a literal patch with
@@ -129,8 +135,15 @@ fn file_diff(pf: &unidiff::PatchedFile) -> FileDiff {
 }
 
 fn hunk(h: &unidiff::Hunk) -> DiffHunk {
-    let ranges = format!("@@ -{},{} +{},{} @@", h.source_start, h.source_length, h.target_start, h.target_length);
-    let header = if h.section_header.is_empty() { ranges } else { format!("{ranges} {}", h.section_header) };
+    let ranges = format!(
+        "@@ -{},{} +{},{} @@",
+        h.source_start, h.source_length, h.target_start, h.target_length
+    );
+    let header = if h.section_header.is_empty() {
+        ranges
+    } else {
+        format!("{ranges} {}", h.section_header)
+    };
     let lines = h
         .lines()
         .iter()
@@ -223,7 +236,10 @@ index e69de29..1111111 100644
         let removed = lines.iter().find(|l| l.css == "dl-del").unwrap();
         // The diff marker is stripped, indentation is kept, and each side knows only its own line number.
         assert_eq!(added.text, "    println!(\"new\");");
-        assert!(!added.text.starts_with('+'), "the +/- marker must not survive into the rendered text");
+        assert!(
+            !added.text.starts_with('+'),
+            "the +/- marker must not survive into the rendered text"
+        );
         assert!(added.new_no.is_some() && added.old_no.is_none());
         assert!(removed.old_no.is_some() && removed.new_no.is_none());
     }

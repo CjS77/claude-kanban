@@ -77,7 +77,11 @@ pub fn spawn_watcher(store: Store, shutdown: CancellationToken) -> anyhow::Resul
                 },
                 |b| b.version,
             );
-            tracing::debug!(version, subscribers = sender.receiver_count(), "store changed — broadcasting refresh");
+            tracing::debug!(
+                version,
+                subscribers = sender.receiver_count(),
+                "store changed — broadcasting refresh"
+            );
             let _ = sender.send(version);
         }
     });

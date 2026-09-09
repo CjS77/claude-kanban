@@ -5,7 +5,7 @@
 -#}
 <select id="filter-epic" name="epic" class="select select-sm w-40" aria-label="Filter by epic"
         {% if filter_oob %}hx-swap-oob="true"{% endif %}
-        hx-get="/ui/board" hx-target="#board" hx-include="#filters" hx-trigger="change">
+        hx-get="/ui/board" hx-target="#board" hx-include="#filters, #archive-toggle" hx-trigger="change">
     <option value="">All epics</option>
     {% for epic in epics %}
     <option value="{{ epic.id }}"{% if epic.selected %} selected{% endif %}>{{ epic.title }}</option>

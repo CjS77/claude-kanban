@@ -32,7 +32,7 @@ use crate::{
 /// The workflow contract, shipped to the client as server instructions. Public because opencode never surfaces MCP
 /// server instructions, so `opencode/kanban-rules.md` must carry the same text — tests/manifests.rs pins the two
 /// together.
-pub const INSTRUCTIONS: &str ="A local Kanban board shared with a human (who sees it live in a browser). \
+pub const INSTRUCTIONS: &str = "A local Kanban board shared with a human (who sees it live in a browser). \
 The lifecycle of a ready ticket: kanban_claim → kanban_worktree_start → work in the worktree, committing as you go → \
 kanban_note progress → kanban_move to review. Do NOT call kanban_worktree_finish at close-out: the worktree is kept \
 through review so the human can read the code and rework re-attaches instantly, and the board removes it once the \
@@ -535,20 +535,33 @@ impl KanbanServer {
         .await
     }
 
+    /// Report this MCP server's identity: the crate `name`, its semantic `version`, and the source `repository` — the
+    /// same build the board's web UI shows in its footer. A plain read that touches neither the board nor the store, so
+    /// it needs no `expected_version`; use it to learn which build a harness is talking to (a bug report, a
+    /// compatibility check). The version also rides the `initialize` handshake in `serverInfo`; this exposes it as a
+    /// tool a session can call at any point.
+    #[tool]
+    async fn kanban_version(&self) -> Result<CallToolResult, ErrorData> {
+        Ok(CallToolResult::structured(serde_json::json!({
+            "name": env!("CARGO_PKG_NAME"),
+            "version": env!("CARGO_PKG_VERSION"),
+            "repository": env!("CARGO_PKG_REPOSITORY"),
+        })))
+    }
+
     /// The next thing to work on, and what it needs. Returns the full ticket plus the action, or explains that nothing
     /// is eligible:
     ///
-    /// - `"land"` — a human accepted this review ticket and cleared its branch to land. **Do not claim it** (claiming a
-    ///   review ticket is the rework path and would drag it into doing): call `kanban_start_landing` to take the
-    ///   in-flight marker, then follow *Landing a branch* in the work command — rebase the branch onto the main branch,
-    ///   fast-forward main into it, and let the sweep move the card. Ranked **first**: it is minutes of work, it is what
-    ///   unblocks dependents, and a fresh worktree is branched off the main checkout's HEAD, so landing first keeps the
-    ///   next ticket from starting on a stale main. The answer carries `branch`.
-    /// - `"rework"` — a human reviewed this ticket and sent it back. It is sitting in doing, unclaimed, with its branch
-    ///   and worktree intact: claim it, `kanban_worktree_start` (which re-attaches), treat the newest
-    ///   `changes requested:` note as the spec for this round, then move it to review again. Ranked above todo work.
-    ///   That note may carry `- path:line — comment` bullets: they were written against the reviewed diff, so each one
-    ///   names the exact line it is about. A bullet marked `(old line)` numbers the file *before* the branch's changes.
+    /// - `"land"` — a human accepted this review ticket and cleared its branch to land. **Do not claim it** (claiming a review ticket is
+    ///   the rework path and would drag it into doing): call `kanban_start_landing` to take the in-flight marker, then follow *Landing a
+    ///   branch* in the work command — rebase the branch onto the main branch, fast-forward main into it, and let the sweep move the card.
+    ///   Ranked **first**: it is minutes of work, it is what unblocks dependents, and a fresh worktree is branched off the main checkout's
+    ///   HEAD, so landing first keeps the next ticket from starting on a stale main. The answer carries `branch`.
+    /// - `"rework"` — a human reviewed this ticket and sent it back. It is sitting in doing, unclaimed, with its branch and worktree
+    ///   intact: claim it, `kanban_worktree_start` (which re-attaches), treat the newest `changes requested:` note as the spec for this
+    ///   round, then move it to review again. Ranked above todo work. That note may carry `- path:line — comment` bullets: they were
+    ///   written against the reviewed diff, so each one names the exact line it is about. A bullet marked `(old line)` numbers the file
+    ///   *before* the branch's changes.
     /// - `"implement"` — a ready ticket in todo: build it.
     /// - `"refine"` — a stub: write its spec, don't build it.
     ///
@@ -600,10 +613,16 @@ impl KanbanServer {
     #[tool]
     async fn kanban_claim(&self, Parameters(p): Parameters<ClaimParams>) -> Result<CallToolResult, ErrorData> {
         let id = TicketId(p.ticket);
-        let op = Op::Claim { id: id.clone(), agent: p.agent.unwrap_or_else(|| self.agent.clone()) };
+        let op = Op::Claim {
+            id: id.clone(),
+            agent: p.agent.unwrap_or_else(|| self.agent.clone()),
+        };
         // Claiming is the MCP door into `doing` (kanban_move passes no owner, so it can't enter) — with the minesweeper
         // toggle on, a ready claim is the delegation moment.
-        self.apply_then(Some(p.expected_version), op, move |store| crate::minesweeper::delegate_entering_doing(store, &id)).await
+        self.apply_then(Some(p.expected_version), op, move |store| {
+            crate::minesweeper::delegate_entering_doing(store, &id)
+        })
+        .await
     }
 
     /// Give a claimed ticket back: drops the claim and returns the card to the top of todo.
@@ -627,7 +646,10 @@ impl KanbanServer {
     /// crash costs one stalled card, not a stuck one.)
     #[tool]
     async fn kanban_start_landing(&self, Parameters(p): Parameters<StartLandingParams>) -> Result<CallToolResult, ErrorData> {
-        let op = Op::StartLanding { id: TicketId(p.ticket), agent: p.agent.unwrap_or_else(|| self.agent.clone()) };
+        let op = Op::StartLanding {
+            id: TicketId(p.ticket),
+            agent: p.agent.unwrap_or_else(|| self.agent.clone()),
+        };
         self.apply(Some(p.expected_version), op).await
     }
 
@@ -642,7 +664,14 @@ impl KanbanServer {
     /// mid-rebase behind you; then name the conflicting paths here so the human knows where to look.
     #[tool]
     async fn kanban_block_landing(&self, Parameters(p): Parameters<BlockLandingParams>) -> Result<CallToolResult, ErrorData> {
-        self.apply(Some(p.expected_version), Op::BlockLanding { id: TicketId(p.ticket), reason: p.reason }).await
+        self.apply(
+            Some(p.expected_version),
+            Op::BlockLanding {
+                id: TicketId(p.ticket),
+                reason: p.reason,
+            },
+        )
+        .await
     }
 
     /// Move a ticket to a column at a position (0 = top; position is priority). Moving to review is the close-out for
@@ -655,7 +684,13 @@ impl KanbanServer {
     async fn kanban_move(&self, Parameters(p): Parameters<MoveParams>) -> Result<CallToolResult, ErrorData> {
         let to = p.to.parse().map_err(|e: String| ErrorData::invalid_params(e, None))?;
         let id = TicketId(p.ticket);
-        let op = Op::MoveTicket { id: id.clone(), to, position: p.position, owner: None, branch: p.branch };
+        let op = Op::MoveTicket {
+            id: id.clone(),
+            to,
+            position: p.position,
+            owner: None,
+            branch: p.branch,
+        };
         let (guard_id, expected_version) = (id.clone(), p.expected_version);
         let store = self.store.clone();
         let result = tokio::task::spawn_blocking(move || {
@@ -721,22 +756,32 @@ impl KanbanServer {
             auto_merge: p.auto_merge,
         };
         let id = TicketId(p.ticket);
-        self.apply_unless_draft(p.expected_version, id.clone(), Op::UpdateTicket { id, patch }).await
+        self.apply_unless_draft(p.expected_version, id.clone(), Op::UpdateTicket { id, patch })
+            .await
     }
 
     /// Create an epic. Defaults to `status=review` — the human promotes it to ready.
     #[tool]
     async fn kanban_create_epic(&self, Parameters(p): Parameters<CreateEpicParams>) -> Result<CallToolResult, ErrorData> {
         let status = parse_status_or(p.status.as_deref(), Status::Review)?;
-        let op =
-            Op::CreateEpic { title: p.title, color: p.color, body: p.body.unwrap_or_default(), status, auto_merge: p.auto_merge.unwrap_or(false) };
+        let op = Op::CreateEpic {
+            title: p.title,
+            color: p.color,
+            body: p.body.unwrap_or_default(),
+            status,
+            auto_merge: p.auto_merge.unwrap_or(false),
+        };
         self.apply(Some(p.expected_version), op).await
     }
 
     /// Append a timestamped entry to a ticket's progress log. Note progress after each meaningful chunk of work.
     #[tool]
     async fn kanban_note(&self, Parameters(p): Parameters<NoteParams>) -> Result<CallToolResult, ErrorData> {
-        let op = Op::AddNote { id: TicketId(p.ticket), text: p.text, author: Some(p.agent.unwrap_or_else(|| self.agent.clone())) };
+        let op = Op::AddNote {
+            id: TicketId(p.ticket),
+            text: p.text,
+            author: Some(p.agent.unwrap_or_else(|| self.agent.clone())),
+        };
         self.apply(Some(p.expected_version), op).await
     }
 
@@ -757,10 +802,10 @@ impl KanbanServer {
     /// board's `auto_review` is on. With `auto_review` off (the default) it refuses, because the verdict is the human's;
     /// your `kanban_review_comment` review is the deliverable then, and the card stays in review for them.
     ///
-    /// - `accept` — clears the branch to land (the card stays in `review`; the sweep lands it, exactly as pressing
-    ///   Accept does). Not "done": there is still no proof the code reached main.
-    /// - `request_changes` — needs a `comment`; sends the card to the top of `doing` carrying it as the
-    ///   `changes requested:` note that a worker reads as the rework spec.
+    /// - `accept` — clears the branch to land (the card stays in `review`; the sweep lands it, exactly as pressing Accept does). Not
+    ///   "done": there is still no proof the code reached main.
+    /// - `request_changes` — needs a `comment`; sends the card to the top of `doing` carrying it as the `changes requested:` note that a
+    ///   worker reads as the rework spec.
     /// - `discard` — retires it in `done` unlanded (`discarded: true`), `comment` folded in as the reason.
     ///
     /// Write your findings with `kanban_review_comment` **before** calling this; `comment` is the one-line verdict, not
@@ -784,13 +829,30 @@ impl KanbanServer {
     #[tool]
     async fn kanban_bind_external(&self, Parameters(p): Parameters<BindExternalParams>) -> Result<CallToolResult, ErrorData> {
         let external = match (p.provider, p.kind, p.number) {
-            (Some(provider), Some(kind), Some(number)) => {
-                Some(crate::store::model::External { provider, kind, number, closed: false, flag: None, sub_issues: vec![] })
-            }
+            (Some(provider), Some(kind), Some(number)) => Some(crate::store::model::External {
+                provider,
+                kind,
+                number,
+                closed: false,
+                flag: None,
+                sub_issues: vec![],
+            }),
             (None, None, None) => None,
-            _ => return Err(ErrorData::invalid_params("provider, kind, and number must be given together (or all omitted to unbind)", None)),
+            _ => {
+                return Err(ErrorData::invalid_params(
+                    "provider, kind, and number must be given together (or all omitted to unbind)",
+                    None,
+                ));
+            }
         };
-        self.apply(Some(p.expected_version), Op::BindExternal { id: TicketId(p.ticket), external }).await
+        self.apply(
+            Some(p.expected_version),
+            Op::BindExternal {
+                id: TicketId(p.ticket),
+                external,
+            },
+        )
+        .await
     }
 
     /// Create (or re-attach) the claimed ticket's branch and worktree — `k-7/<slug>`, sparse, excluding .kanban/ — and
@@ -799,7 +861,12 @@ impl KanbanServer {
     #[tool]
     async fn kanban_worktree_start(&self, Parameters(p): Parameters<WorktreeStartParams>) -> Result<CallToolResult, ErrorData> {
         let store = self.store.clone();
-        let opts = crate::worktree::StartOpts { base: p.base, slug: p.slug, dir: None, no_sparse: false };
+        let opts = crate::worktree::StartOpts {
+            base: p.base,
+            slug: p.slug,
+            dir: None,
+            no_sparse: false,
+        };
         let result = tokio::task::spawn_blocking(move || crate::worktree::start(&store, &TicketId(p.ticket), &opts))
             .await
             .map_err(|e| ErrorData::internal_error(format!("task failed: {e}"), None))?;
@@ -820,7 +887,12 @@ impl KanbanServer {
     async fn kanban_worktree_finish(&self, Parameters(p): Parameters<WorktreeFinishParams>) -> Result<CallToolResult, ErrorData> {
         let store = self.store.clone();
         let result = tokio::task::spawn_blocking(move || {
-            crate::worktree::finish(&store, &TicketId(p.ticket), p.force_discard.unwrap_or(false), p.merge.unwrap_or(false))
+            crate::worktree::finish(
+                &store,
+                &TicketId(p.ticket),
+                p.force_discard.unwrap_or(false),
+                p.merge.unwrap_or(false),
+            )
         })
         .await
         .map_err(|e| ErrorData::internal_error(format!("task failed: {e}"), None))?;
@@ -835,13 +907,27 @@ impl KanbanServer {
     /// for refinement returns to the top of todo and its claim drops — no worktree is ever involved. Atomic.
     #[tool]
     async fn kanban_refine(&self, Parameters(p): Parameters<RefineParams>) -> Result<CallToolResult, ErrorData> {
-        let target = if p.target.starts_with("EP-") { RefineTarget::Epic(EpicId(p.target)) } else { RefineTarget::Ticket(TicketId(p.target)) };
+        let target = if p.target.starts_with("EP-") {
+            RefineTarget::Epic(EpicId(p.target))
+        } else {
+            RefineTarget::Ticket(TicketId(p.target))
+        };
         let op = Op::Refine {
             target,
             title: p.title,
             body: p.body,
-            split_tickets: p.split_tickets.unwrap_or_default().into_iter().map(new_ticket_spec).collect::<Result<_, _>>()?,
-            split_epics: p.split_epics.unwrap_or_default().into_iter().map(new_epic_spec).collect::<Result<_, _>>()?,
+            split_tickets: p
+                .split_tickets
+                .unwrap_or_default()
+                .into_iter()
+                .map(new_ticket_spec)
+                .collect::<Result<_, _>>()?,
+            split_epics: p
+                .split_epics
+                .unwrap_or_default()
+                .into_iter()
+                .map(new_epic_spec)
+                .collect::<Result<_, _>>()?,
         };
         self.apply(Some(p.expected_version), op).await
     }
@@ -933,8 +1019,11 @@ const WAITING_CAP: usize = 20;
 /// One `waiting` list for the wire, capped — and saying so when it was, because a silently truncated list reads exactly
 /// like a complete one.
 fn waiting_list(entries: &[(TicketId, String)]) -> serde_json::Value {
-    let shown: Vec<serde_json::Value> =
-        entries.iter().take(WAITING_CAP).map(|(id, why)| serde_json::json!({ "ticket": id, "reason": why })).collect();
+    let shown: Vec<serde_json::Value> = entries
+        .iter()
+        .take(WAITING_CAP)
+        .map(|(id, why)| serde_json::json!({ "ticket": id, "reason": why }))
+        .collect();
     match entries.len().checked_sub(WAITING_CAP) {
         Some(more) if more > 0 => serde_json::json!({ "tickets": shown, "not_shown": more }),
         _ => serde_json::json!({ "tickets": shown }),
@@ -951,7 +1040,10 @@ fn nothing_eligible(todo: &[(TicketId, String)], stalled: &[(TicketId, String)])
             "no eligible ticket: todo is empty, and {} in review cannot be proven landed — see waiting.review",
             tickets(stalled.len())
         ),
-        (false, true) => format!("no eligible ticket: {} in todo, none of them eligible — see waiting.todo", tickets(todo.len())),
+        (false, true) => format!(
+            "no eligible ticket: {} in todo, none of them eligible — see waiting.todo",
+            tickets(todo.len())
+        ),
         (false, false) => format!(
             "no eligible ticket: {} in todo, none of them eligible, and {} in review cannot be proven landed — see waiting",
             tickets(todo.len()),
@@ -971,12 +1063,28 @@ const REVIEW_AUTHOR: &str = "auto-review";
 fn review_comment_op(p: ReviewCommentParams) -> Result<(Op, u64), OpError> {
     let inline = p.inline.unwrap_or_default().into_iter().map(|i| {
         let side = i.side.as_deref().unwrap_or("new").parse::<Side>().map_err(OpError::Invalid)?;
-        Ok(ReviewKind::Inline { path: i.path, line: i.line, side, text: i.text })
+        Ok(ReviewKind::Inline {
+            path: i.path,
+            line: i.line,
+            side,
+            text: i.text,
+        })
     });
-    let text = p.text.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty()).map(|text| Ok(ReviewKind::Comment { text }));
+    let text = p
+        .text
+        .map(|t| t.trim().to_owned())
+        .filter(|t| !t.is_empty())
+        .map(|text| Ok(ReviewKind::Comment { text }));
     let entries = inline.chain(text).collect::<Result<Vec<_>, OpError>>()?;
     let author = p.agent.unwrap_or_else(|| REVIEW_AUTHOR.into());
-    Ok((Op::AddReview { id: TicketId(p.ticket), author, entries }, p.expected_version))
+    Ok((
+        Op::AddReview {
+            id: TicketId(p.ticket),
+            author,
+            entries,
+        },
+        p.expected_version,
+    ))
 }
 
 /// Map a `kanban_review` request to the verdict op, gated on the board's `auto_review`. Pure so the gate and the
@@ -995,15 +1103,26 @@ fn review_verdict_op(auto_review: bool, id: TicketId, verdict: &str, comment: Op
         Verdict::Accept => Ok(Op::AcceptReview { id, by, review }),
         Verdict::RequestChanges => match comment {
             Some(_) => Ok(Op::RequestChanges { id, by, review }),
-            None => Err(OpError::Invalid("request_changes needs a comment — say what has to change; it becomes the rework spec".into())),
+            None => Err(OpError::Invalid(
+                "request_changes needs a comment — say what has to change; it becomes the rework spec".into(),
+            )),
         },
-        Verdict::Discard => Ok(Op::DiscardTicket { id, reason: comment.unwrap_or("discarded by auto-review").to_owned(), by, review }),
+        Verdict::Discard => Ok(Op::DiscardTicket {
+            id,
+            reason: comment.unwrap_or("discarded by auto-review").to_owned(),
+            by,
+            review,
+        }),
     }
 }
 
 fn shape_applied(result: Result<Applied, OpError>) -> CallToolResult {
     match result {
-        Ok(Applied { version, created_ids, mut result }) => {
+        Ok(Applied {
+            version,
+            created_ids,
+            mut result,
+        }) => {
             if let Some(obj) = result.as_object_mut() {
                 obj.insert("version".into(), version.into());
                 if !created_ids.is_empty() {
@@ -1021,9 +1140,9 @@ fn shape_applied(result: Result<Applied, OpError>) -> CallToolResult {
 fn refuse_draft(board: &Board, id: &TicketId) -> Result<(), OpError> {
     match board.ticket(id) {
         None => Err(OpError::NotFound(id.to_string())),
-        Some(t) if t.status == Status::Draft => {
-            Err(OpError::Invalid(format!("{id} is a draft — drafts are the human's to shape, not yours to edit")))
-        }
+        Some(t) if t.status == Status::Draft => Err(OpError::Invalid(format!(
+            "{id} is a draft — drafts are the human's to shape, not yours to edit"
+        ))),
         Some(_) => Ok(()),
     }
 }
@@ -1053,7 +1172,10 @@ fn to_value(view: &BoardView) -> serde_json::Value {
 
 /// One ticket from a board view, by id — the lookup `kanban_ticket` uses, and `kanban_epic` reuses for its `tickets`.
 fn ticket_value(view: &BoardView, id: &TicketId) -> Option<serde_json::Value> {
-    view.tickets.iter().find(|t| t.ticket.id == *id).map(|t| serde_json::to_value(t).unwrap_or_default())
+    view.tickets
+        .iter()
+        .find(|t| t.ticket.id == *id)
+        .map(|t| serde_json::to_value(t).unwrap_or_default())
 }
 
 /// One epic plus the tickets that belong to it, from a board view. `epic` mirrors an entry of `kanban_board`'s `epics`
@@ -1122,7 +1244,8 @@ fn parse_status_or(s: Option<&str>, default: Status) -> Result<Status, ErrorData
 
 /// An absent effort is "inherit"; a present one must name a level, so a typo is refused rather than silently dropped.
 fn parse_effort(s: Option<&str>) -> Result<Option<Effort>, ErrorData> {
-    s.map(|s| s.parse().map_err(|e: String| ErrorData::invalid_params(e, None))).transpose()
+    s.map(|s| s.parse().map_err(|e: String| ErrorData::invalid_params(e, None)))
+        .transpose()
 }
 
 fn new_ticket_spec(p: NewTicketParam) -> Result<NewTicketSpec, ErrorData> {
@@ -1143,7 +1266,12 @@ fn new_epic_spec(p: NewEpicParam) -> Result<NewEpicSpec, ErrorData> {
         title: p.title,
         color: p.color,
         body: p.body.unwrap_or_default(),
-        tickets: p.tickets.unwrap_or_default().into_iter().map(new_ticket_spec).collect::<Result<_, _>>()?,
+        tickets: p
+            .tickets
+            .unwrap_or_default()
+            .into_iter()
+            .map(new_ticket_spec)
+            .collect::<Result<_, _>>()?,
     })
 }
 
@@ -1190,11 +1318,22 @@ mod tests {
     }
 
     fn done(discarded: bool) -> Column {
-        Column::Done { branch: None, completed_at: Utc::now(), discarded }
+        Column::Done {
+            branch: None,
+            completed_at: Utc::now(),
+            discarded,
+        }
     }
 
     fn epic(id: &str) -> Epic {
-        Epic { id: EpicId(id.into()), title: id.into(), color: "#fff".into(), status: Status::Ready, body: String::new(), auto_merge: false }
+        Epic {
+            id: EpicId(id.into()),
+            title: id.into(),
+            color: "#fff".into(),
+            status: Status::Ready,
+            body: String::new(),
+            auto_merge: false,
+        }
     }
 
     /// Tickets in all four columns, one of the done ones discarded. EP-1 spans the board (derived column `doing`);
@@ -1205,8 +1344,15 @@ mod tests {
         board.epics = vec![epic("EP-1"), epic("EP-2")];
         board.tickets = vec![
             ticket("K-1", "EP-1", Column::Todo),
-            ticket("K-2", "EP-1", Column::Doing { owner: "claude".into(), branch: None }),
-            ticket("K-3", "EP-1", Column::Review { branch: None }),
+            ticket(
+                "K-2",
+                "EP-1",
+                Column::Doing {
+                    owner: "claude".into(),
+                    branch: None,
+                },
+            ),
+            ticket("K-3", "EP-1", Column::Review { owner: None, branch: None }),
             ticket("K-4", "EP-1", done(false)),
             ticket("K-5", "EP-2", done(false)),
             ticket("K-6", "EP-2", done(true)),
@@ -1215,7 +1361,12 @@ mod tests {
     }
 
     fn ids(value: &serde_json::Value, key: &str) -> Vec<String> {
-        value[key].as_array().unwrap().iter().map(|t| t["id"].as_str().unwrap().to_string()).collect()
+        value[key]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["id"].as_str().unwrap().to_string())
+            .collect()
     }
 
     #[test]
@@ -1224,7 +1375,10 @@ mod tests {
         // Off: every verdict refuses with the "human's to give" message, whatever the verdict or comment.
         for verdict in ["accept", "request_changes", "discard"] {
             let err = review_verdict_op(false, id.clone(), verdict, Some("x")).unwrap_err();
-            assert!(matches!(&err, OpError::Invalid(m) if m.contains("auto_review is off")), "{verdict}: {err}");
+            assert!(
+                matches!(&err, OpError::Invalid(m) if m.contains("auto_review is off")),
+                "{verdict}: {err}"
+            );
         }
     }
 
@@ -1247,27 +1401,47 @@ mod tests {
         // Inline entries lead, the prose follows, and the author defaults to the review loop's name.
         let (op, version) = review_comment_op(params(
             Some("  looks right overall  "),
-            Some(vec![anchor("src/a.rs", 7, None, "nit"), anchor("src/a.rs", 3, Some("old"), "why gone?")]),
+            Some(vec![
+                anchor("src/a.rs", 7, None, "nit"),
+                anchor("src/a.rs", 3, Some("old"), "why gone?"),
+            ]),
             None,
         ))
         .unwrap();
         assert_eq!(version, 9);
-        let Op::AddReview { id, author, entries } = op else { panic!("not an AddReview: {op:?}") };
+        let Op::AddReview { id, author, entries } = op else {
+            panic!("not an AddReview: {op:?}")
+        };
         assert_eq!(id, TicketId("K-7".into()));
         assert_eq!(author, REVIEW_AUTHOR);
         assert_eq!(
             entries,
             vec![
-                ReviewKind::Inline { path: "src/a.rs".into(), line: 7, side: Side::New, text: "nit".into() },
-                ReviewKind::Inline { path: "src/a.rs".into(), line: 3, side: Side::Old, text: "why gone?".into() },
-                ReviewKind::Comment { text: "looks right overall".into() },
+                ReviewKind::Inline {
+                    path: "src/a.rs".into(),
+                    line: 7,
+                    side: Side::New,
+                    text: "nit".into()
+                },
+                ReviewKind::Inline {
+                    path: "src/a.rs".into(),
+                    line: 3,
+                    side: Side::Old,
+                    text: "why gone?".into()
+                },
+                ReviewKind::Comment {
+                    text: "looks right overall".into()
+                },
             ]
         );
 
         // Blank prose is not an entry; a named agent is the author; a bad side is refused up front.
         let (op, _) = review_comment_op(params(Some("   "), Some(vec![anchor("x", 1, None, "y")]), Some("sam"))).unwrap();
         assert!(matches!(op, Op::AddReview { author, entries, .. } if author == "sam" && entries.len() == 1));
-        assert!(matches!(review_comment_op(params(Some("t"), Some(vec![anchor("x", 1, Some("left"), "y")]), None)), Err(OpError::Invalid(_))));
+        assert!(matches!(
+            review_comment_op(params(Some("t"), Some(vec![anchor("x", 1, Some("left"), "y")]), None)),
+            Err(OpError::Invalid(_))
+        ));
     }
 
     #[test]
@@ -1286,18 +1460,34 @@ mod tests {
             Op::DiscardTicket { reason, .. } if reason == "dead end"
         ));
         // request_changes with no usable comment is refused — the note is the rework spec, so it cannot be empty.
-        assert!(matches!(review_verdict_op(true, id.clone(), "request_changes", Some("   ")), Err(OpError::Invalid(_))));
-        assert!(matches!(review_verdict_op(true, id.clone(), "request_changes", None), Err(OpError::Invalid(_))));
+        assert!(matches!(
+            review_verdict_op(true, id.clone(), "request_changes", Some("   ")),
+            Err(OpError::Invalid(_))
+        ));
+        assert!(matches!(
+            review_verdict_op(true, id.clone(), "request_changes", None),
+            Err(OpError::Invalid(_))
+        ));
         // discard falls back to a default reason; an unknown verdict is refused.
-        assert!(matches!(review_verdict_op(true, id.clone(), "discard", None).unwrap(), Op::DiscardTicket { .. }));
+        assert!(matches!(
+            review_verdict_op(true, id.clone(), "discard", None).unwrap(),
+            Op::DiscardTicket { .. }
+        ));
         assert!(matches!(review_verdict_op(true, id, "approve", None), Err(OpError::Invalid(_))));
     }
 
     #[test]
     fn the_default_board_read_omits_done_tickets_and_says_so() {
         let shaped = shape(view(), None, false);
-        assert_eq!(ids(&shaped, "tickets"), ["K-1", "K-2", "K-3"], "the default shape carries todo/doing/review only");
-        assert_eq!(shaped["done"]["count"], 3, "the summary counts every done ticket, discarded included");
+        assert_eq!(
+            ids(&shaped, "tickets"),
+            ["K-1", "K-2", "K-3"],
+            "the default shape carries todo/doing/review only"
+        );
+        assert_eq!(
+            shaped["done"]["count"], 3,
+            "the summary counts every done ticket, discarded included"
+        );
         assert_eq!(shaped["done"]["landed"], serde_json::json!(["K-4", "K-5"]));
         assert_eq!(shaped["done"]["discarded"], serde_json::json!(["K-6"]));
         assert!(
@@ -1310,8 +1500,15 @@ mod tests {
     fn include_done_returns_the_whole_board_unshaped() {
         let view = view();
         let shaped = shape(view.clone(), None, true);
-        assert_eq!(shaped, serde_json::to_value(&view).unwrap(), "include_done is the byte-identical compatibility escape hatch");
-        assert!(shaped.get("done").is_none(), "nothing was omitted, so there is nothing to summarize");
+        assert_eq!(
+            shaped,
+            serde_json::to_value(&view).unwrap(),
+            "include_done is the byte-identical compatibility escape hatch"
+        );
+        assert!(
+            shaped.get("done").is_none(),
+            "nothing was omitted, so there is nothing to summarize"
+        );
     }
 
     #[test]
@@ -1339,7 +1536,10 @@ mod tests {
         let shaped = shape(view(), None, false);
         let landed = shaped["done"]["landed"].as_array().unwrap();
         let discarded = shaped["done"]["discarded"].as_array().unwrap();
-        assert!(discarded.contains(&serde_json::json!("K-6")), "a discarded ticket is still done and still reported");
+        assert!(
+            discarded.contains(&serde_json::json!("K-6")),
+            "a discarded ticket is still done and still reported"
+        );
         assert!(
             !landed.contains(&serde_json::json!("K-6")),
             "but never as landed — a discarded dependency does not unblock its dependents"
@@ -1348,7 +1548,11 @@ mod tests {
 
     #[test]
     fn the_version_is_the_boards_version_whatever_the_shape() {
-        let shapes = [shape(view(), None, false), shape(view(), None, true), shape(view(), Some(ColumnId::Todo), false)];
+        let shapes = [
+            shape(view(), None, false),
+            shape(view(), None, true),
+            shape(view(), Some(ColumnId::Todo), false),
+        ];
         let versions: Vec<&serde_json::Value> = shapes.iter().map(|s| &s["version"]).collect();
         assert_eq!(
             versions,
@@ -1362,7 +1566,11 @@ mod tests {
     fn epics_survive_the_default_shape() {
         let shaped = shape(view(), None, false);
         let epics = ids(&shaped, "epics");
-        assert_eq!(epics, ["EP-1", "EP-2"], "epics are never filtered — a derived column of done is legitimate");
+        assert_eq!(
+            epics,
+            ["EP-1", "EP-2"],
+            "epics are never filtered — a derived column of done is legitimate"
+        );
         assert_eq!(shaped["epics"][1]["column"], "done", "and EP-2 is exactly that case");
     }
 }
@@ -1401,6 +1609,10 @@ mod action_tests {
         assert_eq!(action_for(&bare(Status::Ready, false)), "implement");
         assert_eq!(action_for(&bare(Status::Stub, false)), "refine");
         assert_eq!(action_for(&bare(Status::Ready, true)), "rework");
-        assert_eq!(action_for(&bare(Status::Stub, true)), "rework", "feedback outranks even an unwritten spec");
+        assert_eq!(
+            action_for(&bare(Status::Stub, true)),
+            "rework",
+            "feedback outranks even an unwritten spec"
+        );
     }
 }

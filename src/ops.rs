@@ -20,7 +20,9 @@ use crate::store::{
 };
 
 /// Default epic colours, assigned round-robin when `CreateEpic` gets no explicit colour. Muted, dark-and-light-friendly.
-const EPIC_PALETTE: [&str; 8] = ["#7c9cf5", "#5cb8a7", "#d4a45c", "#c98bc9", "#e08787", "#8fb965", "#5eb3d6", "#a58fd6"];
+const EPIC_PALETTE: [&str; 8] = [
+    "#7c9cf5", "#5cb8a7", "#d4a45c", "#c98bc9", "#e08787", "#8fb965", "#5eb3d6", "#a58fd6",
+];
 
 /// What a verdict carries onto the review log: the comment box (`text`) and the inline diff comments drained with it.
 /// The verdict op pushes `inline` first, then a [`ReviewKind::Verdict`] with `text` — one write, so a refused verdict
@@ -35,7 +37,10 @@ impl VerdictReview {
     /// Just a comment, no inline entries — the MCP verdict and the older call sites.
     #[must_use]
     pub fn text(text: impl Into<String>) -> VerdictReview {
-        VerdictReview { text: text.into(), inline: Vec::new() }
+        VerdictReview {
+            text: text.into(),
+            inline: Vec::new(),
+        }
     }
 
     /// The feedback a rework round reads: the text, or — when the reviewer only commented on lines — the inline entries
@@ -66,88 +71,179 @@ pub enum Op {
         auto_merge: bool,
     },
     /// Create an epic. `color: None` picks the next palette colour.
-    CreateEpic { title: String, color: Option<String>, body: String, status: Status, auto_merge: bool },
+    CreateEpic {
+        title: String,
+        color: Option<String>,
+        body: String,
+        status: Status,
+        auto_merge: bool,
+    },
     /// Patch a ticket's descriptive fields. Column and status move via their own ops.
-    UpdateTicket { id: TicketId, patch: TicketPatch },
+    UpdateTicket {
+        id: TicketId,
+        patch: TicketPatch,
+    },
     /// Patch an epic's descriptive fields.
-    UpdateEpic { id: EpicId, patch: EpicPatch },
+    UpdateEpic {
+        id: EpicId,
+        patch: EpicPatch,
+    },
     /// Delete a ticket, cascade-removing it from other tickets' `depends_on` and dropping its claim.
-    DeleteTicket { id: TicketId },
+    DeleteTicket {
+        id: TicketId,
+    },
     /// Delete an epic and every ticket in it, cascade-removing those tickets from other tickets' `depends_on` and
     /// dropping their claims.
-    DeleteEpic { id: EpicId },
+    DeleteEpic {
+        id: EpicId,
+    },
     /// Move a ticket to a column at a position (`None` = bottom). `owner` is required to *enter* `doing` unless the ticket
     /// is already there; entering `review` or `done` drops any live claim; entering `done` stamps `completed_at`.
     /// `branch` overrides the branch recorded on the destination state — the close-out for a companion subtask worked on
     /// its parent ticket's branch, which otherwise reaches review branchless and unlandable.
-    MoveTicket { id: TicketId, to: ColumnId, position: Option<usize>, owner: Option<String>, branch: Option<String> },
-    SetTicketStatus { id: TicketId, status: Status },
-    SetEpicStatus { id: EpicId, status: Status },
+    MoveTicket {
+        id: TicketId,
+        to: ColumnId,
+        position: Option<usize>,
+        owner: Option<String>,
+        branch: Option<String>,
+    },
+    SetTicketStatus {
+        id: TicketId,
+        status: Status,
+    },
+    SetEpicStatus {
+        id: EpicId,
+        status: Status,
+    },
     /// Take a ticket: requires `ready`, unblocked, unclaimed, and not yet done. Moves it to `doing` owned by `agent` and
     /// records the live claim. A pure board mutation — git is untouched (that's `worktree start`).
-    Claim { id: TicketId, agent: String },
+    Claim {
+        id: TicketId,
+        agent: String,
+    },
     /// Give a ticket back: drops the claim and returns the card to the top of `todo` (it was priority work when claimed).
-    Release { id: TicketId },
+    Release {
+        id: TicketId,
+    },
     /// Append to the ticket's progress log.
-    AddNote { id: TicketId, text: String, author: Option<String> },
+    AddNote {
+        id: TicketId,
+        text: String,
+        author: Option<String>,
+    },
     /// Append to a review ticket's review log — a reviewer's findings, human or agent, as one atomic write however many
     /// entries a drain of inline comments produces. Never gated on `auto_review`: writing a review is always allowed;
     /// only pressing a verdict is the human's to grant. Refuses outside `review`, on external tickets, and with nothing
     /// to say.
-    AddReview { id: TicketId, author: String, entries: Vec<ReviewKind> },
+    AddReview {
+        id: TicketId,
+        author: String,
+        entries: Vec<ReviewKind>,
+    },
     /// Bind (or unbind, with `None`) a ticket to a work item in another system — the delegate skill records where a
     /// mirrored ticket went, and the minesweeper poll refreshes a binding's observed facts. The binding is an address;
     /// nothing here touches the network.
-    BindExternal { id: TicketId, external: Option<crate::store::model::External> },
+    BindExternal {
+        id: TicketId,
+        external: Option<crate::store::model::External>,
+    },
     /// Record a completed delegation: bind the mirrored issue and re-own the doing ticket — live claim included — to the
     /// delegate agent, with a note saying where the work went. Constructed only by the minesweeper hook *after*
     /// `gh issue create` succeeded; the evidence is re-checked under the lock (still in doing, still ready, still unbound,
     /// still branchless) and a refusal is harmless — the issue exists either way, and the hook's dedup search re-adopts it
     /// on the ticket's next entry into doing.
-    Delegate { id: TicketId, external: crate::store::model::External, agent: String, note: String },
+    Delegate {
+        id: TicketId,
+        external: crate::store::model::External,
+        agent: String,
+        note: String,
+    },
     /// Mirror a minesweeper refine split: one external-bound child ticket per sub-issue — created in `doing`, owned by the
     /// delegate, `ready` (the daemon is already working them) — recorded on the parent (`depends_on` plus the binding's
     /// `sub_issues`), and the parent moved to `review`, where the refined-parent landing rule can finish it. Constructed
     /// only by the minesweeper poll; idempotent — sub-issues already bound anywhere on the board are skipped.
-    MirrorSubIssues { parent: TicketId, agent: String, children: Vec<SubIssueSpec> },
+    MirrorSubIssues {
+        parent: TicketId,
+        agent: String,
+        children: Vec<SubIssueSpec>,
+    },
     /// Record a refinement pass (the thinking happened in the caller — this binary never talks to an LLM): replace the
     /// target's spec, optionally split off new tickets and epics, and land everything touched or created in `review`.
     /// All-or-nothing.
-    Refine { target: RefineTarget, title: Option<String>, body: String, split_tickets: Vec<NewTicketSpec>, split_epics: Vec<NewEpicSpec> },
+    Refine {
+        target: RefineTarget,
+        title: Option<String>,
+        body: String,
+        split_tickets: Vec<NewTicketSpec>,
+        split_epics: Vec<NewEpicSpec>,
+    },
     /// Land a review ticket in `done` because its code has provably reached the local main branch. Constructed only by
     /// the landing sweep; re-checks its evidence under the lock (still in review, branch unchanged) and refuses —
     /// harmlessly — when the board moved underneath the slow git checks. Appends `reason` as a progress note so the
     /// human always sees why a card jumped.
-    LandTicket { id: TicketId, expected_branch: Option<String>, reason: String },
+    LandTicket {
+        id: TicketId,
+        expected_branch: Option<String>,
+        reason: String,
+    },
     /// Retire a review ticket without landing it: `done` with `discarded: true`, which never satisfies dependencies.
     /// An explicit verdict (the Discard button, or a `/kanban:review` loop the board lets judge) — the sweep never
     /// constructs this. `reason` is the progress note; `review` is what goes on the review log, verdict included.
-    DiscardTicket { id: TicketId, reason: String, by: String, review: VerdictReview },
+    DiscardTicket {
+        id: TicketId,
+        reason: String,
+        by: String,
+        review: VerdictReview,
+    },
     /// The review verdict of "not yet": send a review ticket back to `doing` carrying its feedback. The branch and the
     /// worktree are untouched — the worker re-attaches to them and picks up where it left off. The feedback is
     /// `review.text`, or the inline comments rendered as bullets when the text is empty; it becomes the
     /// `changes requested:` note that is the rework spec, and the review log gets the structured copy.
-    RequestChanges { id: TicketId, by: String, review: VerdictReview },
+    RequestChanges {
+        id: TicketId,
+        by: String,
+        review: VerdictReview,
+    },
     /// The review verdict of "yes": mark a review ticket approved, so the work loop may land its branch. The column is
     /// deliberately untouched — accepting is *permission to land*, and `done` still means landed.
-    AcceptReview { id: TicketId, by: String, review: VerdictReview },
+    AcceptReview {
+        id: TicketId,
+        by: String,
+        review: VerdictReview,
+    },
     /// A work loop is rebasing and fast-forwarding this ticket's branch right now: take the in-flight marker. Refuses
     /// when the ticket is not landable or another landing is already in hand, which is what makes it the interlock
     /// between concurrent loops rather than a decoration.
-    StartLanding { id: TicketId, agent: String },
+    StartLanding {
+        id: TicketId,
+        agent: String,
+    },
     /// A landing attempt hit something only a human can resolve: raise the danger flag, record `reason` on the card,
     /// and drop the in-flight marker. The column is deliberately untouched — the ticket stays in `review`, in the
     /// human's hands. One op rather than three writes so all of it lands under the same version check.
-    BlockLanding { id: TicketId, reason: String },
+    BlockLanding {
+        id: TicketId,
+        reason: String,
+    },
     /// Record (or clear) the ticket's bound GitHub PR — the Create PR button on creation, the serve poller on discovery
     /// and on state transitions. Pure data recording; refuses nothing.
-    SetPr { id: TicketId, pr: Option<crate::store::model::PrRef> },
+    SetPr {
+        id: TicketId,
+        pr: Option<crate::store::model::PrRef>,
+    },
     /// Stamp a started worktree's branch onto the ticket's `doing` state and its path onto the live claim.
     /// Constructed only by `worktree::start` — still funnelled through here so it obeys every rule.
-    StampWorktree { id: TicketId, branch: String, path: std::path::PathBuf },
+    StampWorktree {
+        id: TicketId,
+        branch: String,
+        path: std::path::PathBuf,
+    },
     /// Drop the worktree path from the live claim (the claim itself survives — the ticket is in flight until moved to
     /// `review`). Constructed only by `worktree::finish`.
-    ClearWorktreePath { id: TicketId },
+    ClearWorktreePath {
+        id: TicketId,
+    },
 }
 
 /// One sub-issue of a minesweeper refine split, as fetched from GitHub.
@@ -264,7 +360,11 @@ pub fn apply(store: &Store, expected_version: Option<u64>, op: Op) -> Result<App
     match store.mutate(expected_version, |board, claims| transition(op, board, claims)) {
         Ok((out, version)) => {
             tracing::info!(version, created = ?out.created_ids, "{name} applied");
-            Ok(Applied { version, created_ids: out.created_ids, result: out.result })
+            Ok(Applied {
+                version,
+                created_ids: out.created_ids,
+                result: out.result,
+            })
         }
         Err(e) => {
             tracing::warn!(error = %e, "{name} refused");
@@ -319,7 +419,10 @@ impl OpOutput {
     }
 
     fn plain(result: Value) -> OpOutput {
-        OpOutput { created_ids: Vec::new(), result }
+        OpOutput {
+            created_ids: Vec::new(),
+            result,
+        }
     }
 }
 
@@ -327,15 +430,48 @@ impl OpOutput {
 /// whole-board invariants (dangling refs, cycles) are enforced by `Store::mutate` after this returns.
 fn transition(op: Op, board: &mut Board, claims: &mut Vec<Claim>) -> Result<OpOutput, OpError> {
     match op {
-        Op::CreateTicket { title, body, epic, labels, depends_on, status, model, effort, auto_merge } => {
-            Ok(create_ticket(board, NewTicket { title, body, epic, labels, depends_on, status, model, effort, auto_merge }))
-        }
-        Op::CreateEpic { title, color, body, status, auto_merge } => Ok(create_epic(board, title, color, body, status, auto_merge)),
+        Op::CreateTicket {
+            title,
+            body,
+            epic,
+            labels,
+            depends_on,
+            status,
+            model,
+            effort,
+            auto_merge,
+        } => Ok(create_ticket(
+            board,
+            NewTicket {
+                title,
+                body,
+                epic,
+                labels,
+                depends_on,
+                status,
+                model,
+                effort,
+                auto_merge,
+            },
+        )),
+        Op::CreateEpic {
+            title,
+            color,
+            body,
+            status,
+            auto_merge,
+        } => Ok(create_epic(board, title, color, body, status, auto_merge)),
         Op::UpdateTicket { id, patch } => update_ticket(board, &id, patch),
         Op::UpdateEpic { id, patch } => update_epic(board, &id, patch),
         Op::DeleteTicket { id } => delete_ticket(board, claims, &id),
         Op::DeleteEpic { id } => delete_epic(board, claims, &id),
-        Op::MoveTicket { id, to, position, owner, branch } => move_ticket(board, claims, &id, to, position, owner, branch),
+        Op::MoveTicket {
+            id,
+            to,
+            position,
+            owner,
+            branch,
+        } => move_ticket(board, claims, &id, to, position, owner, branch),
         Op::SetTicketStatus { id, status } => set_ticket_status(board, &id, status),
         Op::SetEpicStatus { id, status } => set_epic_status(board, &id, status),
         Op::Claim { id, agent } => claim(board, claims, &id, &agent),
@@ -345,8 +481,18 @@ fn transition(op: Op, board: &mut Board, claims: &mut Vec<Claim>) -> Result<OpOu
         Op::BindExternal { id, external } => bind_external(board, &id, external),
         Op::Delegate { id, external, agent, note } => delegate(board, claims, &id, external, &agent, note),
         Op::MirrorSubIssues { parent, agent, children } => mirror_sub_issues(board, claims, &parent, &agent, &children),
-        Op::Refine { target, title, body, split_tickets, split_epics } => refine(board, claims, &target, title, body, split_tickets, split_epics),
-        Op::LandTicket { id, expected_branch, reason } => land_ticket(board, claims, &id, expected_branch.as_deref(), &reason),
+        Op::Refine {
+            target,
+            title,
+            body,
+            split_tickets,
+            split_epics,
+        } => refine(board, claims, &target, title, body, split_tickets, split_epics),
+        Op::LandTicket {
+            id,
+            expected_branch,
+            reason,
+        } => land_ticket(board, claims, &id, expected_branch.as_deref(), &reason),
         Op::DiscardTicket { id, reason, by, review } => discard_ticket(board, claims, &id, &reason, &by, review),
         Op::RequestChanges { id, by, review } => request_changes(board, &id, &by, review),
         Op::AcceptReview { id, by, review } => accept_review(board, claims, &id, &by, review),
@@ -380,7 +526,17 @@ struct NewTicket {
 }
 
 fn create_ticket(board: &mut Board, new: NewTicket) -> OpOutput {
-    let NewTicket { title, body, epic, labels, depends_on, status, model, effort, auto_merge } = new;
+    let NewTicket {
+        title,
+        body,
+        epic,
+        labels,
+        depends_on,
+        status,
+        model,
+        effort,
+        auto_merge,
+    } = new;
     let id = board.mint_ticket_id();
     board.tickets.push(Ticket {
         id: id.clone(),
@@ -408,13 +564,29 @@ fn create_ticket(board: &mut Board, new: NewTicket) -> OpOutput {
 fn create_epic(board: &mut Board, title: String, color: Option<String>, body: String, status: Status, auto_merge: bool) -> OpOutput {
     let id = board.mint_epic_id();
     let color = color.unwrap_or_else(|| EPIC_PALETTE[board.epics.len() % EPIC_PALETTE.len()].to_owned());
-    board.epics.push(Epic { id: id.clone(), title, color, status, body, auto_merge });
+    board.epics.push(Epic {
+        id: id.clone(),
+        title,
+        color,
+        status,
+        body,
+        auto_merge,
+    });
     OpOutput::created(vec![id.to_string()], json!({ "id": id }))
 }
 
 fn update_ticket(board: &mut Board, id: &TicketId, patch: TicketPatch) -> Result<OpOutput, OpError> {
     let ticket = ticket_mut(board, id)?;
-    let TicketPatch { title, body, labels, depends_on, epic, model, effort, auto_merge } = patch;
+    let TicketPatch {
+        title,
+        body,
+        labels,
+        depends_on,
+        epic,
+        model,
+        effort,
+        auto_merge,
+    } = patch;
     if let Some(title) = title {
         ticket.title = title;
     }
@@ -444,7 +616,12 @@ fn update_ticket(board: &mut Board, id: &TicketId, patch: TicketPatch) -> Result
 
 fn update_epic(board: &mut Board, id: &EpicId, patch: EpicPatch) -> Result<OpOutput, OpError> {
     let epic = epic_mut(board, id)?;
-    let EpicPatch { title, color, body, auto_merge } = patch;
+    let EpicPatch {
+        title,
+        color,
+        body,
+        auto_merge,
+    } = patch;
     if let Some(title) = title {
         epic.title = title;
     }
@@ -466,7 +643,10 @@ fn update_epic(board: &mut Board, id: &EpicId, patch: EpicPatch) -> Result<OpOut
 /// deleting the tail of the board hands the next ticket an id a deleted one already wore. That's a separate concern.
 fn remove_tickets(board: &mut Board, claims: &mut Vec<Claim>, doomed: &HashSet<TicketId>) {
     board.tickets.retain(|t| !doomed.contains(&t.id));
-    board.tickets.iter_mut().for_each(|t| t.depends_on.retain(|dep| !doomed.contains(dep)));
+    board
+        .tickets
+        .iter_mut()
+        .for_each(|t| t.depends_on.retain(|dep| !doomed.contains(dep)));
     claims.retain(|c| !doomed.contains(&c.ticket));
 }
 
@@ -481,7 +661,12 @@ fn delete_ticket(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId) -> R
 fn delete_epic(board: &mut Board, claims: &mut Vec<Claim>, id: &EpicId) -> Result<OpOutput, OpError> {
     epic_mut(board, id)?;
     // Collected in board order so the payload reads the way the epic's checklist did.
-    let doomed: Vec<TicketId> = board.tickets.iter().filter(|t| t.epic.as_ref() == Some(id)).map(|t| t.id.clone()).collect();
+    let doomed: Vec<TicketId> = board
+        .tickets
+        .iter()
+        .filter(|t| t.epic.as_ref() == Some(id))
+        .map(|t| t.id.clone())
+        .collect();
     remove_tickets(board, claims, &doomed.iter().cloned().collect());
     board.epics.retain(|e| &e.id != id);
     Ok(OpOutput::plain(json!({ "deleted": id, "tickets": doomed })))
@@ -521,9 +706,10 @@ fn move_ticket(
 /// The column-data rules for a move. Entering a state fills exactly that state's fields:
 /// - `todo` carries nothing — owner and branch are dropped.
 /// - `doing` needs an owner: the one supplied, or the existing one when the ticket is already `doing`. The branch survives.
-/// - `review` carries the branch — code-complete, waiting to land. Nobody owns review work.
-/// - `done` stamps `completed_at` now and carries the branch over. Moves land as kept (`discarded: false`); retiring
-///   work without landing it is the explicit discard operation, never a plain move.
+/// - `review` carries the branch — code-complete, waiting to land — plus the builder's name, kept latent so rework can return the card to
+///   whoever wrote it. The review card itself shows no owner.
+/// - `done` stamps `completed_at` now and carries the branch over. Moves land as kept (`discarded: false`); retiring work without landing
+///   it is the explicit discard operation, never a plain move.
 ///
 /// `branch_override` beats the branch carried on the current state — a companion subtask worked on its parent's branch
 /// records that shared branch as it moves, having never had a worktree of its own.
@@ -542,16 +728,37 @@ fn next_column_state(
                 Column::Doing { owner, .. } => Some(owner.clone()),
                 _ => None,
             };
-            let owner = owner
-                .or(existing)
-                .ok_or_else(|| OpError::Invalid(format!("moving {id} into doing needs an owner — claim it (kanban_claim), or supply one")))?;
+            let owner = owner.or(existing).ok_or_else(|| {
+                OpError::Invalid(format!(
+                    "moving {id} into doing needs an owner — claim it (kanban_claim), or supply one"
+                ))
+            })?;
             Ok(Column::Doing { owner, branch })
         }
-        ColumnId::Review => Ok(Column::Review { branch }),
+        ColumnId::Review => {
+            // The builder's name rides along, latent, so a later rework round returns the card to whoever wrote it
+            // rather than to the reviewer. A reorder within review keeps it; anything without a worker leaves it None.
+            let owner = match current {
+                Column::Doing { owner, .. } => Some(owner.clone()),
+                Column::Review { owner, .. } => owner.clone(),
+                _ => None,
+            };
+            Ok(Column::Review { owner, branch })
+        }
         ColumnId::Done => match current {
             Column::Done { .. } if branch.as_deref() == current.branch() => Ok(current.clone()),
-            Column::Done { completed_at, discarded, .. } => Ok(Column::Done { branch, completed_at: *completed_at, discarded: *discarded }),
-            _ => Ok(Column::Done { branch, completed_at: Utc::now(), discarded: false }),
+            Column::Done {
+                completed_at, discarded, ..
+            } => Ok(Column::Done {
+                branch,
+                completed_at: *completed_at,
+                discarded: *discarded,
+            }),
+            _ => Ok(Column::Done {
+                branch,
+                completed_at: Utc::now(),
+                discarded: false,
+            }),
         },
     }
 }
@@ -560,22 +767,40 @@ fn next_column_state(
 /// *outside* the lock (they are slow), so by the time this applies, the human may have dragged the card elsewhere or a
 /// rework may have re-stamped the branch — in either case the evidence no longer describes the ticket and the landing
 /// refuses, harmlessly: the next sweep re-derives everything from fresh state.
-fn land_ticket(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, expected_branch: Option<&str>, reason: &str) -> Result<OpOutput, OpError> {
+fn land_ticket(
+    board: &mut Board,
+    claims: &mut Vec<Claim>,
+    id: &TicketId,
+    expected_branch: Option<&str>,
+    reason: &str,
+) -> Result<OpOutput, OpError> {
     let ticket = ticket_mut(board, id)?;
-    let Column::Review { branch } = &ticket.column else {
+    let Column::Review { branch, .. } = &ticket.column else {
         return Err(OpError::Invalid(format!("{id} is no longer in review — not landing it")));
     };
     if branch.as_deref() != expected_branch {
-        return Err(OpError::Invalid(format!("{id}'s branch changed since the evidence was gathered — not landing it")));
+        return Err(OpError::Invalid(format!(
+            "{id}'s branch changed since the evidence was gathered — not landing it"
+        )));
     }
-    ticket.column = Column::Done { branch: branch.clone(), completed_at: Utc::now(), discarded: false };
+    ticket.column = Column::Done {
+        branch: branch.clone(),
+        completed_at: Utc::now(),
+        discarded: false,
+    };
     ticket.changes_requested = false; // finished work carries no outstanding feedback
     ticket.accepted = false; // an approval to land is spent the moment the landing is proved
     ticket.landing_blocked = false; // …and nothing is blocking a landing that has already happened
-    ticket.notes.push(Note { at: Utc::now(), author: Some("kanban".into()), text: reason.to_owned() });
+    ticket.notes.push(Note {
+        at: Utc::now(),
+        author: Some("kanban".into()),
+        text: reason.to_owned(),
+    });
     remove_claim(claims, id); // review tickets are unclaimed by construction, but never leave a ghost behind
     reposition(board, id, ColumnId::Done, None);
-    Ok(OpOutput::plain(json!({ "id": id, "column": ColumnId::Done, "landed_from": "review" })))
+    Ok(OpOutput::plain(
+        json!({ "id": id, "column": ColumnId::Done, "landed_from": "review" }),
+    ))
 }
 
 /// The explicit human retirement: review → done with `discarded: true`. Dependents stay blocked — that is the point.
@@ -588,14 +813,24 @@ fn discard_ticket(
     review: VerdictReview,
 ) -> Result<OpOutput, OpError> {
     let ticket = ticket_mut(board, id)?;
-    let Column::Review { branch } = &ticket.column else {
-        return Err(OpError::Invalid(format!("{id} is not in review — only code-complete, unlanded work can be discarded")));
+    let Column::Review { branch, .. } = &ticket.column else {
+        return Err(OpError::Invalid(format!(
+            "{id} is not in review — only code-complete, unlanded work can be discarded"
+        )));
     };
-    ticket.column = Column::Done { branch: branch.clone(), completed_at: Utc::now(), discarded: true };
+    ticket.column = Column::Done {
+        branch: branch.clone(),
+        completed_at: Utc::now(),
+        discarded: true,
+    };
     ticket.changes_requested = false; // retired work carries no outstanding feedback either
     ticket.accepted = false; // nor an approval to land work that will never land
     ticket.landing_blocked = false; // and nothing is waiting to be landed once the work is retired
-    ticket.notes.push(Note { at: Utc::now(), author: Some("kanban".into()), text: reason.to_owned() });
+    ticket.notes.push(Note {
+        at: Utc::now(),
+        author: Some("kanban".into()),
+        text: reason.to_owned(),
+    });
     record_verdict(ticket, by, Verdict::Discard, review);
     remove_claim(claims, id);
     reposition(board, id, ColumnId::Done, None);
@@ -607,27 +842,43 @@ fn discard_ticket(
 /// what [`crate::store::derive::next_ticket`] looks for.
 fn request_changes(board: &mut Board, id: &TicketId, by: &str, review: VerdictReview) -> Result<OpOutput, OpError> {
     let ticket = ticket_mut(board, id)?;
-    let Column::Review { branch } = &ticket.column else {
-        return Err(OpError::Invalid(format!("{id} is not in review — only a review ticket can be sent back for changes")));
+    let Column::Review { owner, branch } = &ticket.column else {
+        return Err(OpError::Invalid(format!(
+            "{id} is not in review — only a review ticket can be sent back for changes"
+        )));
     };
+    // The card returns to whoever built it, not to the reviewer who sent it back — so an auto-review round never reads as
+    // "auto-review has this". `by` is only the fallback for work that reached review with no builder recorded.
+    let (rework_owner, branch) = (owner.clone().unwrap_or_else(|| by.to_owned()), branch.clone());
     if ticket.external.is_some() {
-        return Err(OpError::Invalid(format!("{id} is external — its review feedback belongs on the delegate's issue, not here")));
+        return Err(OpError::Invalid(format!(
+            "{id} is external — its review feedback belongs on the delegate's issue, not here"
+        )));
     }
     let feedback = review.feedback();
     if feedback.is_empty() {
         return Err(OpError::Invalid("changes requested needs feedback — say what has to change".into()));
     }
 
-    ticket.column = Column::Doing { owner: by.to_owned(), branch: branch.clone() };
+    ticket.column = Column::Doing {
+        owner: rework_owner,
+        branch,
+    };
     ticket.changes_requested = true;
     // A rework round withdraws the approval and supersedes whatever could not be landed: the branch is about to grow
     // commits, so both describe a tree that will not exist by the time anyone accepts again.
     ticket.accepted = false;
     ticket.landing_blocked = false;
-    ticket.notes.push(Note { at: Utc::now(), author: Some(by.to_owned()), text: format!("changes requested: {feedback}") });
+    ticket.notes.push(Note {
+        at: Utc::now(),
+        author: Some(by.to_owned()),
+        text: format!("changes requested: {feedback}"),
+    });
     record_verdict(ticket, by, Verdict::RequestChanges, review);
     reposition(board, id, ColumnId::Doing, Some(0));
-    Ok(OpOutput::plain(json!({ "id": id, "column": ColumnId::Doing, "changes_requested": true })))
+    Ok(OpOutput::plain(
+        json!({ "id": id, "column": ColumnId::Doing, "changes_requested": true }),
+    ))
 }
 
 /// The human's "yes": the review ticket is approved and the work loop may land its branch.
@@ -639,15 +890,23 @@ fn request_changes(board: &mut Board, id: &TicketId, by: &str, review: VerdictRe
 fn accept_review(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, by: &str, review: VerdictReview) -> Result<OpOutput, OpError> {
     let ticket = ticket_mut(board, id)?;
     if !matches!(ticket.column, Column::Review { .. }) {
-        return Err(OpError::Invalid(format!("{id} is not in review — only code-complete work can be accepted")));
+        return Err(OpError::Invalid(format!(
+            "{id} is not in review — only code-complete work can be accepted"
+        )));
     }
     if ticket.external.is_some() {
-        return Err(OpError::Invalid(format!("{id} is external — its verdict belongs on the delegate's issue, not here")));
+        return Err(OpError::Invalid(format!(
+            "{id} is external — its verdict belongs on the delegate's issue, not here"
+        )));
     }
     let retry = ticket.landing_blocked;
     ticket.accepted = true;
     ticket.landing_blocked = false;
-    ticket.notes.push(Note { at: Utc::now(), author: Some(by.to_owned()), text: format!("accepted by {by} — cleared to land") });
+    ticket.notes.push(Note {
+        at: Utc::now(),
+        author: Some(by.to_owned()),
+        text: format!("accepted by {by} — cleared to land"),
+    });
     record_verdict(ticket, by, Verdict::Accept, review);
     // A re-accept re-arms the landing, so the abandoned attempt's marker must not outlive it.
     crate::store::remove_landing(claims, id);
@@ -658,26 +917,43 @@ fn accept_review(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, by: 
 /// approved, it is already flagged for a human, or another loop got there first.
 fn start_landing(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, agent: &str) -> Result<OpOutput, OpError> {
     let ticket = board.ticket(id).ok_or_else(|| OpError::NotFound(id.to_string()))?;
-    let Column::Review { branch } = &ticket.column else {
-        return Err(OpError::Invalid(format!("{id} is not in review — only a review ticket's branch gets landed")));
+    let Column::Review { branch, .. } = &ticket.column else {
+        return Err(OpError::Invalid(format!(
+            "{id} is not in review — only a review ticket's branch gets landed"
+        )));
     };
-    let branch = branch.clone().ok_or_else(|| OpError::Invalid(format!("{id} has no branch recorded — there is nothing to land")))?;
+    let branch = branch
+        .clone()
+        .ok_or_else(|| OpError::Invalid(format!("{id} has no branch recorded — there is nothing to land")))?;
     if ticket.external.is_some() {
         return Err(OpError::External(id.clone()));
     }
     // Two ways to be cleared to land, and the interlock has to cover both: a human pressed Accept, or they granted
     // standing permission with `auto_merge` (the effective answer, so an epic-level grant counts).
     if !ticket.accepted && !crate::store::derive::auto_merge(ticket, board) {
-        return Err(OpError::Invalid(format!("{id} has not been accepted — a human clears work to land, never a work loop")));
+        return Err(OpError::Invalid(format!(
+            "{id} has not been accepted — a human clears work to land, never a work loop"
+        )));
     }
     if ticket.landing_blocked {
-        return Err(OpError::Invalid(format!("{id}'s landing is blocked and waiting on a human — accept it again once it is resolved")));
+        return Err(OpError::Invalid(format!(
+            "{id}'s landing is blocked and waiting on a human — accept it again once it is resolved"
+        )));
     }
     if landing_in_flight(claims, id, Utc::now()) {
         let agent = find_claim(claims, id).map_or_else(String::new, |c| c.agent.clone());
         return Err(OpError::AlreadyClaimed { id: id.clone(), agent });
     }
-    upsert_claim(claims, Claim { ticket: id.clone(), agent: agent.to_owned(), since: Utc::now(), path: None, kind: ClaimKind::Landing });
+    upsert_claim(
+        claims,
+        Claim {
+            ticket: id.clone(),
+            agent: agent.to_owned(),
+            since: Utc::now(),
+            path: None,
+            kind: ClaimKind::Landing,
+        },
+    );
     Ok(OpOutput::plain(json!({ "id": id, "branch": branch, "landing": true })))
 }
 
@@ -686,10 +962,16 @@ fn start_landing(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, agen
 fn block_landing(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, reason: &str) -> Result<OpOutput, OpError> {
     let ticket = ticket_mut(board, id)?;
     if !matches!(ticket.column, Column::Review { .. }) {
-        return Err(OpError::Invalid(format!("{id} is not in review — only a review ticket's landing can be blocked")));
+        return Err(OpError::Invalid(format!(
+            "{id} is not in review — only a review ticket's landing can be blocked"
+        )));
     }
     ticket.landing_blocked = true;
-    ticket.notes.push(Note { at: Utc::now(), author: Some("kanban".into()), text: format!("landing blocked: {reason}") });
+    ticket.notes.push(Note {
+        at: Utc::now(),
+        author: Some("kanban".into()),
+        text: format!("landing blocked: {reason}"),
+    });
     crate::store::remove_landing(claims, id);
     Ok(OpOutput::plain(json!({ "id": id, "landing_blocked": true })))
 }
@@ -703,10 +985,19 @@ fn set_pr(board: &mut Board, id: &TicketId, pr: Option<crate::store::model::PrRe
 /// Put `id` at `position` among the tickets of `column` (`None` or past-the-end = bottom), preserving everyone else's
 /// order. Positions count the column's members only — the array interleaves columns freely.
 fn reposition(board: &mut Board, id: &TicketId, column: ColumnId, position: Option<usize>) {
-    let index = board.tickets.iter().position(|t| &t.id == id).expect("caller verified the ticket exists");
+    let index = board
+        .tickets
+        .iter()
+        .position(|t| &t.id == id)
+        .expect("caller verified the ticket exists");
     let ticket = board.tickets.remove(index);
-    let members: Vec<usize> =
-        board.tickets.iter().enumerate().filter(|(_, t)| t.column.id() == column).map(|(i, _)| i).collect();
+    let members: Vec<usize> = board
+        .tickets
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.column.id() == column)
+        .map(|(i, _)| i)
+        .collect();
     let end = members.last().map_or(board.tickets.len(), |&i| i + 1);
     let global = position.map_or(end, |p| members.get(p).copied().unwrap_or(end));
     board.tickets.insert(global, ticket);
@@ -729,7 +1020,10 @@ fn set_epic_status(board: &mut Board, id: &EpicId, status: Status) -> Result<OpO
 /// and `worktree start` re-attaches to it.
 fn claim(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, agent: &str) -> Result<OpOutput, OpError> {
     if let Some(existing) = find_claim(claims, id) {
-        return Err(OpError::AlreadyClaimed { id: id.clone(), agent: existing.agent.clone() });
+        return Err(OpError::AlreadyClaimed {
+            id: id.clone(),
+            agent: existing.agent.clone(),
+        });
     }
     let blocked = crate::store::derive::blocked(board.ticket(id).ok_or_else(|| OpError::NotFound(id.to_string()))?, board);
     let ticket = ticket_mut(board, id)?;
@@ -739,23 +1033,43 @@ fn claim(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, agent: &str)
         // has to be claimable by anyone, or `owner != agent` would refuse every worker the rework was meant for. The
         // live-claim check above still refuses when somebody actually holds it, so only that one state is opened up.
         Column::Doing { owner, .. } if owner != agent && !ticket.changes_requested => {
-            return Err(OpError::AlreadyClaimed { id: id.clone(), agent: owner.clone() });
+            return Err(OpError::AlreadyClaimed {
+                id: id.clone(),
+                agent: owner.clone(),
+            });
         }
         Column::Todo | Column::Doing { .. } | Column::Review { .. } => {}
     }
     if !matches!(ticket.status, Status::Ready | Status::Stub) {
-        return Err(OpError::Invalid(format!("{id} is {} — only ready tickets (to implement) or stubs (to refine) can be claimed", ticket.status)));
+        return Err(OpError::Invalid(format!(
+            "{id} is {} — only ready tickets (to implement) or stubs (to refine) can be claimed",
+            ticket.status
+        )));
     }
     if blocked {
         let deps = ticket.depends_on.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ");
-        return Err(OpError::Invalid(format!("{id} is blocked — its dependencies ({deps}) are not all done")));
+        return Err(OpError::Invalid(format!(
+            "{id} is blocked — its dependencies ({deps}) are not all done"
+        )));
     }
-    ticket.column = Column::Doing { owner: agent.to_owned(), branch: ticket.column.branch().map(str::to_owned) };
+    ticket.column = Column::Doing {
+        owner: agent.to_owned(),
+        branch: ticket.column.branch().map(str::to_owned),
+    };
     // A rework claim takes the ticket out of review, which is the only state either of these described.
     ticket.accepted = false;
     ticket.landing_blocked = false;
     let refining = ticket.status == Status::Stub;
-    upsert_claim(claims, Claim { ticket: id.clone(), agent: agent.to_owned(), since: Utc::now(), path: None, kind: ClaimKind::Work });
+    upsert_claim(
+        claims,
+        Claim {
+            ticket: id.clone(),
+            agent: agent.to_owned(),
+            since: Utc::now(),
+            path: None,
+            kind: ClaimKind::Work,
+        },
+    );
     Ok(OpOutput::plain(json!({ "id": id, "owner": agent, "refining": refining })))
 }
 
@@ -774,7 +1088,11 @@ fn release(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId) -> Result<
 
 fn add_note(board: &mut Board, id: &TicketId, text: String, author: Option<String>) -> Result<OpOutput, OpError> {
     let ticket = ticket_mut(board, id)?;
-    ticket.notes.push(Note { at: Utc::now(), author, text });
+    ticket.notes.push(Note {
+        at: Utc::now(),
+        author,
+        text,
+    });
     Ok(OpOutput::plain(json!({ "id": id, "notes": ticket.notes.len() })))
 }
 
@@ -784,16 +1102,24 @@ fn add_note(board: &mut Board, id: &TicketId, text: String, author: Option<Strin
 fn add_review(board: &mut Board, id: &TicketId, author: &str, entries: Vec<ReviewKind>) -> Result<OpOutput, OpError> {
     let ticket = ticket_mut(board, id)?;
     if !matches!(ticket.column, Column::Review { .. }) {
-        return Err(OpError::Invalid(format!("{id} is not in review — only a review ticket takes review comments")));
+        return Err(OpError::Invalid(format!(
+            "{id} is not in review — only a review ticket takes review comments"
+        )));
     }
     if ticket.external.is_some() {
-        return Err(OpError::Invalid(format!("{id} is external — its review belongs on the delegate's issue, not here")));
+        return Err(OpError::Invalid(format!(
+            "{id} is external — its review belongs on the delegate's issue, not here"
+        )));
     }
     if entries.is_empty() || entries.iter().any(|e| e.text().trim().is_empty()) {
         return Err(OpError::Invalid("a review entry needs text — say what you found".into()));
     }
     let at = Utc::now();
-    ticket.review.extend(entries.into_iter().map(|kind| ReviewEntry { at, author: author.to_owned(), kind }));
+    ticket.review.extend(entries.into_iter().map(|kind| ReviewEntry {
+        at,
+        author: author.to_owned(),
+        kind,
+    }));
     Ok(OpOutput::plain(json!({ "id": id, "review": ticket.review.len() })))
 }
 
@@ -803,8 +1129,19 @@ fn add_review(board: &mut Board, id: &TicketId, author: &str, entries: Vec<Revie
 fn record_verdict(ticket: &mut Ticket, by: &str, verdict: Verdict, review: VerdictReview) {
     let at = Utc::now();
     let inline = review.inline.into_iter().filter(|e| !e.text().trim().is_empty());
-    ticket.review.extend(inline.map(|kind| ReviewEntry { at, author: by.to_owned(), kind }));
-    ticket.review.push(ReviewEntry { at, author: by.to_owned(), kind: ReviewKind::Verdict { verdict, text: review.text.trim().to_owned() } });
+    ticket.review.extend(inline.map(|kind| ReviewEntry {
+        at,
+        author: by.to_owned(),
+        kind,
+    }));
+    ticket.review.push(ReviewEntry {
+        at,
+        author: by.to_owned(),
+        kind: ReviewKind::Verdict {
+            verdict,
+            text: review.text.trim().to_owned(),
+        },
+    });
 }
 
 fn bind_external(board: &mut Board, id: &TicketId, external: Option<crate::store::model::External>) -> Result<OpOutput, OpError> {
@@ -826,10 +1163,14 @@ fn delegate(
 ) -> Result<OpOutput, OpError> {
     let ticket = ticket_mut(board, id)?;
     let Column::Doing { branch, .. } = &ticket.column else {
-        return Err(OpError::Invalid(format!("{id} is no longer in doing — not recording the delegation")));
+        return Err(OpError::Invalid(format!(
+            "{id} is no longer in doing — not recording the delegation"
+        )));
     };
     if branch.is_some() {
-        return Err(OpError::Invalid(format!("{id} grew a local branch since delegation started — local work is not delegated")));
+        return Err(OpError::Invalid(format!(
+            "{id} grew a local branch since delegation started — local work is not delegated"
+        )));
     }
     if ticket.status != Status::Ready {
         return Err(OpError::Invalid(format!("{id} is {} — only ready tickets delegate", ticket.status)));
@@ -837,11 +1178,27 @@ fn delegate(
     if ticket.external.is_some() {
         return Err(OpError::Invalid(format!("{id} is already bound to an external work item")));
     }
-    ticket.column = Column::Doing { owner: agent.to_owned(), branch: None };
+    ticket.column = Column::Doing {
+        owner: agent.to_owned(),
+        branch: None,
+    };
     ticket.external = Some(external);
-    ticket.notes.push(Note { at: Utc::now(), author: Some("kanban".into()), text: note });
+    ticket.notes.push(Note {
+        at: Utc::now(),
+        author: Some("kanban".into()),
+        text: note,
+    });
     let since = find_claim(claims, id).map_or_else(Utc::now, |c| c.since);
-    upsert_claim(claims, Claim { ticket: id.clone(), agent: agent.to_owned(), since, path: None, kind: ClaimKind::Work });
+    upsert_claim(
+        claims,
+        Claim {
+            ticket: id.clone(),
+            agent: agent.to_owned(),
+            since,
+            path: None,
+            kind: ClaimKind::Work,
+        },
+    );
     Ok(OpOutput::plain(json!({ "id": id, "owner": agent, "external": ticket.external })))
 }
 
@@ -857,15 +1214,20 @@ fn mirror_sub_issues(
 ) -> Result<OpOutput, OpError> {
     let ticket = ticket_mut(board, parent)?;
     let Some(external) = &ticket.external else {
-        return Err(OpError::Invalid(format!("{parent} is not externally bound — nothing could have refined it")));
+        return Err(OpError::Invalid(format!(
+            "{parent} is not externally bound — nothing could have refined it"
+        )));
     };
     if !external.is_github_issue() {
         return Err(OpError::Invalid(format!("{parent} is not bound to a GitHub issue")));
     }
     let epic = ticket.epic.clone();
 
-    let bound: HashSet<u64> =
-        board.tickets.iter().filter_map(|t| t.external.as_ref().filter(|e| e.is_github_issue()).map(|e| e.number)).collect();
+    let bound: HashSet<u64> = board
+        .tickets
+        .iter()
+        .filter_map(|t| t.external.as_ref().filter(|e| e.is_github_issue()).map(|e| e.number))
+        .collect();
     let created: Vec<(u64, TicketId)> = children
         .iter()
         .filter(|c| !bound.contains(&c.number))
@@ -889,9 +1251,21 @@ fn mirror_sub_issues(
                 review: vec![],
                 external: Some(crate::store::model::External::github_issue(child.number)),
                 pr: None,
-                column: Column::Doing { owner: agent.to_owned(), branch: None },
+                column: Column::Doing {
+                    owner: agent.to_owned(),
+                    branch: None,
+                },
             });
-            upsert_claim(claims, Claim { ticket: id.clone(), agent: agent.to_owned(), since: Utc::now(), path: None, kind: ClaimKind::Work });
+            upsert_claim(
+                claims,
+                Claim {
+                    ticket: id.clone(),
+                    agent: agent.to_owned(),
+                    since: Utc::now(),
+                    path: None,
+                    kind: ClaimKind::Work,
+                },
+            );
             (child.number, id)
         })
         .collect();
@@ -899,16 +1273,27 @@ fn mirror_sub_issues(
     let ticket = ticket_mut(board, parent)?;
     ticket.depends_on.extend(created.iter().map(|(_, id)| id.clone()));
     let external = ticket.external.as_mut().expect("verified above");
-    let missing: Vec<u64> = children.iter().map(|c| c.number).filter(|n| !external.sub_issues.contains(n)).collect();
+    let missing: Vec<u64> = children
+        .iter()
+        .map(|c| c.number)
+        .filter(|n| !external.sub_issues.contains(n))
+        .collect();
     external.sub_issues.extend(missing);
     let issue = external.number;
     if !created.is_empty() {
         let mapping = created.iter().map(|(n, id)| format!("#{n} → {id}")).collect::<Vec<_>>().join(", ");
         let text = format!("minesweeper refined issue #{issue} into sub-issues, mirrored here: {mapping}");
-        ticket.notes.push(Note { at: Utc::now(), author: Some("kanban".into()), text });
+        ticket.notes.push(Note {
+            at: Utc::now(),
+            author: Some("kanban".into()),
+            text,
+        });
     }
-    if matches!(ticket.column, Column::Doing { .. }) {
-        ticket.column = Column::Review { branch: None };
+    if let Column::Doing { owner, .. } = &ticket.column {
+        ticket.column = Column::Review {
+            owner: Some(owner.clone()),
+            branch: None,
+        };
         remove_claim(claims, parent);
         reposition(board, parent, ColumnId::Review, None);
     }
@@ -947,10 +1332,17 @@ fn refine(
         .into_iter()
         .flat_map(|spec| {
             let epic_id = board.mint_epic_id();
-            let color = spec.color.unwrap_or_else(|| EPIC_PALETTE[board.epics.len() % EPIC_PALETTE.len()].to_owned());
-            board
-                .epics
-                .push(Epic { id: epic_id.clone(), title: spec.title, color, status: Status::Review, body: spec.body, auto_merge: false });
+            let color = spec
+                .color
+                .unwrap_or_else(|| EPIC_PALETTE[board.epics.len() % EPIC_PALETTE.len()].to_owned());
+            board.epics.push(Epic {
+                id: epic_id.clone(),
+                title: spec.title,
+                color,
+                status: Status::Review,
+                body: spec.body,
+                auto_merge: false,
+            });
             created.push(epic_id.to_string());
             spec.tickets.into_iter().map(move |t| (t, epic_id.clone())).collect::<Vec<_>>()
         })
@@ -978,7 +1370,10 @@ fn refine(
         RefineTarget::Ticket(id) => id.to_string(),
         RefineTarget::Epic(id) => id.to_string(),
     };
-    Ok(OpOutput::created(created.clone(), json!({ "refined": target_id, "created": created, "status": Status::Review })))
+    Ok(OpOutput::created(
+        created.clone(),
+        json!({ "refined": target_id, "created": created, "status": Status::Review }),
+    ))
 }
 
 /// Apply the refined spec to the target and land it in `review`. Returns the epic that top-level split tickets inherit:
@@ -995,7 +1390,9 @@ fn retitle_target(board: &mut Board, target: &RefineTarget, title: Option<String
         }
     };
     if !matches!(status, Status::Stub | Status::Review) {
-        return Err(OpError::Invalid(format!("{id} is {status} — only stub (or re-refined review) items can be refined")));
+        return Err(OpError::Invalid(format!(
+            "{id} is {status} — only stub (or re-refined review) items can be refined"
+        )));
     }
     match target {
         RefineTarget::Ticket(id) => {
@@ -1021,7 +1418,12 @@ fn retitle_target(board: &mut Board, target: &RefineTarget, title: Option<String
 
 /// Turn a [`NewTicketSpec`] into a real ticket in `todo` with status `review`, resolving `new:<i>` dependency placeholders
 /// against the minted `split_ids`.
-fn build_refined_ticket(spec: NewTicketSpec, id: TicketId, default_epic: Option<EpicId>, split_ids: &[TicketId]) -> Result<Ticket, OpError> {
+fn build_refined_ticket(
+    spec: NewTicketSpec,
+    id: TicketId,
+    default_epic: Option<EpicId>,
+    split_ids: &[TicketId],
+) -> Result<Ticket, OpError> {
     let depends_on = spec
         .depends_on
         .iter()
@@ -1058,7 +1460,13 @@ fn build_refined_ticket(spec: NewTicketSpec, id: TicketId, default_epic: Option<
 
 /// Stamp `worktree start`'s results: the branch onto the ticket's `doing` state, the path onto the live claim. Refuses
 /// external tickets (they are worked elsewhere) and tickets not in `doing` (claim first — the lifecycle is explicit).
-fn stamp_worktree(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, branch: &str, path: &std::path::Path) -> Result<OpOutput, OpError> {
+fn stamp_worktree(
+    board: &mut Board,
+    claims: &mut Vec<Claim>,
+    id: &TicketId,
+    branch: &str,
+    path: &std::path::Path,
+) -> Result<OpOutput, OpError> {
     let ticket = ticket_mut(board, id)?;
     if ticket.external.is_some() {
         return Err(OpError::External(id.clone()));
@@ -1067,10 +1475,22 @@ fn stamp_worktree(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, bra
         Column::Doing { owner, .. } => owner.clone(),
         _ => return Err(OpError::Invalid(format!("{id} is not in doing — claim it first (kanban_claim)"))),
     };
-    ticket.column = Column::Doing { owner: owner.clone(), branch: Some(branch.to_owned()) };
+    ticket.column = Column::Doing {
+        owner: owner.clone(),
+        branch: Some(branch.to_owned()),
+    };
     // Upsert defensively: the claim normally exists (Claim created it), but a hand-cleared sidecar shouldn't wedge `start`.
     let since = find_claim(claims, id).map_or_else(Utc::now, |c| c.since);
-    upsert_claim(claims, Claim { ticket: id.clone(), agent: owner, since, path: Some(path.to_owned()), kind: ClaimKind::Work });
+    upsert_claim(
+        claims,
+        Claim {
+            ticket: id.clone(),
+            agent: owner,
+            since,
+            path: Some(path.to_owned()),
+            kind: ClaimKind::Work,
+        },
+    );
     Ok(OpOutput::plain(json!({ "id": id, "branch": branch, "path": path })))
 }
 
@@ -1096,7 +1516,17 @@ mod tests {
         let applied = apply(
             store,
             None,
-            Op::CreateTicket { title: title.into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![], status: Status::Ready, model: None, effort: None, auto_merge: false },
+            Op::CreateTicket {
+                title: title.into(),
+                body: String::new(),
+                epic: None,
+                labels: vec![],
+                depends_on: vec![],
+                status: Status::Ready,
+                model: None,
+                effort: None,
+                auto_merge: false,
+            },
         )
         .unwrap();
         TicketId(applied.created_ids[0].clone())
@@ -1115,16 +1545,33 @@ mod tests {
             (t.model.clone(), t.effort)
         };
 
-        patch(TicketPatch { model: Some(Some("opus".into())), effort: Some(Some(Effort::Xhigh)), ..TicketPatch::default() });
+        patch(TicketPatch {
+            model: Some(Some("opus".into())),
+            effort: Some(Some(Effort::Xhigh)),
+            ..TicketPatch::default()
+        });
         assert_eq!(read(), (Some("opus".into()), Some(Effort::Xhigh)));
 
-        patch(TicketPatch { title: Some("retitled".into()), ..TicketPatch::default() });
-        assert_eq!(read(), (Some("opus".into()), Some(Effort::Xhigh)), "a patch that doesn't mention them leaves them alone");
+        patch(TicketPatch {
+            title: Some("retitled".into()),
+            ..TicketPatch::default()
+        });
+        assert_eq!(
+            read(),
+            (Some("opus".into()), Some(Effort::Xhigh)),
+            "a patch that doesn't mention them leaves them alone"
+        );
 
-        patch(TicketPatch { model: Some(None), ..TicketPatch::default() });
+        patch(TicketPatch {
+            model: Some(None),
+            ..TicketPatch::default()
+        });
         assert_eq!(read(), (None, Some(Effort::Xhigh)), "clearing one leaves the other standing");
 
-        patch(TicketPatch { effort: Some(None), ..TicketPatch::default() });
+        patch(TicketPatch {
+            effort: Some(None),
+            ..TicketPatch::default()
+        });
         assert_eq!(read(), (None, None));
     }
 
@@ -1142,19 +1589,44 @@ mod tests {
         };
         assert_eq!(read(), (false, false), "created off — the flag is never granted by accident");
 
-        patch(TicketPatch { auto_merge: Some(true), ..TicketPatch::default() });
+        patch(TicketPatch {
+            auto_merge: Some(true),
+            ..TicketPatch::default()
+        });
         assert!(read().0);
 
-        patch(TicketPatch { title: Some("retitled".into()), ..TicketPatch::default() });
+        patch(TicketPatch {
+            title: Some("retitled".into()),
+            ..TicketPatch::default()
+        });
         assert!(read().0, "an unrelated edit must not disarm it");
 
-        patch(TicketPatch { auto_merge: Some(false), ..TicketPatch::default() });
+        patch(TicketPatch {
+            auto_merge: Some(false),
+            ..TicketPatch::default()
+        });
         assert!(!read().0, "and false is how it is taken back");
 
-        let epic_patch = |p| apply(&store, None, Op::UpdateEpic { id: epic_id.clone(), patch: p }).unwrap();
-        epic_patch(EpicPatch { auto_merge: Some(true), ..EpicPatch::default() });
+        let epic_patch = |p| {
+            apply(
+                &store,
+                None,
+                Op::UpdateEpic {
+                    id: epic_id.clone(),
+                    patch: p,
+                },
+            )
+            .unwrap()
+        };
+        epic_patch(EpicPatch {
+            auto_merge: Some(true),
+            ..EpicPatch::default()
+        });
         assert!(read().1);
-        epic_patch(EpicPatch { title: Some("renamed".into()), ..EpicPatch::default() });
+        epic_patch(EpicPatch {
+            title: Some("renamed".into()),
+            ..EpicPatch::default()
+        });
         assert!(read().1, "same on an epic, where it covers every ticket at once");
         assert!(!read().0, "and granting the epic never writes the flag onto the ticket");
     }
@@ -1164,7 +1636,15 @@ mod tests {
     fn a_refine_split_can_carry_auto_merge() {
         let (_dir, store) = scratch();
         let target = create(&store, "big vague thing");
-        apply(&store, None, Op::SetTicketStatus { id: target.clone(), status: Status::Stub }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::SetTicketStatus {
+                id: target.clone(),
+                status: Status::Stub,
+            },
+        )
+        .unwrap();
 
         let spec = |title: &str, auto_merge: bool| NewTicketSpec {
             title: title.into(),
@@ -1190,10 +1670,20 @@ mod tests {
         .unwrap();
 
         let board = store.read_board().unwrap();
-        let flags: Vec<(String, bool)> =
-            ["K-2", "K-3"].iter().map(|id| (id.to_string(), board.ticket(&TicketId((*id).into())).unwrap().auto_merge)).collect();
-        assert_eq!(flags, vec![("K-2".to_string(), false), ("K-3".to_string(), true)], "the flag rides with the split that asked for it");
-        assert_eq!(board.ticket(&TicketId("K-3".into())).unwrap().status, Status::Review, "and still lands in review for the human");
+        let flags: Vec<(String, bool)> = ["K-2", "K-3"]
+            .iter()
+            .map(|id| (id.to_string(), board.ticket(&TicketId((*id).into())).unwrap().auto_merge))
+            .collect();
+        assert_eq!(
+            flags,
+            vec![("K-2".to_string(), false), ("K-3".to_string(), true)],
+            "the flag rides with the split that asked for it"
+        );
+        assert_eq!(
+            board.ticket(&TicketId("K-3".into())).unwrap().status,
+            Status::Review,
+            "and still lands in review for the human"
+        );
     }
 
     #[test]
@@ -1202,12 +1692,31 @@ mod tests {
         let id = create(&store, "do the thing");
         assert_eq!(id.0, "K-1");
 
-        apply(&store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::Claim {
+                id: id.clone(),
+                agent: "claude".into(),
+            },
+        )
+        .unwrap();
         let board = store.read_board().unwrap();
         assert!(matches!(&board.ticket(&id).unwrap().column, Column::Doing { owner, .. } if owner == "claude"));
         assert_eq!(store.read_claims().unwrap().len(), 1);
 
-        apply(&store, None, Op::MoveTicket { id: id.clone(), to: ColumnId::Done, position: None, owner: None, branch: None }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::MoveTicket {
+                id: id.clone(),
+                to: ColumnId::Done,
+                position: None,
+                owner: None,
+                branch: None,
+            },
+        )
+        .unwrap();
         let board = store.read_board().unwrap();
         assert!(matches!(board.ticket(&id).unwrap().column, Column::Done { .. }));
         assert!(store.read_claims().unwrap().is_empty(), "reaching done drops the live claim");
@@ -1218,20 +1727,49 @@ mod tests {
         let (_dir, store) = scratch();
         let filler = create(&store, "filler at the top of todo");
         let id = create(&store, "vague idea");
-        apply(&store, None, Op::SetTicketStatus { id: id.clone(), status: Status::Stub }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::SetTicketStatus {
+                id: id.clone(),
+                status: Status::Stub,
+            },
+        )
+        .unwrap();
 
-        apply(&store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::Claim {
+                id: id.clone(),
+                agent: "claude".into(),
+            },
+        )
+        .unwrap();
         let board = store.read_board().unwrap();
-        assert!(matches!(&board.ticket(&id).unwrap().column, Column::Doing { owner, .. } if owner == "claude"), "a claimed stub sits in doing while its spec is written");
+        assert!(
+            matches!(&board.ticket(&id).unwrap().column, Column::Doing { owner, .. } if owner == "claude"),
+            "a claimed stub sits in doing while its spec is written"
+        );
         assert_eq!(store.read_claims().unwrap().len(), 1);
 
-        let op = Op::Refine { target: RefineTarget::Ticket(id.clone()), title: None, body: "now specific".into(), split_tickets: vec![], split_epics: vec![] };
+        let op = Op::Refine {
+            target: RefineTarget::Ticket(id.clone()),
+            title: None,
+            body: "now specific".into(),
+            split_tickets: vec![],
+            split_epics: vec![],
+        };
         apply(&store, None, op).unwrap();
         let board = store.read_board().unwrap();
         let refined = board.ticket(&id).unwrap();
         assert_eq!(refined.status, Status::Review);
         assert_eq!(refined.body, "now specific");
-        assert_eq!(board.tickets_in(ColumnId::Todo).next().unwrap().id, id, "the refined stub returns to the TOP of todo, above {filler}");
+        assert_eq!(
+            board.tickets_in(ColumnId::Todo).next().unwrap().id,
+            id,
+            "the refined stub returns to the TOP of todo, above {filler}"
+        );
         assert!(store.read_claims().unwrap().is_empty(), "refine drops the live claim");
     }
 
@@ -1242,24 +1780,102 @@ mod tests {
         let b = create(&store, "second");
 
         // Not ready (and not a stub — those are claimable for refinement).
-        apply(&store, None, Op::SetTicketStatus { id: a.clone(), status: Status::Draft }).unwrap();
-        let err = apply(&store, None, Op::Claim { id: a.clone(), agent: "claude".into() }).unwrap_err();
+        apply(
+            &store,
+            None,
+            Op::SetTicketStatus {
+                id: a.clone(),
+                status: Status::Draft,
+            },
+        )
+        .unwrap();
+        let err = apply(
+            &store,
+            None,
+            Op::Claim {
+                id: a.clone(),
+                agent: "claude".into(),
+            },
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("only ready"), "{err}");
-        apply(&store, None, Op::SetTicketStatus { id: a.clone(), status: Status::Ready }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::SetTicketStatus {
+                id: a.clone(),
+                status: Status::Ready,
+            },
+        )
+        .unwrap();
 
         // Blocked.
-        apply(&store, None, Op::UpdateTicket { id: b.clone(), patch: TicketPatch { depends_on: Some(vec![a.clone()]), ..TicketPatch::default() } }).unwrap();
-        let err = apply(&store, None, Op::Claim { id: b.clone(), agent: "claude".into() }).unwrap_err();
+        apply(
+            &store,
+            None,
+            Op::UpdateTicket {
+                id: b.clone(),
+                patch: TicketPatch {
+                    depends_on: Some(vec![a.clone()]),
+                    ..TicketPatch::default()
+                },
+            },
+        )
+        .unwrap();
+        let err = apply(
+            &store,
+            None,
+            Op::Claim {
+                id: b.clone(),
+                agent: "claude".into(),
+            },
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("blocked"), "{err}");
 
         // Already claimed.
-        apply(&store, None, Op::Claim { id: a.clone(), agent: "claude".into() }).unwrap();
-        let err = apply(&store, None, Op::Claim { id: a.clone(), agent: "other".into() }).unwrap_err();
+        apply(
+            &store,
+            None,
+            Op::Claim {
+                id: a.clone(),
+                agent: "claude".into(),
+            },
+        )
+        .unwrap();
+        let err = apply(
+            &store,
+            None,
+            Op::Claim {
+                id: a.clone(),
+                agent: "other".into(),
+            },
+        )
+        .unwrap_err();
         assert!(matches!(err, OpError::AlreadyClaimed { agent, .. } if agent == "claude"));
 
         // Done.
-        apply(&store, None, Op::MoveTicket { id: a.clone(), to: ColumnId::Done, position: None, owner: None, branch: None }).unwrap();
-        let err = apply(&store, None, Op::Claim { id: a, agent: "claude".into() }).unwrap_err();
+        apply(
+            &store,
+            None,
+            Op::MoveTicket {
+                id: a.clone(),
+                to: ColumnId::Done,
+                position: None,
+                owner: None,
+                branch: None,
+            },
+        )
+        .unwrap();
+        let err = apply(
+            &store,
+            None,
+            Op::Claim {
+                id: a,
+                agent: "claude".into(),
+            },
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("already done"), "{err}");
     }
 
@@ -1268,14 +1884,25 @@ mod tests {
         let (_dir, store) = scratch();
         let a = create(&store, "a");
         let b = create(&store, "b");
-        apply(&store, None, Op::Claim { id: b.clone(), agent: "claude".into() }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::Claim {
+                id: b.clone(),
+                agent: "claude".into(),
+            },
+        )
+        .unwrap();
         apply(&store, None, Op::Release { id: b.clone() }).unwrap();
 
         let board = store.read_board().unwrap();
         let todo: Vec<&str> = board.tickets_in(ColumnId::Todo).map(|t| t.id.0.as_str()).collect();
         assert_eq!(todo, vec!["K-2", "K-1"], "released ticket outranks {a}");
         assert!(store.read_claims().unwrap().is_empty());
-        assert!(apply(&store, None, Op::Release { id: b }).is_err(), "releasing an unclaimed ticket refuses");
+        assert!(
+            apply(&store, None, Op::Release { id: b }).is_err(),
+            "releasing an unclaimed ticket refuses"
+        );
     }
 
     #[test]
@@ -1284,22 +1911,66 @@ mod tests {
         let ids: Vec<TicketId> = ["a", "b", "c"].iter().map(|t| create(&store, t)).collect();
 
         // Within a column: bottom → top.
-        apply(&store, None, Op::MoveTicket { id: ids[2].clone(), to: ColumnId::Todo, position: Some(0), owner: None, branch: None }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::MoveTicket {
+                id: ids[2].clone(),
+                to: ColumnId::Todo,
+                position: Some(0),
+                owner: None,
+                branch: None,
+            },
+        )
+        .unwrap();
         let board = store.read_board().unwrap();
         let todo: Vec<&str> = board.tickets_in(ColumnId::Todo).map(|t| t.id.0.as_str()).collect();
         assert_eq!(todo, vec!["K-3", "K-1", "K-2"]);
 
         // Across columns with an owner; position past the end clamps to bottom.
-        apply(&store, None, Op::MoveTicket { id: ids[0].clone(), to: ColumnId::Doing, position: Some(99), owner: Some("user".into()), branch: None }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::MoveTicket {
+                id: ids[0].clone(),
+                to: ColumnId::Doing,
+                position: Some(99),
+                owner: Some("user".into()),
+                branch: None,
+            },
+        )
+        .unwrap();
         let board = store.read_board().unwrap();
         assert!(matches!(&board.ticket(&ids[0]).unwrap().column, Column::Doing { owner, .. } if owner == "user"));
 
         // Entering doing without any owner refuses.
-        let err = apply(&store, None, Op::MoveTicket { id: ids[1].clone(), to: ColumnId::Doing, position: None, owner: None, branch: None }).unwrap_err();
+        let err = apply(
+            &store,
+            None,
+            Op::MoveTicket {
+                id: ids[1].clone(),
+                to: ColumnId::Doing,
+                position: None,
+                owner: None,
+                branch: None,
+            },
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("needs an owner"), "{err}");
 
         // Back to todo drops the owner; the branch is dropped too (todo carries nothing).
-        apply(&store, None, Op::MoveTicket { id: ids[0].clone(), to: ColumnId::Todo, position: None, owner: None, branch: None }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::MoveTicket {
+                id: ids[0].clone(),
+                to: ColumnId::Todo,
+                position: None,
+                owner: None,
+                branch: None,
+            },
+        )
+        .unwrap();
         assert!(matches!(store.read_board().unwrap().ticket(&ids[0]).unwrap().column, Column::Todo));
     }
 
@@ -1307,9 +1978,37 @@ mod tests {
     fn moving_to_done_and_back_keeps_branch_semantics() {
         let (_dir, store) = scratch();
         let id = create(&store, "with branch");
-        apply(&store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
-        apply(&store, None, Op::StampWorktree { id: id.clone(), branch: "k-1/with-branch".into(), path: "/tmp/wt".into() }).unwrap();
-        apply(&store, None, Op::MoveTicket { id: id.clone(), to: ColumnId::Done, position: None, owner: None, branch: None }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::Claim {
+                id: id.clone(),
+                agent: "claude".into(),
+            },
+        )
+        .unwrap();
+        apply(
+            &store,
+            None,
+            Op::StampWorktree {
+                id: id.clone(),
+                branch: "k-1/with-branch".into(),
+                path: "/tmp/wt".into(),
+            },
+        )
+        .unwrap();
+        apply(
+            &store,
+            None,
+            Op::MoveTicket {
+                id: id.clone(),
+                to: ColumnId::Done,
+                position: None,
+                owner: None,
+                branch: None,
+            },
+        )
+        .unwrap();
 
         let board = store.read_board().unwrap();
         match &board.ticket(&id).unwrap().column {
@@ -1322,7 +2021,15 @@ mod tests {
     fn version_conflicts_surface_through_apply() {
         let (_dir, store) = scratch();
         create(&store, "a");
-        let err = apply(&store, Some(0), Op::SetTicketStatus { id: TicketId("K-1".into()), status: Status::Draft }).unwrap_err();
+        let err = apply(
+            &store,
+            Some(0),
+            Op::SetTicketStatus {
+                id: TicketId("K-1".into()),
+                status: Status::Draft,
+            },
+        )
+        .unwrap_err();
         assert_eq!(err.version_conflict(), Some((0, 1)));
     }
 
@@ -1331,24 +2038,59 @@ mod tests {
         let (_dir, store) = scratch();
         let a = create(&store, "a");
         let b = create(&store, "b");
-        apply(&store, None, Op::UpdateTicket { id: b.clone(), patch: TicketPatch { depends_on: Some(vec![a.clone()]), ..TicketPatch::default() } }).unwrap();
-        apply(&store, None, Op::Claim { id: a.clone(), agent: "claude".into() }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::UpdateTicket {
+                id: b.clone(),
+                patch: TicketPatch {
+                    depends_on: Some(vec![a.clone()]),
+                    ..TicketPatch::default()
+                },
+            },
+        )
+        .unwrap();
+        apply(
+            &store,
+            None,
+            Op::Claim {
+                id: a.clone(),
+                agent: "claude".into(),
+            },
+        )
+        .unwrap();
         apply(&store, None, Op::DeleteTicket { id: a }).unwrap();
 
         let board = store.read_board().unwrap();
-        assert!(board.ticket(&b).unwrap().depends_on.is_empty(), "the dangling dependency is removed, not left to fail validation");
+        assert!(
+            board.ticket(&b).unwrap().depends_on.is_empty(),
+            "the dangling dependency is removed, not left to fail validation"
+        );
         assert!(store.read_claims().unwrap().is_empty());
     }
 
     /// Create an epic and return its id — the three cascade tests below all start here.
     fn create_epic_id(store: &Store, title: &str) -> EpicId {
-        let applied =
-            apply(store, None, Op::CreateEpic { title: title.into(), color: None, body: String::new(), status: Status::Ready, auto_merge: false }).unwrap();
+        let applied = apply(
+            store,
+            None,
+            Op::CreateEpic {
+                title: title.into(),
+                color: None,
+                body: String::new(),
+                status: Status::Ready,
+                auto_merge: false,
+            },
+        )
+        .unwrap();
         EpicId(applied.created_ids[0].clone())
     }
 
     fn put_in_epic(store: &Store, ticket: &TicketId, epic: &EpicId) {
-        let patch = TicketPatch { epic: Some(Some(epic.clone())), ..TicketPatch::default() };
+        let patch = TicketPatch {
+            epic: Some(Some(epic.clone())),
+            ..TicketPatch::default()
+        };
         apply(store, None, Op::UpdateTicket { id: ticket.clone(), patch }).unwrap();
     }
 
@@ -1364,11 +2106,29 @@ mod tests {
         assert_eq!(third.0, "K-3");
 
         apply(&store, None, Op::DeleteTicket { id: third }).unwrap();
-        assert_eq!(create(&store, "d").0, "K-4", "K-3's branch and worktree may still be on disk — the number is spent");
+        assert_eq!(
+            create(&store, "d").0,
+            "K-4",
+            "K-3's branch and worktree may still be on disk — the number is spent"
+        );
 
         // And it keeps climbing however often the newest card is deleted.
-        apply(&store, None, Op::DeleteTicket { id: TicketId("K-4".into()) }).unwrap();
-        apply(&store, None, Op::DeleteTicket { id: TicketId("K-2".into()) }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::DeleteTicket {
+                id: TicketId("K-4".into()),
+            },
+        )
+        .unwrap();
+        apply(
+            &store,
+            None,
+            Op::DeleteTicket {
+                id: TicketId("K-2".into()),
+            },
+        )
+        .unwrap();
         assert_eq!(create(&store, "e").0, "K-5");
     }
 
@@ -1409,15 +2169,54 @@ mod tests {
         put_in_epic(&store, &finished, &epic_id);
         put_in_epic(&store, &working, &epic_id);
 
-        apply(&store, None, Op::MoveTicket { id: finished.clone(), to: ColumnId::Done, position: None, owner: None, branch: None }).unwrap();
-        apply(&store, None, Op::Claim { id: working.clone(), agent: "claude".into() }).unwrap();
-        apply(&store, None, Op::StampWorktree { id: working.clone(), branch: "k-2/under-way".into(), path: "/tmp/wt".into() }).unwrap();
-        assert_eq!(store.read_claims().unwrap().len(), 1, "the claimed ticket really is claimed before the delete");
+        apply(
+            &store,
+            None,
+            Op::MoveTicket {
+                id: finished.clone(),
+                to: ColumnId::Done,
+                position: None,
+                owner: None,
+                branch: None,
+            },
+        )
+        .unwrap();
+        apply(
+            &store,
+            None,
+            Op::Claim {
+                id: working.clone(),
+                agent: "claude".into(),
+            },
+        )
+        .unwrap();
+        apply(
+            &store,
+            None,
+            Op::StampWorktree {
+                id: working.clone(),
+                branch: "k-2/under-way".into(),
+                path: "/tmp/wt".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            store.read_claims().unwrap().len(),
+            1,
+            "the claimed ticket really is claimed before the delete"
+        );
 
         apply(&store, None, Op::DeleteEpic { id: epic_id }).unwrap();
         let board = store.read_board().unwrap();
-        assert!(board.tickets.is_empty(), "neither the done ticket nor the claimed one survives: {:?}", board.tickets);
-        assert!(store.read_claims().unwrap().is_empty(), "the claim on the deleted ticket is dropped");
+        assert!(
+            board.tickets.is_empty(),
+            "neither the done ticket nor the claimed one survives: {:?}",
+            board.tickets
+        );
+        assert!(
+            store.read_claims().unwrap().is_empty(),
+            "the claim on the deleted ticket is dropped"
+        );
     }
 
     /// A dangling `depends_on` fails whole-board validation, so the cascade has to clean the survivors in the same
@@ -1429,12 +2228,26 @@ mod tests {
         let inside = create(&store, "in epic");
         let outside = create(&store, "depends on it");
         put_in_epic(&store, &inside, &epic_id);
-        let patch = TicketPatch { depends_on: Some(vec![inside]), ..TicketPatch::default() };
-        apply(&store, None, Op::UpdateTicket { id: outside.clone(), patch }).unwrap();
+        let patch = TicketPatch {
+            depends_on: Some(vec![inside]),
+            ..TicketPatch::default()
+        };
+        apply(
+            &store,
+            None,
+            Op::UpdateTicket {
+                id: outside.clone(),
+                patch,
+            },
+        )
+        .unwrap();
 
         apply(&store, None, Op::DeleteEpic { id: epic_id }).expect("the cascade must leave the board valid");
         let board = store.read_board().unwrap();
-        assert!(board.ticket(&outside).unwrap().depends_on.is_empty(), "the survivor is silently unblocked, not left dangling");
+        assert!(
+            board.ticket(&outside).unwrap().depends_on.is_empty(),
+            "the survivor is silently unblocked, not left dangling"
+        );
     }
 
     #[test]
@@ -1442,19 +2255,52 @@ mod tests {
         let (_dir, store) = scratch();
         let a = create(&store, "a");
         let b = create(&store, "b");
-        apply(&store, None, Op::UpdateTicket { id: b.clone(), patch: TicketPatch { depends_on: Some(vec![a.clone()]), ..TicketPatch::default() } }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::UpdateTicket {
+                id: b.clone(),
+                patch: TicketPatch {
+                    depends_on: Some(vec![a.clone()]),
+                    ..TicketPatch::default()
+                },
+            },
+        )
+        .unwrap();
         let before = std::fs::read(store.board_path()).unwrap();
-        let err =
-            apply(&store, None, Op::UpdateTicket { id: a, patch: TicketPatch { depends_on: Some(vec![b]), ..TicketPatch::default() } }).unwrap_err();
+        let err = apply(
+            &store,
+            None,
+            Op::UpdateTicket {
+                id: a,
+                patch: TicketPatch {
+                    depends_on: Some(vec![b]),
+                    ..TicketPatch::default()
+                },
+            },
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("cycle"), "{err}");
-        assert_eq!(std::fs::read(store.board_path()).unwrap(), before, "a rejected op leaves the file untouched");
+        assert_eq!(
+            std::fs::read(store.board_path()).unwrap(),
+            before,
+            "a rejected op leaves the file untouched"
+        );
     }
 
     #[test]
     fn refine_splits_atomically_and_lands_everything_in_review() {
         let (_dir, store) = scratch();
         let target = create(&store, "big vague thing");
-        apply(&store, None, Op::SetTicketStatus { id: target.clone(), status: Status::Stub }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::SetTicketStatus {
+                id: target.clone(),
+                status: Status::Stub,
+            },
+        )
+        .unwrap();
 
         let spec = |title: &str, deps: Vec<&str>| NewTicketSpec {
             title: title.into(),
@@ -1491,10 +2337,17 @@ mod tests {
         assert_eq!(refined.status, Status::Review);
         assert_eq!(refined.title, "big, now specific, thing");
         let part_two = board.ticket(&TicketId("K-4".into())).unwrap();
-        assert_eq!(part_two.depends_on, vec![TicketId("K-3".into()), target.clone()], "new:0 resolves to the first split ticket");
+        assert_eq!(
+            part_two.depends_on,
+            vec![TicketId("K-3".into()), target.clone()],
+            "new:0 resolves to the first split ticket"
+        );
         let child = board.ticket(&TicketId("K-2".into())).unwrap();
         assert_eq!(child.epic.as_ref().unwrap().0, "EP-1", "nested tickets belong to their new epic");
-        assert!(board.tickets.iter().skip(1).all(|t| t.status == Status::Review), "everything created is review");
+        assert!(
+            board.tickets.iter().skip(1).all(|t| t.status == Status::Review),
+            "everything created is review"
+        );
     }
 
     #[test]
@@ -1504,12 +2357,26 @@ mod tests {
         let err = apply(
             &store,
             None,
-            Op::Refine { target: RefineTarget::Ticket(ready.clone()), title: None, body: "x".into(), split_tickets: vec![], split_epics: vec![] },
+            Op::Refine {
+                target: RefineTarget::Ticket(ready.clone()),
+                title: None,
+                body: "x".into(),
+                split_tickets: vec![],
+                split_epics: vec![],
+            },
         )
         .unwrap_err();
         assert!(err.to_string().contains("only stub"), "{err}");
 
-        apply(&store, None, Op::SetTicketStatus { id: ready.clone(), status: Status::Stub }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::SetTicketStatus {
+                id: ready.clone(),
+                status: Status::Stub,
+            },
+        )
+        .unwrap();
         let before = std::fs::read(store.board_path()).unwrap();
         let err = apply(
             &store,
@@ -1518,23 +2385,66 @@ mod tests {
                 target: RefineTarget::Ticket(ready),
                 title: None,
                 body: "x".into(),
-                split_tickets: vec![NewTicketSpec { title: "t".into(), body: String::new(), labels: vec![], depends_on: vec!["new:9".into()], epic: None, model: None, effort: None, auto_merge: false }],
+                split_tickets: vec![NewTicketSpec {
+                    title: "t".into(),
+                    body: String::new(),
+                    labels: vec![],
+                    depends_on: vec!["new:9".into()],
+                    epic: None,
+                    model: None,
+                    effort: None,
+                    auto_merge: false,
+                }],
                 split_epics: vec![],
             },
         )
         .unwrap_err();
         assert!(err.to_string().contains("placeholder"), "{err}");
-        assert_eq!(std::fs::read(store.board_path()).unwrap(), before, "failed refine writes nothing — not even the target's new body");
+        assert_eq!(
+            std::fs::read(store.board_path()).unwrap(),
+            before,
+            "failed refine writes nothing — not even the target's new body"
+        );
     }
 
     #[test]
     fn refine_split_tickets_inherit_the_targets_epic() {
         let (_dir, store) = scratch();
-        let epic = apply(&store, None, Op::CreateEpic { title: "auth".into(), color: None, body: String::new(), status: Status::Ready, auto_merge: false }).unwrap();
+        let epic = apply(
+            &store,
+            None,
+            Op::CreateEpic {
+                title: "auth".into(),
+                color: None,
+                body: String::new(),
+                status: Status::Ready,
+                auto_merge: false,
+            },
+        )
+        .unwrap();
         let epic_id = EpicId(epic.created_ids[0].clone());
         let target = create(&store, "stub in epic");
-        apply(&store, None, Op::UpdateTicket { id: target.clone(), patch: TicketPatch { epic: Some(Some(epic_id.clone())), ..TicketPatch::default() } }).unwrap();
-        apply(&store, None, Op::SetTicketStatus { id: target.clone(), status: Status::Stub }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::UpdateTicket {
+                id: target.clone(),
+                patch: TicketPatch {
+                    epic: Some(Some(epic_id.clone())),
+                    ..TicketPatch::default()
+                },
+            },
+        )
+        .unwrap();
+        apply(
+            &store,
+            None,
+            Op::SetTicketStatus {
+                id: target.clone(),
+                status: Status::Stub,
+            },
+        )
+        .unwrap();
 
         apply(
             &store,
@@ -1543,7 +2453,16 @@ mod tests {
                 target: RefineTarget::Ticket(target),
                 title: None,
                 body: "refined".into(),
-                split_tickets: vec![NewTicketSpec { title: "child".into(), body: String::new(), labels: vec![], depends_on: vec![], epic: None, model: None, effort: None, auto_merge: false }],
+                split_tickets: vec![NewTicketSpec {
+                    title: "child".into(),
+                    body: String::new(),
+                    labels: vec![],
+                    depends_on: vec![],
+                    epic: None,
+                    model: None,
+                    effort: None,
+                    auto_merge: false,
+                }],
                 split_epics: vec![],
             },
         )
@@ -1557,11 +2476,37 @@ mod tests {
         let (_dir, store) = scratch();
         let id = create(&store, "work");
         // Not in doing yet: refused.
-        let err = apply(&store, None, Op::StampWorktree { id: id.clone(), branch: "k-1/work".into(), path: "/tmp/wt/K-1".into() }).unwrap_err();
+        let err = apply(
+            &store,
+            None,
+            Op::StampWorktree {
+                id: id.clone(),
+                branch: "k-1/work".into(),
+                path: "/tmp/wt/K-1".into(),
+            },
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("claim it first"), "{err}");
 
-        apply(&store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
-        apply(&store, None, Op::StampWorktree { id: id.clone(), branch: "k-1/work".into(), path: "/tmp/wt/K-1".into() }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::Claim {
+                id: id.clone(),
+                agent: "claude".into(),
+            },
+        )
+        .unwrap();
+        apply(
+            &store,
+            None,
+            Op::StampWorktree {
+                id: id.clone(),
+                branch: "k-1/work".into(),
+                path: "/tmp/wt/K-1".into(),
+            },
+        )
+        .unwrap();
         let claims = store.read_claims().unwrap();
         assert_eq!(claims[0].path.as_deref(), Some(std::path::Path::new("/tmp/wt/K-1")));
         assert_eq!(store.read_board().unwrap().ticket(&id).unwrap().column.branch(), Some("k-1/work"));
@@ -1577,14 +2522,47 @@ mod tests {
         let (_dir, store) = scratch();
         let id = create(&store, "delegated");
         let external = crate::store::model::External::github_issue(7);
-        apply(&store, None, Op::BindExternal { id: id.clone(), external: Some(external) }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::BindExternal {
+                id: id.clone(),
+                external: Some(external),
+            },
+        )
+        .unwrap();
         // Delegating claims the ticket on the daemon's behalf — external tickets are claimable…
-        apply(&store, None, Op::Claim { id: id.clone(), agent: "minesweeper".into() }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::Claim {
+                id: id.clone(),
+                agent: "minesweeper".into(),
+            },
+        )
+        .unwrap();
         // …but never get a worktree here.
-        let err = apply(&store, None, Op::StampWorktree { id: id.clone(), branch: "b".into(), path: "/p".into() }).unwrap_err();
+        let err = apply(
+            &store,
+            None,
+            Op::StampWorktree {
+                id: id.clone(),
+                branch: "b".into(),
+                path: "/p".into(),
+            },
+        )
+        .unwrap_err();
         assert!(matches!(err, OpError::External(_)), "{err}");
         // Unbind clears it again.
-        apply(&store, None, Op::BindExternal { id: id.clone(), external: None }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::BindExternal {
+                id: id.clone(),
+                external: None,
+            },
+        )
+        .unwrap();
         assert!(store.read_board().unwrap().ticket(&id).unwrap().external.is_none());
     }
 
@@ -1592,7 +2570,15 @@ mod tests {
     fn delegating_binds_reowns_and_notes_a_ready_doing_ticket() {
         let (_dir, store) = scratch();
         let id = create(&store, "the work");
-        apply(&store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::Claim {
+                id: id.clone(),
+                agent: "claude".into(),
+            },
+        )
+        .unwrap();
 
         let op = Op::Delegate {
             id: id.clone(),
@@ -1604,7 +2590,11 @@ mod tests {
 
         let board = store.read_board().unwrap();
         let t = board.ticket(&id).unwrap();
-        assert!(matches!(&t.column, Column::Doing { owner, branch: None } if owner == "minesweeper"), "{:?}", t.column);
+        assert!(
+            matches!(&t.column, Column::Doing { owner, branch: None } if owner == "minesweeper"),
+            "{:?}",
+            t.column
+        );
         assert_eq!(t.external.as_ref().unwrap().number, 42);
         assert!(t.notes.last().unwrap().text.contains("issue #42"));
         let claims = store.read_claims().unwrap();
@@ -1628,25 +2618,78 @@ mod tests {
             let before = std::fs::read_to_string(store.board_path()).unwrap();
             let err = apply(&store, None, delegate(id)).unwrap_err();
             assert!(matches!(err, OpError::Invalid(_)), "{err}");
-            assert_eq!(std::fs::read_to_string(store.board_path()).unwrap(), before, "a refusal must not write");
+            assert_eq!(
+                std::fs::read_to_string(store.board_path()).unwrap(),
+                before,
+                "a refusal must not write"
+            );
         };
 
         let todo = create(&store, "never claimed");
         refused(&todo); // not in doing
 
         let stub = create(&store, "spec to write");
-        apply(&store, None, Op::SetTicketStatus { id: stub.clone(), status: Status::Stub }).unwrap();
-        apply(&store, None, Op::Claim { id: stub.clone(), agent: "claude".into() }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::SetTicketStatus {
+                id: stub.clone(),
+                status: Status::Stub,
+            },
+        )
+        .unwrap();
+        apply(
+            &store,
+            None,
+            Op::Claim {
+                id: stub.clone(),
+                agent: "claude".into(),
+            },
+        )
+        .unwrap();
         refused(&stub); // stubs refine locally, never delegate
 
         let bound = create(&store, "already delegated");
-        apply(&store, None, Op::BindExternal { id: bound.clone(), external: Some(crate::store::model::External::github_issue(7)) }).unwrap();
-        apply(&store, None, Op::Claim { id: bound.clone(), agent: "minesweeper".into() }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::BindExternal {
+                id: bound.clone(),
+                external: Some(crate::store::model::External::github_issue(7)),
+            },
+        )
+        .unwrap();
+        apply(
+            &store,
+            None,
+            Op::Claim {
+                id: bound.clone(),
+                agent: "minesweeper".into(),
+            },
+        )
+        .unwrap();
         refused(&bound); // the primary idempotency gate
 
         let branched = create(&store, "local work started");
-        apply(&store, None, Op::Claim { id: branched.clone(), agent: "claude".into() }).unwrap();
-        apply(&store, None, Op::StampWorktree { id: branched.clone(), branch: "k/work".into(), path: "/p".into() }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::Claim {
+                id: branched.clone(),
+                agent: "claude".into(),
+            },
+        )
+        .unwrap();
+        apply(
+            &store,
+            None,
+            Op::StampWorktree {
+                id: branched.clone(),
+                branch: "k/work".into(),
+                path: "/p".into(),
+            },
+        )
+        .unwrap();
         refused(&branched); // a branch appeared while gh ran — local work is not delegated
     }
 
@@ -1654,17 +2697,45 @@ mod tests {
     fn mirroring_sub_issues_creates_claimed_children_and_parks_the_parent_in_review() {
         let (_dir, store) = scratch();
         let parent = create(&store, "big delegated thing");
-        apply(&store, None, Op::BindExternal { id: parent.clone(), external: Some(crate::store::model::External::github_issue(42)) }).unwrap();
-        apply(&store, None, Op::Claim { id: parent.clone(), agent: "minesweeper".into() }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::BindExternal {
+                id: parent.clone(),
+                external: Some(crate::store::model::External::github_issue(42)),
+            },
+        )
+        .unwrap();
+        apply(
+            &store,
+            None,
+            Op::Claim {
+                id: parent.clone(),
+                agent: "minesweeper".into(),
+            },
+        )
+        .unwrap();
 
-        let child = |number: u64, title: &str| SubIssueSpec { number, title: title.into(), body: "spec".into() };
-        let op = Op::MirrorSubIssues { parent: parent.clone(), agent: "minesweeper".into(), children: vec![child(43, "first half"), child(44, "second half")] };
+        let child = |number: u64, title: &str| SubIssueSpec {
+            number,
+            title: title.into(),
+            body: "spec".into(),
+        };
+        let op = Op::MirrorSubIssues {
+            parent: parent.clone(),
+            agent: "minesweeper".into(),
+            children: vec![child(43, "first half"), child(44, "second half")],
+        };
         let applied = apply(&store, None, op.clone()).unwrap();
         assert_eq!(applied.created_ids.len(), 2);
 
         let board = store.read_board().unwrap();
         let p = board.ticket(&parent).unwrap();
-        assert!(matches!(p.column, Column::Review { branch: None }), "the parent waits for its children in review: {:?}", p.column);
+        assert!(
+            matches!(p.column, Column::Review { branch: None, .. }),
+            "the parent waits for its children in review: {:?}",
+            p.column
+        );
         assert_eq!(p.external.as_ref().unwrap().sub_issues, vec![43, 44]);
         assert_eq!(p.depends_on.len(), 2, "the parent depends on its mirrors");
         assert!(p.notes.last().unwrap().text.contains("#43"), "{:?}", p.notes);
@@ -1674,11 +2745,21 @@ mod tests {
         for id in &ids {
             let c = board.ticket(id).unwrap();
             assert!(matches!(&c.column, Column::Doing { owner, branch: None } if owner == "minesweeper"));
-            assert_eq!(c.status, Status::Ready, "the daemon is already working them — they are not proposals");
+            assert_eq!(
+                c.status,
+                Status::Ready,
+                "the daemon is already working them — they are not proposals"
+            );
             assert!(c.external.as_ref().is_some_and(crate::store::model::External::is_github_issue));
-            assert!(claims.iter().any(|cl| &cl.ticket == id && cl.agent == "minesweeper"), "each mirror carries a live claim");
+            assert!(
+                claims.iter().any(|cl| &cl.ticket == id && cl.agent == "minesweeper"),
+                "each mirror carries a live claim"
+            );
         }
-        assert!(claims.iter().all(|c| c.ticket != parent), "entering review dropped the parent's claim");
+        assert!(
+            claims.iter().all(|c| c.ticket != parent),
+            "entering review dropped the parent's claim"
+        );
 
         // Re-observing the same refine comment is a no-op: every number is already bound on the board.
         let applied = apply(&store, None, op).unwrap();
@@ -1690,23 +2771,68 @@ mod tests {
     fn mirroring_refuses_unbound_parents_and_skips_already_bound_numbers() {
         let (_dir, store) = scratch();
         let unbound = create(&store, "never delegated");
-        let op = Op::MirrorSubIssues { parent: unbound.clone(), agent: "minesweeper".into(), children: vec![] };
+        let op = Op::MirrorSubIssues {
+            parent: unbound.clone(),
+            agent: "minesweeper".into(),
+            children: vec![],
+        };
         assert!(matches!(apply(&store, None, op).unwrap_err(), OpError::Invalid(_)));
 
         let parent = create(&store, "delegated");
-        apply(&store, None, Op::BindExternal { id: parent.clone(), external: Some(crate::store::model::External::github_issue(42)) }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::BindExternal {
+                id: parent.clone(),
+                external: Some(crate::store::model::External::github_issue(42)),
+            },
+        )
+        .unwrap();
         let taken = create(&store, "someone else's mirror");
-        apply(&store, None, Op::BindExternal { id: taken.clone(), external: Some(crate::store::model::External::github_issue(43)) }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::BindExternal {
+                id: taken.clone(),
+                external: Some(crate::store::model::External::github_issue(43)),
+            },
+        )
+        .unwrap();
 
         let children = vec![
-            SubIssueSpec { number: 43, title: "already on the board".into(), body: String::new() },
-            SubIssueSpec { number: 44, title: "fresh".into(), body: String::new() },
+            SubIssueSpec {
+                number: 43,
+                title: "already on the board".into(),
+                body: String::new(),
+            },
+            SubIssueSpec {
+                number: 44,
+                title: "fresh".into(),
+                body: String::new(),
+            },
         ];
-        let applied = apply(&store, None, Op::MirrorSubIssues { parent: parent.clone(), agent: "minesweeper".into(), children }).unwrap();
+        let applied = apply(
+            &store,
+            None,
+            Op::MirrorSubIssues {
+                parent: parent.clone(),
+                agent: "minesweeper".into(),
+                children,
+            },
+        )
+        .unwrap();
         assert_eq!(applied.created_ids.len(), 1, "only the unbound number gets a mirror");
         let board = store.read_board().unwrap();
-        assert_eq!(board.ticket(&parent).unwrap().external.as_ref().unwrap().sub_issues, vec![43, 44], "but the record lists both");
-        assert_eq!(board.ticket(&parent).unwrap().depends_on.len(), 1, "the dependency edge only reaches the ticket this op created");
+        assert_eq!(
+            board.ticket(&parent).unwrap().external.as_ref().unwrap().sub_issues,
+            vec![43, 44],
+            "but the record lists both"
+        );
+        assert_eq!(
+            board.ticket(&parent).unwrap().depends_on.len(),
+            1,
+            "the dependency edge only reaches the ticket this op created"
+        );
     }
 
     #[test]
@@ -1714,8 +2840,18 @@ mod tests {
         let (_dir, store) = scratch();
         let mut colours = std::collections::HashSet::new();
         (0..3).for_each(|i| {
-            let applied =
-                apply(&store, None, Op::CreateEpic { title: format!("e{i}"), color: None, body: String::new(), status: Status::Draft, auto_merge: false }).unwrap();
+            let applied = apply(
+                &store,
+                None,
+                Op::CreateEpic {
+                    title: format!("e{i}"),
+                    color: None,
+                    body: String::new(),
+                    status: Status::Draft,
+                    auto_merge: false,
+                },
+            )
+            .unwrap();
             let board = store.read_board().unwrap();
             colours.insert(board.epics.last().unwrap().color.clone());
             assert_eq!(applied.created_ids[0], format!("EP-{}", i + 1));
@@ -1727,8 +2863,26 @@ mod tests {
     fn notes_append_with_authors_and_next_still_respects_the_board() {
         let (_dir, store) = scratch();
         let id = create(&store, "noted");
-        apply(&store, None, Op::AddNote { id: id.clone(), text: "started".into(), author: Some("claude".into()) }).unwrap();
-        apply(&store, None, Op::AddNote { id: id.clone(), text: "hmm".into(), author: None }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::AddNote {
+                id: id.clone(),
+                text: "started".into(),
+                author: Some("claude".into()),
+            },
+        )
+        .unwrap();
+        apply(
+            &store,
+            None,
+            Op::AddNote {
+                id: id.clone(),
+                text: "hmm".into(),
+                author: None,
+            },
+        )
+        .unwrap();
         let board = store.read_board().unwrap();
         let notes = &board.ticket(&id).unwrap().notes;
         assert_eq!(notes.len(), 2);
@@ -1740,9 +2894,37 @@ mod tests {
 
     /// Claim + stamp + move to review: the standard close-out shape for a worked ticket.
     fn to_review(store: &Store, id: &TicketId, branch: &str) {
-        apply(store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
-        apply(store, None, Op::StampWorktree { id: id.clone(), branch: branch.into(), path: "/tmp/unused".into() }).unwrap();
-        apply(store, None, Op::MoveTicket { id: id.clone(), to: ColumnId::Review, position: None, owner: None, branch: None }).unwrap();
+        apply(
+            store,
+            None,
+            Op::Claim {
+                id: id.clone(),
+                agent: "claude".into(),
+            },
+        )
+        .unwrap();
+        apply(
+            store,
+            None,
+            Op::StampWorktree {
+                id: id.clone(),
+                branch: branch.into(),
+                path: "/tmp/unused".into(),
+            },
+        )
+        .unwrap();
+        apply(
+            store,
+            None,
+            Op::MoveTicket {
+                id: id.clone(),
+                to: ColumnId::Review,
+                position: None,
+                owner: None,
+                branch: None,
+            },
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1752,8 +2934,11 @@ mod tests {
         to_review(&store, &id, "k-1/worked");
 
         let board = store.read_board().unwrap();
-        assert!(matches!(&board.ticket(&id).unwrap().column, Column::Review { branch: Some(b) } if b == "k-1/worked"));
-        assert!(store.read_claims().unwrap().is_empty(), "review work is nobody's — the claim drops on entry");
+        assert!(matches!(&board.ticket(&id).unwrap().column, Column::Review { branch: Some(b), .. } if b == "k-1/worked"));
+        assert!(
+            store.read_claims().unwrap().is_empty(),
+            "review work is nobody's — the claim drops on entry"
+        );
     }
 
     #[test]
@@ -1762,16 +2947,30 @@ mod tests {
         // reach review branchless and the auto-lander could never resolve it.
         let (_dir, store) = scratch();
         let id = create(&store, "companion");
-        apply(&store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
         apply(
             &store,
             None,
-            Op::MoveTicket { id: id.clone(), to: ColumnId::Review, position: None, owner: None, branch: Some("k-9/parent".into()) },
+            Op::Claim {
+                id: id.clone(),
+                agent: "claude".into(),
+            },
+        )
+        .unwrap();
+        apply(
+            &store,
+            None,
+            Op::MoveTicket {
+                id: id.clone(),
+                to: ColumnId::Review,
+                position: None,
+                owner: None,
+                branch: Some("k-9/parent".into()),
+            },
         )
         .unwrap();
 
         let board = store.read_board().unwrap();
-        assert!(matches!(&board.ticket(&id).unwrap().column, Column::Review { branch: Some(b) } if b == "k-9/parent"));
+        assert!(matches!(&board.ticket(&id).unwrap().column, Column::Review { branch: Some(b), .. } if b == "k-9/parent"));
     }
 
     #[test]
@@ -1780,7 +2979,15 @@ mod tests {
         let id = create(&store, "needs rework");
         to_review(&store, &id, "k-1/needs-rework");
 
-        apply(&store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::Claim {
+                id: id.clone(),
+                agent: "claude".into(),
+            },
+        )
+        .unwrap();
         let board = store.read_board().unwrap();
         assert!(
             matches!(&board.ticket(&id).unwrap().column, Column::Doing { owner, branch: Some(b) } if owner == "claude" && b == "k-1/needs-rework"),
@@ -1797,7 +3004,11 @@ mod tests {
         apply(
             &store,
             None,
-            Op::LandTicket { id: id.clone(), expected_branch: Some("k-1/landed".into()), reason: "k-1/landed merged into main".into() },
+            Op::LandTicket {
+                id: id.clone(),
+                expected_branch: Some("k-1/landed".into()),
+                reason: "k-1/landed merged into main".into(),
+            },
         )
         .unwrap();
         let board = store.read_board().unwrap();
@@ -1813,8 +3024,16 @@ mod tests {
         let id = create(&store, "moved on");
 
         // Not in review at all.
-        let err =
-            apply(&store, None, Op::LandTicket { id: id.clone(), expected_branch: None, reason: "x".into() }).unwrap_err();
+        let err = apply(
+            &store,
+            None,
+            Op::LandTicket {
+                id: id.clone(),
+                expected_branch: None,
+                reason: "x".into(),
+            },
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("no longer in review"), "{err}");
 
         // In review, but the branch changed since the evidence was gathered.
@@ -1822,12 +3041,19 @@ mod tests {
         let err = apply(
             &store,
             None,
-            Op::LandTicket { id: id.clone(), expected_branch: Some("k-1/original".into()), reason: "x".into() },
+            Op::LandTicket {
+                id: id.clone(),
+                expected_branch: Some("k-1/original".into()),
+                reason: "x".into(),
+            },
         )
         .unwrap_err();
         assert!(err.to_string().contains("branch changed"), "{err}");
         let board = store.read_board().unwrap();
-        assert!(matches!(board.ticket(&id).unwrap().column, Column::Review { .. }), "a refused landing changes nothing");
+        assert!(
+            matches!(board.ticket(&id).unwrap().column, Column::Review { .. }),
+            "a refused landing changes nothing"
+        );
     }
 
     #[test]
@@ -1838,19 +3064,51 @@ mod tests {
         apply(
             &store,
             None,
-            Op::UpdateTicket { id: child.clone(), patch: TicketPatch { depends_on: Some(vec![parent.clone()]), ..TicketPatch::default() } },
+            Op::UpdateTicket {
+                id: child.clone(),
+                patch: TicketPatch {
+                    depends_on: Some(vec![parent.clone()]),
+                    ..TicketPatch::default()
+                },
+            },
         )
         .unwrap();
         to_review(&store, &parent, "k-1/abandoned");
 
-        apply(&store, None, Op::DiscardTicket { id: parent.clone(), reason: "superseded by a different design".into(), by: "tester".into(), review: VerdictReview::default() }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::DiscardTicket {
+                id: parent.clone(),
+                reason: "superseded by a different design".into(),
+                by: "tester".into(),
+                review: VerdictReview::default(),
+            },
+        )
+        .unwrap();
         let board = store.read_board().unwrap();
-        assert!(matches!(board.ticket(&parent).unwrap().column, Column::Done { discarded: true, .. }));
-        assert!(derive::blocked(board.ticket(&child).unwrap(), &board), "the promised code never landed — the dependent stays blocked");
+        assert!(matches!(
+            board.ticket(&parent).unwrap().column,
+            Column::Done { discarded: true, .. }
+        ));
+        assert!(
+            derive::blocked(board.ticket(&child).unwrap(), &board),
+            "the promised code never landed — the dependent stays blocked"
+        );
         assert!(derive::next_ticket(&board, &[]).is_none(), "nothing on this board is workable");
 
         // Only review tickets can be discarded — done and todo tickets refuse.
-        let err = apply(&store, None, Op::DiscardTicket { id: parent, reason: "again".into(), by: "tester".into(), review: VerdictReview::default() }).unwrap_err();
+        let err = apply(
+            &store,
+            None,
+            Op::DiscardTicket {
+                id: parent,
+                reason: "again".into(),
+                by: "tester".into(),
+                review: VerdictReview::default(),
+            },
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("not in review"), "{err}");
     }
 
@@ -1860,14 +3118,39 @@ mod tests {
         let (_dir, store) = scratch();
         let id = create(&store, "tracked");
 
-        let open = PrRef { number: 7, url: "https://example.invalid/pull/7".into(), state: PrState::Open, merged_commit: None };
-        apply(&store, None, Op::SetPr { id: id.clone(), pr: Some(open) }).unwrap();
+        let open = PrRef {
+            number: 7,
+            url: "https://example.invalid/pull/7".into(),
+            state: PrState::Open,
+            merged_commit: None,
+        };
+        apply(
+            &store,
+            None,
+            Op::SetPr {
+                id: id.clone(),
+                pr: Some(open),
+            },
+        )
+        .unwrap();
         let board = store.read_board().unwrap();
         assert_eq!(board.ticket(&id).unwrap().pr.as_ref().unwrap().number, 7);
 
-        let merged =
-            PrRef { number: 7, url: "https://example.invalid/pull/7".into(), state: PrState::Merged, merged_commit: Some("abc123".into()) };
-        apply(&store, None, Op::SetPr { id: id.clone(), pr: Some(merged) }).unwrap();
+        let merged = PrRef {
+            number: 7,
+            url: "https://example.invalid/pull/7".into(),
+            state: PrState::Merged,
+            merged_commit: Some("abc123".into()),
+        };
+        apply(
+            &store,
+            None,
+            Op::SetPr {
+                id: id.clone(),
+                pr: Some(merged),
+            },
+        )
+        .unwrap();
         let board = store.read_board().unwrap();
         assert_eq!(board.ticket(&id).unwrap().pr.as_ref().unwrap().state, PrState::Merged);
 
@@ -1883,11 +3166,25 @@ mod tests {
         let parent = create(&store, "parent");
         let companion = create(&store, "companion");
         to_review(&store, &parent, "k-1/shared");
-        apply(&store, None, Op::Claim { id: companion.clone(), agent: "claude".into() }).unwrap();
         apply(
             &store,
             None,
-            Op::MoveTicket { id: companion.clone(), to: ColumnId::Review, position: None, owner: None, branch: Some("k-1/shared".into()) },
+            Op::Claim {
+                id: companion.clone(),
+                agent: "claude".into(),
+            },
+        )
+        .unwrap();
+        apply(
+            &store,
+            None,
+            Op::MoveTicket {
+                id: companion.clone(),
+                to: ColumnId::Review,
+                position: None,
+                owner: None,
+                branch: Some("k-1/shared".into()),
+            },
         )
         .unwrap();
 
@@ -1895,12 +3192,21 @@ mod tests {
             apply(
                 &store,
                 None,
-                Op::LandTicket { id: id.clone(), expected_branch: Some("k-1/shared".into()), reason: "k-1/shared merged into main".into() },
+                Op::LandTicket {
+                    id: id.clone(),
+                    expected_branch: Some("k-1/shared".into()),
+                    reason: "k-1/shared merged into main".into(),
+                },
             )
             .unwrap();
         }
         let board = store.read_board().unwrap();
-        assert!(board.tickets.iter().all(|t| matches!(t.column, Column::Done { discarded: false, .. })));
+        assert!(
+            board
+                .tickets
+                .iter()
+                .all(|t| matches!(t.column, Column::Done { discarded: false, .. }))
+        );
     }
 }
 
@@ -1920,7 +3226,17 @@ mod review_round_tests {
         let applied = apply(
             store,
             None,
-            Op::CreateTicket { title: title.into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![], status: Status::Ready, model: None, effort: None, auto_merge: false },
+            Op::CreateTicket {
+                title: title.into(),
+                body: String::new(),
+                epic: None,
+                labels: vec![],
+                depends_on: vec![],
+                status: Status::Ready,
+                model: None,
+                effort: None,
+                auto_merge: false,
+            },
         )
         .unwrap();
         TicketId(applied.created_ids[0].clone())
@@ -1929,14 +3245,47 @@ mod review_round_tests {
     /// Drive a ticket to review on a branch, the way a worker's close-out does.
     fn to_review(store: &Store, title: &str) -> TicketId {
         let id = create(store, title);
-        apply(store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
-        apply(store, None, Op::StampWorktree { id: id.clone(), branch: "k-1/x".into(), path: "/tmp/wt".into() }).unwrap();
-        apply(store, None, Op::MoveTicket { id: id.clone(), to: ColumnId::Review, position: None, owner: None, branch: None }).unwrap();
+        apply(
+            store,
+            None,
+            Op::Claim {
+                id: id.clone(),
+                agent: "claude".into(),
+            },
+        )
+        .unwrap();
+        apply(
+            store,
+            None,
+            Op::StampWorktree {
+                id: id.clone(),
+                branch: "k-1/x".into(),
+                path: "/tmp/wt".into(),
+            },
+        )
+        .unwrap();
+        apply(
+            store,
+            None,
+            Op::MoveTicket {
+                id: id.clone(),
+                to: ColumnId::Review,
+                position: None,
+                owner: None,
+                branch: None,
+            },
+        )
+        .unwrap();
         id
     }
 
     fn inline(path: &str, line: u32, side: crate::store::model::Side, text: &str) -> ReviewKind {
-        ReviewKind::Inline { path: path.into(), line, side, text: text.into() }
+        ReviewKind::Inline {
+            path: path.into(),
+            line,
+            side,
+            text: text.into(),
+        }
     }
 
     #[test]
@@ -1946,28 +3295,114 @@ mod review_round_tests {
         let todo = create(&store, "not started");
         let id = to_review(&store, "under review");
 
-        let first = vec![inline("src/a.rs", 7, Side::New, "nit"), ReviewKind::Comment { text: "auto-review — verdict: accept".into() }];
-        apply(&store, None, Op::AddReview { id: id.clone(), author: "auto-review".into(), entries: first.clone() }).unwrap();
+        let first = vec![
+            inline("src/a.rs", 7, Side::New, "nit"),
+            ReviewKind::Comment {
+                text: "auto-review — verdict: accept".into(),
+            },
+        ];
+        apply(
+            &store,
+            None,
+            Op::AddReview {
+                id: id.clone(),
+                author: "auto-review".into(),
+                entries: first.clone(),
+            },
+        )
+        .unwrap();
         // A second reviewer adds to the log; nothing is replaced.
-        apply(&store, None, Op::AddReview { id: id.clone(), author: "sam".into(), entries: vec![ReviewKind::Comment { text: "agreed".into() }] })
-            .unwrap();
+        apply(
+            &store,
+            None,
+            Op::AddReview {
+                id: id.clone(),
+                author: "sam".into(),
+                entries: vec![ReviewKind::Comment { text: "agreed".into() }],
+            },
+        )
+        .unwrap();
 
         let board = store.read_board().unwrap();
         let t = board.ticket(&id).unwrap();
-        assert_eq!(t.review.iter().map(|e| &e.kind).collect::<Vec<_>>(), [&first[0], &first[1], &ReviewKind::Comment { text: "agreed".into() }]);
-        assert_eq!(t.review.iter().map(|e| e.author.as_str()).collect::<Vec<_>>(), ["auto-review", "auto-review", "sam"]);
+        assert_eq!(
+            t.review.iter().map(|e| &e.kind).collect::<Vec<_>>(),
+            [&first[0], &first[1], &ReviewKind::Comment { text: "agreed".into() }]
+        );
+        assert_eq!(
+            t.review.iter().map(|e| e.author.as_str()).collect::<Vec<_>>(),
+            ["auto-review", "auto-review", "sam"]
+        );
         assert_eq!(t.review_round().len(), 3, "no verdict yet: the whole log is this round");
-        assert!(t.notes.iter().all(|n| !n.text.contains("verdict")), "a review is not a progress note: {:?}", t.notes);
+        assert!(
+            t.notes.iter().all(|n| !n.text.contains("verdict")),
+            "a review is not a progress note: {:?}",
+            t.notes
+        );
 
         let refused = |op: Op| matches!(apply(&store, None, op), Err(OpError::Invalid(_)));
-        assert!(refused(Op::AddReview { id: todo, author: "sam".into(), entries: vec![ReviewKind::Comment { text: "x".into() }] }), "not in review");
-        assert!(refused(Op::AddReview { id: id.clone(), author: "sam".into(), entries: vec![] }), "nothing to say");
-        assert!(refused(Op::AddReview { id: id.clone(), author: "sam".into(), entries: vec![ReviewKind::Comment { text: "  ".into() }] }), "blank entry");
+        assert!(
+            refused(Op::AddReview {
+                id: todo,
+                author: "sam".into(),
+                entries: vec![ReviewKind::Comment { text: "x".into() }]
+            }),
+            "not in review"
+        );
+        assert!(
+            refused(Op::AddReview {
+                id: id.clone(),
+                author: "sam".into(),
+                entries: vec![]
+            }),
+            "nothing to say"
+        );
+        assert!(
+            refused(Op::AddReview {
+                id: id.clone(),
+                author: "sam".into(),
+                entries: vec![ReviewKind::Comment { text: "  ".into() }]
+            }),
+            "blank entry"
+        );
         let ext = create(&store, "delegated");
-        let external = External { provider: "github".into(), kind: "issue".into(), number: 4, closed: false, flag: None, sub_issues: vec![] };
-        apply(&store, None, Op::BindExternal { id: ext.clone(), external: Some(external) }).unwrap();
-        apply(&store, None, Op::MoveTicket { id: ext.clone(), to: ColumnId::Review, position: None, owner: None, branch: Some("ext".into()) }).unwrap();
-        assert!(refused(Op::AddReview { id: ext, author: "sam".into(), entries: vec![ReviewKind::Comment { text: "x".into() }] }), "external");
+        let external = External {
+            provider: "github".into(),
+            kind: "issue".into(),
+            number: 4,
+            closed: false,
+            flag: None,
+            sub_issues: vec![],
+        };
+        apply(
+            &store,
+            None,
+            Op::BindExternal {
+                id: ext.clone(),
+                external: Some(external),
+            },
+        )
+        .unwrap();
+        apply(
+            &store,
+            None,
+            Op::MoveTicket {
+                id: ext.clone(),
+                to: ColumnId::Review,
+                position: None,
+                owner: None,
+                branch: Some("ext".into()),
+            },
+        )
+        .unwrap();
+        assert!(
+            refused(Op::AddReview {
+                id: ext,
+                author: "sam".into(),
+                entries: vec![ReviewKind::Comment { text: "x".into() }]
+            }),
+            "external"
+        );
     }
 
     #[test]
@@ -1975,43 +3410,115 @@ mod review_round_tests {
         use crate::store::model::Side;
         let (_dir, store) = scratch();
         let id = to_review(&store, "judged");
-        apply(&store, None, Op::AddReview { id: id.clone(), author: "auto-review".into(), entries: vec![ReviewKind::Comment { text: "fine".into() }] }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::AddReview {
+                id: id.clone(),
+                author: "auto-review".into(),
+                entries: vec![ReviewKind::Comment { text: "fine".into() }],
+            },
+        )
+        .unwrap();
 
         // Request changes with only inline comments: the note carries them as bullets, the log as entries.
         let review = VerdictReview {
             text: "  ".into(),
-            inline: vec![inline("src/a.rs", 3, Side::Old, "why gone?"), inline("src/b.rs", 9, Side::New, "off by one\nsee test")],
+            inline: vec![
+                inline("src/a.rs", 3, Side::Old, "why gone?"),
+                inline("src/b.rs", 9, Side::New, "off by one\nsee test"),
+            ],
         };
-        apply(&store, None, Op::RequestChanges { id: id.clone(), by: "sam".into(), review }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::RequestChanges {
+                id: id.clone(),
+                by: "sam".into(),
+                review,
+            },
+        )
+        .unwrap();
         let board = store.read_board().unwrap();
         let t = board.ticket(&id).unwrap();
-        assert_eq!(t.notes.last().unwrap().text, "changes requested: - src/a.rs:3 (old line) — why gone?\n- src/b.rs:9 — off by one\n  see test");
+        assert_eq!(
+            t.notes.last().unwrap().text,
+            "changes requested: - src/a.rs:3 (old line) — why gone?\n- src/b.rs:9 — off by one\n  see test"
+        );
         let kinds: Vec<&ReviewKind> = t.review.iter().map(|e| &e.kind).collect();
         assert_eq!(kinds.len(), 4, "{kinds:?}");
         assert!(matches!(kinds[1], ReviewKind::Inline { line: 3, .. }));
         assert!(matches!(kinds[3], ReviewKind::Verdict { verdict: Verdict::RequestChanges, text } if text.is_empty()));
-        assert_eq!(t.review.iter().skip(1).map(|e| e.author.as_str()).collect::<Vec<_>>(), ["sam", "sam", "sam"]);
+        assert_eq!(
+            t.review.iter().skip(1).map(|e| e.author.as_str()).collect::<Vec<_>>(),
+            ["sam", "sam", "sam"]
+        );
         assert!(t.review_round().is_empty(), "the verdict closed the round");
 
         // Neither text nor inline: still refused.
-        apply(&store, None, Op::MoveTicket { id: id.clone(), to: ColumnId::Review, position: None, owner: None, branch: None }).unwrap();
-        let err = apply(&store, None, Op::RequestChanges { id: id.clone(), by: "sam".into(), review: VerdictReview::text("   ") }).unwrap_err();
+        apply(
+            &store,
+            None,
+            Op::MoveTicket {
+                id: id.clone(),
+                to: ColumnId::Review,
+                position: None,
+                owner: None,
+                branch: None,
+            },
+        )
+        .unwrap();
+        let err = apply(
+            &store,
+            None,
+            Op::RequestChanges {
+                id: id.clone(),
+                by: "sam".into(),
+                review: VerdictReview::text("   "),
+            },
+        )
+        .unwrap_err();
         assert!(matches!(err, OpError::Invalid(_)));
 
         // Accept with a comment — the comment is on the log with the verdict, not in the notes.
-        apply(&store, None, Op::AcceptReview { id: id.clone(), by: "sam".into(), review: VerdictReview::text(" ship it ") }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::AcceptReview {
+                id: id.clone(),
+                by: "sam".into(),
+                review: VerdictReview::text(" ship it "),
+            },
+        )
+        .unwrap();
         let board = store.read_board().unwrap();
         let t = board.ticket(&id).unwrap();
         assert!(matches!(&t.review.last().unwrap().kind, ReviewKind::Verdict { verdict: Verdict::Accept, text } if text == "ship it"));
         assert!(t.notes.iter().all(|n| n.text != "ship it"), "{:?}", t.notes);
 
         // Discard is a verdict too, and a blank inline entry is dropped rather than refused.
-        let review = VerdictReview { text: "dead end".into(), inline: vec![inline("x", 1, Side::New, "  ")] };
-        apply(&store, None, Op::DiscardTicket { id: id.clone(), reason: "discarded: dead end".into(), by: "sam".into(), review }).unwrap();
+        let review = VerdictReview {
+            text: "dead end".into(),
+            inline: vec![inline("x", 1, Side::New, "  ")],
+        };
+        apply(
+            &store,
+            None,
+            Op::DiscardTicket {
+                id: id.clone(),
+                reason: "discarded: dead end".into(),
+                by: "sam".into(),
+                review,
+            },
+        )
+        .unwrap();
         let board = store.read_board().unwrap();
         let t = board.ticket(&id).unwrap();
         assert!(matches!(&t.review.last().unwrap().kind, ReviewKind::Verdict { verdict: Verdict::Discard, text } if text == "dead end"));
-        assert!(!matches!(&t.review[t.review.len() - 2].kind, ReviewKind::Inline { .. }), "the blank inline entry was dropped");
+        assert!(
+            !matches!(&t.review[t.review.len() - 2].kind, ReviewKind::Inline { .. }),
+            "the blank inline entry was dropped"
+        );
     }
 
     #[test]
@@ -2020,13 +3527,25 @@ mod review_round_tests {
         let _first = create(&store, "something already in doing");
         let id = to_review(&store, "the reviewed one");
 
-        apply(&store, None, Op::RequestChanges { id: id.clone(), by: "sam".into(), review: VerdictReview::text("  naming is off  ") }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::RequestChanges {
+                id: id.clone(),
+                by: "sam".into(),
+                review: VerdictReview::text("  naming is off  "),
+            },
+        )
+        .unwrap();
 
         let board = store.read_board().unwrap();
         let t = board.ticket(&id).unwrap();
         match &t.column {
             Column::Doing { owner, branch } => {
-                assert_eq!(owner, "sam", "the reviewer holds the card until a worker takes it");
+                assert_eq!(
+                    owner, "claude",
+                    "the card returns to whoever built it (via to_review), not the reviewer who sent it back"
+                );
                 assert_eq!(branch.as_deref(), Some("k-1/x"), "the branch survives — the worker resumes on it");
             }
             other => panic!("expected doing, got {other:?}"),
@@ -2034,11 +3553,80 @@ mod review_round_tests {
         assert!(t.changes_requested);
 
         let note = t.notes.last().unwrap();
-        assert_eq!(note.author.as_deref(), Some("sam"));
-        assert_eq!(note.text, "changes requested: naming is off", "trimmed, and prefixed so the worker can find it");
+        assert_eq!(
+            note.author.as_deref(),
+            Some("sam"),
+            "the reviewer still authored the changes-requested note, even though they don't own the card"
+        );
+        assert_eq!(
+            note.text, "changes requested: naming is off",
+            "trimmed, and prefixed so the worker can find it"
+        );
 
-        assert_eq!(board.tickets_in(ColumnId::Doing).next().unwrap().id, id, "rework goes to the top of doing");
-        assert!(store.read_claims().unwrap().is_empty(), "no live claim — it is waiting for a worker, not held by one");
+        assert_eq!(
+            board.tickets_in(ColumnId::Doing).next().unwrap().id,
+            id,
+            "rework goes to the top of doing"
+        );
+        assert!(
+            store.read_claims().unwrap().is_empty(),
+            "no live claim — it is waiting for a worker, not held by one"
+        );
+    }
+
+    /// The reason the builder's name is kept latent on the review column: an auto-review round must not read as
+    /// "auto-review has this". Whoever built it (here "claude") owns the reworked card; the synthetic reviewer name is
+    /// only the fallback when no builder was ever recorded.
+    #[test]
+    fn rework_returns_the_card_to_its_builder_not_the_reviewer() {
+        let (_dir, store) = scratch();
+
+        // Built by "claude", sent back by an auto-review round: the card returns to "claude", never to "auto-review".
+        let id = to_review(&store, "auto-reviewed");
+        apply(
+            &store,
+            None,
+            Op::RequestChanges {
+                id: id.clone(),
+                by: "auto-review".into(),
+                review: VerdictReview::text("tighten it"),
+            },
+        )
+        .unwrap();
+        let board = store.read_board().unwrap();
+        assert!(
+            matches!(&board.ticket(&id).unwrap().column, Column::Doing { owner, .. } if owner == "claude"),
+            "the builder owns the reworked card, not the reviewer: {:?}",
+            board.ticket(&id).unwrap().column
+        );
+
+        // A ticket that reached review with no builder recorded (created straight into review) falls back to the
+        // reviewer — there is no one else to hand it to.
+        store
+            .mutate(None, |b: &mut Board, _: &mut Vec<Claim>| -> Result<(), OpError> {
+                let t = b.tickets.iter_mut().find(|t| t.id == id).unwrap();
+                t.changes_requested = false;
+                t.column = Column::Review {
+                    owner: None,
+                    branch: Some("k-1/x".into()),
+                };
+                Ok(())
+            })
+            .unwrap();
+        apply(
+            &store,
+            None,
+            Op::RequestChanges {
+                id: id.clone(),
+                by: "sam".into(),
+                review: VerdictReview::text("again"),
+            },
+        )
+        .unwrap();
+        assert!(
+            matches!(&store.read_board().unwrap().ticket(&id).unwrap().column, Column::Doing { owner, .. } if owner == "sam"),
+            "with no builder to return to, the reviewer is the fallback owner"
+        );
     }
 
     #[test]
@@ -2046,33 +3634,90 @@ mod review_round_tests {
         let (_dir, store) = scratch();
 
         let todo = create(&store, "not started");
-        let err = apply(&store, None, Op::RequestChanges { id: todo, by: "sam".into(), review: VerdictReview::text("x") }).unwrap_err();
+        let err = apply(
+            &store,
+            None,
+            Op::RequestChanges {
+                id: todo,
+                by: "sam".into(),
+                review: VerdictReview::text("x"),
+            },
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("not in review"), "{err}");
 
         let id = to_review(&store, "blank feedback");
-        let err = apply(&store, None, Op::RequestChanges { id: id.clone(), by: "sam".into(), review: VerdictReview::text("   ") }).unwrap_err();
+        let err = apply(
+            &store,
+            None,
+            Op::RequestChanges {
+                id: id.clone(),
+                by: "sam".into(),
+                review: VerdictReview::text("   "),
+            },
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("say what has to change"), "{err}");
 
         let ext = to_review(&store, "delegated");
-        apply(&store, None, Op::BindExternal { id: ext.clone(), external: Some(crate::store::model::External::github_issue(9)) }).unwrap();
-        let err = apply(&store, None, Op::RequestChanges { id: ext, by: "sam".into(), review: VerdictReview::text("fix it") }).unwrap_err();
+        apply(
+            &store,
+            None,
+            Op::BindExternal {
+                id: ext.clone(),
+                external: Some(crate::store::model::External::github_issue(9)),
+            },
+        )
+        .unwrap();
+        let err = apply(
+            &store,
+            None,
+            Op::RequestChanges {
+                id: ext,
+                by: "sam".into(),
+                review: VerdictReview::text("fix it"),
+            },
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("delegate's issue"), "{err}");
     }
 
-    /// The claim relaxation: the card is owned by the reviewer and worked by nobody, so any agent may take it. Without
-    /// this, `owner != agent` would refuse every worker the rework was meant for.
+    /// The claim relaxation: a `changes_requested` card is worked by nobody, so an agent *other than its owner* may take
+    /// it. Without this, `owner != agent` would refuse every worker the rework was meant for. The card is built by
+    /// "claude" (via `to_review`) and so returns to "claude" on rework; a different agent claiming it is the case that
+    /// exercises the relaxation.
     #[test]
     fn a_changes_requested_card_is_claimable_by_another_agent_and_the_claim_re_owns_it() {
         let (_dir, store) = scratch();
         let id = to_review(&store, "sent back");
-        apply(&store, None, Op::RequestChanges { id: id.clone(), by: "sam".into(), review: VerdictReview::text("rename it") }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::RequestChanges {
+                id: id.clone(),
+                by: "sam".into(),
+                review: VerdictReview::text("rename it"),
+            },
+        )
+        .unwrap();
 
-        apply(&store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::Claim {
+                id: id.clone(),
+                agent: "alice".into(),
+            },
+        )
+        .unwrap();
 
         let board = store.read_board().unwrap();
         match &board.ticket(&id).unwrap().column {
             Column::Doing { owner, branch } => {
-                assert_eq!(owner, "claude", "the claim re-owns the card to the worker");
+                assert_eq!(
+                    owner, "alice",
+                    "an agent that is not the current owner still claims a changes_requested card, and the claim re-owns it"
+                );
                 assert_eq!(branch.as_deref(), Some("k-1/x"), "still on its branch");
             }
             other => panic!("expected doing, got {other:?}"),
@@ -2085,7 +3730,15 @@ mod review_round_tests {
     fn an_ordinary_doing_ticket_still_refuses_a_second_claimant() {
         let (_dir, store) = scratch();
         let id = create(&store, "someone else's");
-        apply(&store, None, Op::Claim { id: id.clone(), agent: "alice".into() }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::Claim {
+                id: id.clone(),
+                agent: "alice".into(),
+            },
+        )
+        .unwrap();
 
         let err = apply(&store, None, Op::Claim { id, agent: "bob".into() }).unwrap_err();
         assert!(matches!(err, OpError::AlreadyClaimed { .. }), "{err}");
@@ -2095,13 +3748,44 @@ mod review_round_tests {
     fn moving_back_to_review_clears_the_changes_requested_flag() {
         let (_dir, store) = scratch();
         let id = to_review(&store, "round two");
-        apply(&store, None, Op::RequestChanges { id: id.clone(), by: "sam".into(), review: VerdictReview::text("again") }).unwrap();
-        apply(&store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::RequestChanges {
+                id: id.clone(),
+                by: "sam".into(),
+                review: VerdictReview::text("again"),
+            },
+        )
+        .unwrap();
+        apply(
+            &store,
+            None,
+            Op::Claim {
+                id: id.clone(),
+                agent: "claude".into(),
+            },
+        )
+        .unwrap();
 
-        apply(&store, None, Op::MoveTicket { id: id.clone(), to: ColumnId::Review, position: None, owner: None, branch: None }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::MoveTicket {
+                id: id.clone(),
+                to: ColumnId::Review,
+                position: None,
+                owner: None,
+                branch: None,
+            },
+        )
+        .unwrap();
 
         let board = store.read_board().unwrap();
-        assert!(!board.ticket(&id).unwrap().changes_requested, "reaching review IS the feedback being addressed");
+        assert!(
+            !board.ticket(&id).unwrap().changes_requested,
+            "reaching review IS the feedback being addressed"
+        );
     }
 
     #[test]
@@ -2109,12 +3793,32 @@ mod review_round_tests {
         let (_dir, store) = scratch();
         for discard in [false, true] {
             let id = to_review(&store, "terminal");
-            apply(&store, None, Op::RequestChanges { id: id.clone(), by: "sam".into(), review: VerdictReview::text("f") }).unwrap();
+            apply(
+                &store,
+                None,
+                Op::RequestChanges {
+                    id: id.clone(),
+                    by: "sam".into(),
+                    review: VerdictReview::text("f"),
+                },
+            )
+            .unwrap();
             // Put it back in review and re-set the flag directly: the ordinary move clears it, so this is the only way
             // to reach the state these two ops defend against — a hand-edited board, or a future path that forgets.
             let board = store.read_board().unwrap();
             let branch = board.ticket(&id).unwrap().column.branch().map(str::to_owned);
-            apply(&store, None, Op::MoveTicket { id: id.clone(), to: ColumnId::Review, position: None, owner: None, branch: branch.clone() }).unwrap();
+            apply(
+                &store,
+                None,
+                Op::MoveTicket {
+                    id: id.clone(),
+                    to: ColumnId::Review,
+                    position: None,
+                    owner: None,
+                    branch: branch.clone(),
+                },
+            )
+            .unwrap();
             store
                 .mutate(None, |b: &mut Board, _: &mut Vec<Claim>| -> Result<(), OpError> {
                     b.tickets.iter_mut().find(|t| t.id == id).unwrap().changes_requested = true;
@@ -2123,14 +3827,26 @@ mod review_round_tests {
                 .unwrap();
 
             let op = if discard {
-                Op::DiscardTicket { id: id.clone(), reason: "no".into(), by: "tester".into(), review: VerdictReview::default() }
+                Op::DiscardTicket {
+                    id: id.clone(),
+                    reason: "no".into(),
+                    by: "tester".into(),
+                    review: VerdictReview::default(),
+                }
             } else {
-                Op::LandTicket { id: id.clone(), expected_branch: branch, reason: "merged".into() }
+                Op::LandTicket {
+                    id: id.clone(),
+                    expected_branch: branch,
+                    reason: "merged".into(),
+                }
             };
             apply(&store, None, op).unwrap();
 
             let board = store.read_board().unwrap();
-            assert!(!board.ticket(&id).unwrap().changes_requested, "finished work carries no outstanding feedback (discard={discard})");
+            assert!(
+                !board.ticket(&id).unwrap().changes_requested,
+                "finished work carries no outstanding feedback (discard={discard})"
+            );
         }
     }
 
@@ -2141,30 +3857,89 @@ mod review_round_tests {
         let (_dir, store) = scratch();
         let id = to_review(&store, "would not land");
         let blocked = |store: &Store| store.read_board().unwrap().ticket(&id).unwrap().landing_blocked;
-        let block = |store: &Store| apply(store, None, Op::BlockLanding { id: id.clone(), reason: "conflicts in src/x.rs".into() });
+        let block = |store: &Store| {
+            apply(
+                store,
+                None,
+                Op::BlockLanding {
+                    id: id.clone(),
+                    reason: "conflicts in src/x.rs".into(),
+                },
+            )
+        };
 
         block(&store).unwrap();
         assert!(blocked(&store));
         let last = store.read_board().unwrap().ticket(&id).unwrap().notes.last().unwrap().text.clone();
-        assert_eq!(last, "landing blocked: conflicts in src/x.rs", "the reason lands with the flag, under one version");
+        assert_eq!(
+            last, "landing blocked: conflicts in src/x.rs",
+            "the reason lands with the flag, under one version"
+        );
 
         // Dragged within the review column: the failure still describes the ticket exactly.
-        apply(&store, None, Op::MoveTicket { id: id.clone(), to: ColumnId::Review, position: Some(0), owner: None, branch: None }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::MoveTicket {
+                id: id.clone(),
+                to: ColumnId::Review,
+                position: Some(0),
+                owner: None,
+                branch: None,
+            },
+        )
+        .unwrap();
         assert!(blocked(&store), "a reorder is not a change of state");
 
         // Claimed back for rework: the branch is about to move, so the old failure describes nothing.
-        apply(&store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::Claim {
+                id: id.clone(),
+                agent: "claude".into(),
+            },
+        )
+        .unwrap();
         assert!(!blocked(&store));
 
         // And the review verdict that sends it back clears it in one step.
-        apply(&store, None, Op::MoveTicket { id: id.clone(), to: ColumnId::Review, position: None, owner: None, branch: None }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::MoveTicket {
+                id: id.clone(),
+                to: ColumnId::Review,
+                position: None,
+                owner: None,
+                branch: None,
+            },
+        )
+        .unwrap();
         block(&store).unwrap();
-        apply(&store, None, Op::RequestChanges { id: id.clone(), by: "sam".into(), review: VerdictReview::text("rebase it") }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::RequestChanges {
+                id: id.clone(),
+                by: "sam".into(),
+                review: VerdictReview::text("rebase it"),
+            },
+        )
+        .unwrap();
         assert!(!blocked(&store));
 
         // Nothing outside review can be flagged: the flag means "this is what stopped it landing from here".
         let todo = create(&store, "not in review");
-        let err = apply(&store, None, Op::BlockLanding { id: todo, reason: "x".into() }).unwrap_err();
+        let err = apply(
+            &store,
+            None,
+            Op::BlockLanding {
+                id: todo,
+                reason: "x".into(),
+            },
+        )
+        .unwrap_err();
         assert!(matches!(err, OpError::Invalid(_)), "{err}");
     }
 
@@ -2173,20 +3948,63 @@ mod review_round_tests {
     fn accepting_arms_the_landing_and_leaves_the_card_in_review() {
         let (_dir, store) = scratch();
         let id = to_review(&store, "good work");
-        apply(&store, None, Op::AcceptReview { id: id.clone(), by: "sam".into(), review: VerdictReview::default() }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::AcceptReview {
+                id: id.clone(),
+                by: "sam".into(),
+                review: VerdictReview::default(),
+            },
+        )
+        .unwrap();
 
         let board = store.read_board().unwrap();
         let t = board.ticket(&id).unwrap();
-        assert!(matches!(t.column, Column::Review { .. }), "accepting never moves the card: {:?}", t.column);
+        assert!(
+            matches!(t.column, Column::Review { .. }),
+            "accepting never moves the card: {:?}",
+            t.column
+        );
         assert!(t.accepted);
         assert_eq!(t.notes.last().unwrap().text, "accepted by sam — cleared to land");
 
         // Only review work can be accepted, and never somebody else's.
         let todo = create(&store, "not in review");
-        assert!(matches!(apply(&store, None, Op::AcceptReview { id: todo, by: "sam".into(), review: VerdictReview::default() }), Err(OpError::Invalid(_))));
+        assert!(matches!(
+            apply(
+                &store,
+                None,
+                Op::AcceptReview {
+                    id: todo,
+                    by: "sam".into(),
+                    review: VerdictReview::default()
+                }
+            ),
+            Err(OpError::Invalid(_))
+        ));
         let ext = to_review(&store, "delegated");
-        apply(&store, None, Op::BindExternal { id: ext.clone(), external: Some(crate::store::model::External::github_issue(7)) }).unwrap();
-        assert!(matches!(apply(&store, None, Op::AcceptReview { id: ext, by: "sam".into(), review: VerdictReview::default() }), Err(OpError::Invalid(_))));
+        apply(
+            &store,
+            None,
+            Op::BindExternal {
+                id: ext.clone(),
+                external: Some(crate::store::model::External::github_issue(7)),
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            apply(
+                &store,
+                None,
+                Op::AcceptReview {
+                    id: ext,
+                    by: "sam".into(),
+                    review: VerdictReview::default()
+                }
+            ),
+            Err(OpError::Invalid(_))
+        ));
     }
 
     /// The dead end that must not be one: a blocked landing is out of the loop's reach until a human puts it back, and
@@ -2195,21 +4013,77 @@ mod review_round_tests {
     fn accepting_again_clears_a_blocked_landing_and_re_arms_it() {
         let (_dir, store) = scratch();
         let id = to_review(&store, "conflicted once");
-        apply(&store, None, Op::AcceptReview { id: id.clone(), by: "sam".into(), review: VerdictReview::default() }).unwrap();
-        apply(&store, None, Op::StartLanding { id: id.clone(), agent: "claude".into() }).unwrap();
-        apply(&store, None, Op::BlockLanding { id: id.clone(), reason: "conflicts in f".into() }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::AcceptReview {
+                id: id.clone(),
+                by: "sam".into(),
+                review: VerdictReview::default(),
+            },
+        )
+        .unwrap();
+        apply(
+            &store,
+            None,
+            Op::StartLanding {
+                id: id.clone(),
+                agent: "claude".into(),
+            },
+        )
+        .unwrap();
+        apply(
+            &store,
+            None,
+            Op::BlockLanding {
+                id: id.clone(),
+                reason: "conflicts in f".into(),
+            },
+        )
+        .unwrap();
 
         // Blocked: the loop cannot take it, and the abandoned attempt left no marker behind.
-        assert!(store.read_claims().unwrap().is_empty(), "a blocked landing drops its in-flight marker");
-        let err = apply(&store, None, Op::StartLanding { id: id.clone(), agent: "claude".into() }).unwrap_err();
+        assert!(
+            store.read_claims().unwrap().is_empty(),
+            "a blocked landing drops its in-flight marker"
+        );
+        let err = apply(
+            &store,
+            None,
+            Op::StartLanding {
+                id: id.clone(),
+                agent: "claude".into(),
+            },
+        )
+        .unwrap_err();
         assert!(matches!(err, OpError::Invalid(ref e) if e.contains("blocked")), "{err}");
 
         // The human resolves it by hand and presses Accept again.
-        let out = apply(&store, None, Op::AcceptReview { id: id.clone(), by: "sam".into(), review: VerdictReview::default() }).unwrap();
-        assert_eq!(out.result["retry"], true, "the op says it was a retry, so the UI can word it as one");
+        let out = apply(
+            &store,
+            None,
+            Op::AcceptReview {
+                id: id.clone(),
+                by: "sam".into(),
+                review: VerdictReview::default(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            out.result["retry"], true,
+            "the op says it was a retry, so the UI can word it as one"
+        );
         let t = store.read_board().unwrap().ticket(&id).unwrap().clone();
         assert!(t.accepted && !t.landing_blocked);
-        apply(&store, None, Op::StartLanding { id, agent: "claude".into() }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::StartLanding {
+                id,
+                agent: "claude".into(),
+            },
+        )
+        .unwrap();
     }
 
     /// The interlock. Two loops asking for the same landing must not both get it, and the marker must never make a
@@ -2220,23 +4094,71 @@ mod review_round_tests {
         let id = to_review(&store, "landable");
 
         // Unaccepted work is nobody's to land: the human clears it, never a work loop.
-        let err = apply(&store, None, Op::StartLanding { id: id.clone(), agent: "claude".into() }).unwrap_err();
+        let err = apply(
+            &store,
+            None,
+            Op::StartLanding {
+                id: id.clone(),
+                agent: "claude".into(),
+            },
+        )
+        .unwrap_err();
         assert!(matches!(err, OpError::Invalid(ref e) if e.contains("not been accepted")), "{err}");
 
-        apply(&store, None, Op::AcceptReview { id: id.clone(), by: "sam".into(), review: VerdictReview::default() }).unwrap();
-        let out = apply(&store, None, Op::StartLanding { id: id.clone(), agent: "claude".into() }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::AcceptReview {
+                id: id.clone(),
+                by: "sam".into(),
+                review: VerdictReview::default(),
+            },
+        )
+        .unwrap();
+        let out = apply(
+            &store,
+            None,
+            Op::StartLanding {
+                id: id.clone(),
+                agent: "claude".into(),
+            },
+        )
+        .unwrap();
         assert_eq!(out.result["branch"], "k-1/x", "the taker is told which branch to rebase");
 
         let claim = store.read_claims().unwrap().into_iter().next().unwrap();
         assert!(claim.is_landing(), "a landing record is not ownership");
-        assert!(matches!(store.read_board().unwrap().ticket(&id).unwrap().column, Column::Review { .. }), "and the card stays put");
+        assert!(
+            matches!(store.read_board().unwrap().ticket(&id).unwrap().column, Column::Review { .. }),
+            "and the card stays put"
+        );
 
         // A second loop is refused by name, so it can move on to other work instead of racing the branch.
-        let err = apply(&store, None, Op::StartLanding { id: id.clone(), agent: "other".into() }).unwrap_err();
-        assert!(matches!(err, OpError::AlreadyClaimed { ref agent, .. } if agent == "claude"), "{err}");
+        let err = apply(
+            &store,
+            None,
+            Op::StartLanding {
+                id: id.clone(),
+                agent: "other".into(),
+            },
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, OpError::AlreadyClaimed { ref agent, .. } if agent == "claude"),
+            "{err}"
+        );
 
         // Landing the ticket retires the marker with it — the success path needs no cleanup call at all.
-        apply(&store, None, Op::LandTicket { id: id.clone(), expected_branch: Some("k-1/x".into()), reason: "merged".into() }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::LandTicket {
+                id: id.clone(),
+                expected_branch: Some("k-1/x".into()),
+                reason: "merged".into(),
+            },
+        )
+        .unwrap();
         assert!(store.read_claims().unwrap().is_empty());
         let t = store.read_board().unwrap().ticket(&id).unwrap().clone();
         assert!(!t.accepted, "an approval to land is spent once the landing is proved");
@@ -2248,12 +4170,32 @@ mod review_round_tests {
     fn a_stale_landing_marker_stops_holding_the_ticket() {
         let (_dir, store) = scratch();
         let id = to_review(&store, "abandoned mid-landing");
-        apply(&store, None, Op::AcceptReview { id: id.clone(), by: "sam".into(), review: VerdictReview::default() }).unwrap();
-        apply(&store, None, Op::StartLanding { id: id.clone(), agent: "claude".into() }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::AcceptReview {
+                id: id.clone(),
+                by: "sam".into(),
+                review: VerdictReview::default(),
+            },
+        )
+        .unwrap();
+        apply(
+            &store,
+            None,
+            Op::StartLanding {
+                id: id.clone(),
+                agent: "claude".into(),
+            },
+        )
+        .unwrap();
 
         let board = store.read_board().unwrap();
         let claims = store.read_claims().unwrap();
-        assert!(crate::store::derive::next_ticket(&board, &claims).is_none(), "in flight: not offered to a second loop");
+        assert!(
+            crate::store::derive::next_ticket(&board, &claims).is_none(),
+            "in flight: not offered to a second loop"
+        );
 
         // Wind the marker back past the cutoff, exactly as a crashed agent's would drift.
         store
@@ -2265,8 +4207,20 @@ mod review_round_tests {
 
         let board = store.read_board().unwrap();
         let claims = store.read_claims().unwrap();
-        assert_eq!(crate::store::derive::next_ticket(&board, &claims).map(|t| t.id.clone()), Some(id.clone()), "landable again");
-        apply(&store, None, Op::StartLanding { id, agent: "second".into() }).unwrap();
+        assert_eq!(
+            crate::store::derive::next_ticket(&board, &claims).map(|t| t.id.clone()),
+            Some(id.clone()),
+            "landable again"
+        );
+        apply(
+            &store,
+            None,
+            Op::StartLanding {
+                id,
+                agent: "second".into(),
+            },
+        )
+        .unwrap();
     }
 
     /// The one place the flag deliberately survives: handing the ticket back does not make the feedback go away.
@@ -2274,8 +4228,25 @@ mod review_round_tests {
     fn releasing_a_rework_ticket_keeps_its_feedback_flag() {
         let (_dir, store) = scratch();
         let id = to_review(&store, "handed back");
-        apply(&store, None, Op::RequestChanges { id: id.clone(), by: "sam".into(), review: VerdictReview::text("still wrong") }).unwrap();
-        apply(&store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::RequestChanges {
+                id: id.clone(),
+                by: "sam".into(),
+                review: VerdictReview::text("still wrong"),
+            },
+        )
+        .unwrap();
+        apply(
+            &store,
+            None,
+            Op::Claim {
+                id: id.clone(),
+                agent: "claude".into(),
+            },
+        )
+        .unwrap();
 
         apply(&store, None, Op::Release { id: id.clone() }).unwrap();
 
@@ -2291,15 +4262,43 @@ mod review_round_tests {
         let (_dir, store) = scratch();
         let waiting = create(&store, "brand new work");
         let sent_back = to_review(&store, "reviewed and returned");
-        apply(&store, None, Op::RequestChanges { id: sent_back.clone(), by: "sam".into(), review: VerdictReview::text("tighten it") }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::RequestChanges {
+                id: sent_back.clone(),
+                by: "sam".into(),
+                review: VerdictReview::text("tighten it"),
+            },
+        )
+        .unwrap();
 
         let board = store.read_board().unwrap();
         let claims = store.read_claims().unwrap();
         assert_eq!(derive::next_ticket(&board, &claims).unwrap().id, sent_back);
 
         // Once it is back in review, the queue returns to normal.
-        apply(&store, None, Op::Claim { id: sent_back.clone(), agent: "claude".into() }).unwrap();
-        apply(&store, None, Op::MoveTicket { id: sent_back, to: ColumnId::Review, position: None, owner: None, branch: None }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::Claim {
+                id: sent_back.clone(),
+                agent: "claude".into(),
+            },
+        )
+        .unwrap();
+        apply(
+            &store,
+            None,
+            Op::MoveTicket {
+                id: sent_back,
+                to: ColumnId::Review,
+                position: None,
+                owner: None,
+                branch: None,
+            },
+        )
+        .unwrap();
         let board = store.read_board().unwrap();
         let claims = store.read_claims().unwrap();
         assert_eq!(derive::next_ticket(&board, &claims).unwrap().id, waiting);
@@ -2311,11 +4310,31 @@ mod review_round_tests {
     fn a_claimed_or_external_rework_card_is_not_surfaced() {
         let (_dir, store) = scratch();
         let id = to_review(&store, "sent back");
-        apply(&store, None, Op::RequestChanges { id: id.clone(), by: "sam".into(), review: VerdictReview::text("x") }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::RequestChanges {
+                id: id.clone(),
+                by: "sam".into(),
+                review: VerdictReview::text("x"),
+            },
+        )
+        .unwrap();
 
-        apply(&store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
+        apply(
+            &store,
+            None,
+            Op::Claim {
+                id: id.clone(),
+                agent: "claude".into(),
+            },
+        )
+        .unwrap();
         let board = store.read_board().unwrap();
         let claims = store.read_claims().unwrap();
-        assert!(derive::next_ticket(&board, &claims).is_none(), "a claimed rework card is somebody's already");
+        assert!(
+            derive::next_ticket(&board, &claims).is_none(),
+            "a claimed rework card is somebody's already"
+        );
     }
 }

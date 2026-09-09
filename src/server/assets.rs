@@ -27,7 +27,11 @@ pub async fn asset(State(app): State<AppState>, UrlPath(path): UrlPath<String>) 
         None => Embedded::get(&path).map(|f| f.data),
     };
     match body {
-        Some(data) => ([(header::CONTENT_TYPE, content_type(&path)), (header::CACHE_CONTROL, "no-cache")], data).into_response(),
+        Some(data) => (
+            [(header::CONTENT_TYPE, content_type(&path)), (header::CACHE_CONTROL, "no-cache")],
+            data,
+        )
+            .into_response(),
         None => (StatusCode::NOT_FOUND, "no such asset").into_response(),
     }
 }

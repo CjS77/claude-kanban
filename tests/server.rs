@@ -69,7 +69,17 @@ fn seed_ticket(store: &Store, title: &str) -> String {
     ops::apply(
         store,
         None,
-        Op::CreateTicket { title: title.into(), body: "# Spec".into(), epic: None, labels: vec!["ui".into()], depends_on: vec![], status: Status::Ready, model: None, effort: None, auto_merge: false },
+        Op::CreateTicket {
+            title: title.into(),
+            body: "# Spec".into(),
+            epic: None,
+            labels: vec!["ui".into()],
+            depends_on: vec![],
+            status: Status::Ready,
+            model: None,
+            effort: None,
+            auto_merge: false,
+        },
     )
     .unwrap()
     .created_ids[0]
@@ -94,10 +104,22 @@ async fn the_header_badges_the_crate_version_and_links_the_repo() {
     let html = body_text(router.oneshot(get("/")).await.unwrap()).await;
 
     let version = format!("v{}", env!("CARGO_PKG_VERSION"));
-    assert!(html.contains(&format!(">{version}</span>")), "the ghost badge must show the real crate version: {html}");
-    assert!(!html.contains(">claude-kanban</span>"), "the badge's old static name must be gone: {html}");
-    assert!(html.contains(&format!(r#"href="{}""#, env!("CARGO_PKG_REPOSITORY"))), "the mark must link the repo: {html}");
-    assert!(html.contains("<svg viewBox=\"0 0 16 16\""), "the GitHub mark is inlined, not fetched: {html}");
+    assert!(
+        html.contains(&format!(">{version}</span>")),
+        "the ghost badge must show the real crate version: {html}"
+    );
+    assert!(
+        !html.contains(">claude-kanban</span>"),
+        "the badge's old static name must be gone: {html}"
+    );
+    assert!(
+        html.contains(&format!(r#"href="{}""#, env!("CARGO_PKG_REPOSITORY"))),
+        "the mark must link the repo: {html}"
+    );
+    assert!(
+        html.contains("<svg viewBox=\"0 0 16 16\""),
+        "the GitHub mark is inlined, not fetched: {html}"
+    );
 }
 
 #[tokio::test]
@@ -107,7 +129,17 @@ async fn filters_hide_cards_and_disable_dragging() {
     ops::apply(
         &store,
         None,
-        Op::CreateTicket { title: "Unlabelled".into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![], status: Status::Draft, model: None, effort: None, auto_merge: false },
+        Op::CreateTicket {
+            title: "Unlabelled".into(),
+            body: String::new(),
+            epic: None,
+            labels: vec![],
+            depends_on: vec![],
+            status: Status::Draft,
+            model: None,
+            effort: None,
+            auto_merge: false,
+        },
     )
     .unwrap();
     let html = body_text(router.oneshot(get("/ui/board?q=label:ui")).await.unwrap()).await;
@@ -146,13 +178,27 @@ async fn the_search_bar_matches_free_text_across_every_column() {
     seed_full(&store, "Epsilon", "about something else entirely", &[]);
 
     // One card per column, so a bare phrase has to reach past todo.
-    ops::apply(&store, None, Op::Claim { id: TicketId("K-2".into()), agent: "claude".into() }).unwrap();
+    ops::apply(
+        &store,
+        None,
+        Op::Claim {
+            id: TicketId("K-2".into()),
+            agent: "claude".into(),
+        },
+    )
+    .unwrap();
     to_review_with_branch(&store, "K-3", "k-3/work");
     to_done_with_branch(&store, "K-4", "k-4/work");
 
     let html = body_text(router.oneshot(get("/ui/board?q=quantum+ledger")).await.unwrap()).await;
-    let missing: Vec<&str> = ["Alpha", "Beta", "Gamma", "Delta"].into_iter().filter(|t| !html.contains(t)).collect();
-    assert!(missing.is_empty(), "a bare phrase reaches every column, but {missing:?} did not render: {html}");
+    let missing: Vec<&str> = ["Alpha", "Beta", "Gamma", "Delta"]
+        .into_iter()
+        .filter(|t| !html.contains(t))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "a bare phrase reaches every column, but {missing:?} did not render: {html}"
+    );
     assert!(!html.contains("Epsilon"), "a card without the phrase must go: {html}");
 }
 
@@ -166,17 +212,36 @@ async fn the_example_query_narrows_to_the_landed_ux_card() {
 
     to_done_with_branch(&store, "K-1", "k-1/work");
     to_review_with_branch(&store, "K-2", "k-2/work");
-    ops::apply(&store, None, Op::DiscardTicket { id: TicketId("K-2".into()), reason: "superseded".into(), by: "tester".into(), review: VerdictReview::default() }).unwrap();
+    ops::apply(
+        &store,
+        None,
+        Op::DiscardTicket {
+            id: TicketId("K-2".into()),
+            reason: "superseded".into(),
+            by: "tester".into(),
+            review: VerdictReview::default(),
+        },
+    )
+    .unwrap();
     to_review_with_branch(&store, "K-3", "k-3/work");
     to_done_with_branch(&store, "K-4", "k-4/work");
 
-    let html = body_text(router.oneshot(get("/ui/board?q=landed:+true,+label:+ux,+realtime+results")).await.unwrap()).await;
+    let html = body_text(
+        router
+            .oneshot(get("/ui/board?q=landed:+true,+label:+ux,+realtime+results"))
+            .await
+            .unwrap(),
+    )
+    .await;
     assert!(html.contains("Landed with the phrase"), "the acceptance card must render: {html}");
     let leaked: Vec<&str> = ["Discarded with the phrase", "Still in review", "Landed without the phrase"]
         .into_iter()
         .filter(|t| html.contains(t))
         .collect();
-    assert!(leaked.is_empty(), "only the landed ux card may survive, but {leaked:?} did too: {html}");
+    assert!(
+        leaked.is_empty(),
+        "only the landed ux card may survive, but {leaked:?} did too: {html}"
+    );
 }
 
 #[tokio::test]
@@ -186,12 +251,18 @@ async fn a_blank_query_keeps_the_board_draggable() {
 
     for query in ["", "%20%20", ",,", "%20,%20", "%22%22"] {
         let html = body_text(router.clone().oneshot(get(&format!("/ui/board?q={query}"))).await.unwrap()).await;
-        assert!(html.contains(r#"data-draggable="true""#), "?q={query} hides nothing, so the board must still drag: {html}");
+        assert!(
+            html.contains(r#"data-draggable="true""#),
+            "?q={query} hides nothing, so the board must still drag: {html}"
+        );
         assert!(html.contains("Anything at all"), "?q={query} must admit every card: {html}");
     }
 
     let html = body_text(router.oneshot(get("/ui/board?q=label:ui")).await.unwrap()).await;
-    assert!(html.contains(r#"data-draggable="false""#), "a real query must stop the drag: {html}");
+    assert!(
+        html.contains(r#"data-draggable="false""#),
+        "a real query must stop the drag: {html}"
+    );
 }
 
 #[tokio::test]
@@ -200,10 +271,19 @@ async fn the_filter_bar_offers_one_search_box_and_the_epic_dropdown() {
     let html = body_text(router.oneshot(get("/")).await.unwrap()).await;
 
     assert!(html.contains(r#"name="q""#), "the search box must be there: {html}");
-    assert!(html.contains("search… or label:ux, status:ready, landed:true"), "with its grammar hint: {html}");
-    assert!(html.contains(r#"id="filter-epic""#), "the epic dropdown survives — it is discovery, not filtering: {html}");
+    assert!(
+        html.contains("search… or label:ux, status:ready, landed:true"),
+        "with its grammar hint: {html}"
+    );
+    assert!(
+        html.contains(r#"id="filter-epic""#),
+        "the epic dropdown survives — it is discovery, not filtering: {html}"
+    );
     // The create modals also carry a `name="status"`, so assert on the filter bar's own spelling.
-    assert!(!html.contains(r#"<select name="status" class="select select-sm"#), "the status dropdown is gone: {html}");
+    assert!(
+        !html.contains(r#"<select name="status" class="select select-sm"#),
+        "the status dropdown is gone: {html}"
+    );
     assert!(!html.contains(r#"name="label""#), "the label input is gone: {html}");
 }
 
@@ -214,13 +294,19 @@ async fn the_search_box_sits_after_the_create_buttons_inside_the_filter_bar() {
 
     let filters = html.split_once(r#"id="filters""#).expect("the filter bar must carry #filters").1;
     let (bar, _) = filters.split_once("<main").expect("the filter bar closes before the board");
-    let at = |needle: &str| bar.find(needle).unwrap_or_else(|| panic!("{needle} must be inside the filter bar: {bar}"));
+    let at = |needle: &str| {
+        bar.find(needle)
+            .unwrap_or_else(|| panic!("{needle} must be inside the filter bar: {bar}"))
+    };
 
     // hx-include="#filters" harvests input/select from #filters, so both controls have to stay within it — while the
     // create buttons, which contribute no values, sit between them.
     assert!(at(r#"id="filter-epic""#) < at("+ Epic"), "the epic dropdown leads: {bar}");
     assert!(at("+ Epic") < at(r#"name="q""#), "the search box follows the create buttons: {bar}");
-    assert!(at(r#"name="q""#) < at(r#"id="search-help""#), "the help affordance trails the search box: {bar}");
+    assert!(
+        at(r#"name="q""#) < at(r#"id="search-help""#),
+        "the help affordance trails the search box: {bar}"
+    );
 }
 
 #[tokio::test]
@@ -229,29 +315,64 @@ async fn the_search_box_wears_a_magnifier_and_a_javascript_free_help_popup() {
     let html = body_text(router.oneshot(get("/")).await.unwrap()).await;
 
     // The magnifier is a decorative inline SVG inside the label that wraps the input — no webfont, no extra asset.
-    assert!(html.contains(r#"<label class="input input-sm""#), "the input is wrapped in a label: {html}");
-    assert!(html.contains(r#"<circle cx="7" cy="7" r="5"/>"#), "the magnifier glass is drawn inline: {html}");
+    assert!(
+        html.contains(r#"<label class="input input-sm""#),
+        "the input is wrapped in a label: {html}"
+    );
+    assert!(
+        html.contains(r#"<circle cx="7" cy="7" r="5"/>"#),
+        "the magnifier glass is drawn inline: {html}"
+    );
 
     // <details class="dropdown"> opens on click with no script — daisyUI exempts details from its hide rule.
-    let help = html.split_once(r#"id="search-help""#).expect("the help popup must be there: {html}").1;
+    let help = html
+        .split_once(r#"id="search-help""#)
+        .expect("the help popup must be there: {html}")
+        .1;
     let (popup, _) = help.split_once("</details>").expect("the help popup closes");
-    assert!(popup.contains(r#"class="dropdown-content"#), "the panel is the dropdown's content: {popup}");
-    assert!(!popup.contains("onclick") && !popup.contains("hx-"), "the popup must need no script to open: {popup}");
+    assert!(
+        popup.contains(r#"class="dropdown-content"#),
+        "the panel is the dropdown's content: {popup}"
+    );
+    assert!(
+        !popup.contains("onclick") && !popup.contains("hx-"),
+        "the popup must need no script to open: {popup}"
+    );
 
     // The keys it documents are exactly the ones search.rs answers to — `merged:` was removed in v2 and must not return.
-    let keys =
-        ["text:", "label:", "epic:", "id:", "note:", "status:", "col: column:", "landed:", "discarded:", "blocked:", "auto-merge:",
-         "changes-requested:"];
+    let keys = [
+        "text:",
+        "label:",
+        "epic:",
+        "id:",
+        "note:",
+        "status:",
+        "col: column:",
+        "landed:",
+        "discarded:",
+        "blocked:",
+        "auto-merge:",
+        "changes-requested:",
+    ];
     let missing: Vec<_> = keys.into_iter().filter(|key| !popup.contains(key)).collect();
-    assert!(missing.is_empty(), "the popup must document every search key — missing {missing:?}: {popup}");
+    assert!(
+        missing.is_empty(),
+        "the popup must document every search key — missing {missing:?}: {popup}"
+    );
     assert!(!popup.contains("merged:"), "there is no merged: key: {popup}");
 
     // `epic:` reserves two values, and a reserved value nobody can discover may as well not exist.
     let unlisted: Vec<_> = ["none", "null"].into_iter().filter(|word| !popup.contains(word)).collect();
-    assert!(unlisted.is_empty(), "the popup must spell out epic's reserved values — missing {unlisted:?}: {popup}");
+    assert!(
+        unlisted.is_empty(),
+        "the popup must spell out epic's reserved values — missing {unlisted:?}: {popup}"
+    );
 
     // The old title= tooltip is folded into the popup, so there is exactly one explanation of the grammar.
-    assert!(!html.contains("Comma-separated. Bare text searches"), "the tooltip must not duplicate the popup: {html}");
+    assert!(
+        !html.contains("Comma-separated. Bare text searches"),
+        "the tooltip must not duplicate the popup: {html}"
+    );
 }
 
 #[tokio::test]
@@ -280,10 +401,18 @@ async fn a_stale_version_conflicts_with_toast_and_corrective_refresh() {
 async fn mutations_flow_create_move_status_delete() {
     let (_dir, router, store) = test_app();
 
-    let res = router.clone().oneshot(post("/ui/ticket", 0, "title=New+one&status=ready&body=hello")).await.unwrap();
+    let res = router
+        .clone()
+        .oneshot(post("/ui/ticket", 0, "title=New+one&status=ready&body=hello"))
+        .await
+        .unwrap();
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
 
-    let res = router.clone().oneshot(post("/ui/ticket/K-1/move", 1, "to=doing&position=0")).await.unwrap();
+    let res = router
+        .clone()
+        .oneshot(post("/ui/ticket/K-1/move", 1, "to=doing&position=0"))
+        .await
+        .unwrap();
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
     let board = store.read_board().unwrap();
     match &board.tickets[0].column {
@@ -292,7 +421,11 @@ async fn mutations_flow_create_move_status_delete() {
     }
 
     // Status buttons answer with the refreshed detail pane, so the open pane never goes stale.
-    let res = router.clone().oneshot(post("/ui/ticket/K-1/status", 2, "status=review")).await.unwrap();
+    let res = router
+        .clone()
+        .oneshot(post("/ui/ticket/K-1/status", 2, "status=review"))
+        .await
+        .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     let html = body_text(res).await;
     assert!(html.contains("review"), "{html}");
@@ -309,17 +442,33 @@ async fn the_create_modal_hand_to_minesweeper_checkbox_forces_ready_and_reports_
 
     // The checkbox overrides the status dropdown, and the create must succeed even though the handoff cannot (the
     // test app has no git repo): the card comes back to todo wearing the explanation instead of a failed POST.
-    let res = router.clone().oneshot(post("/ui/ticket", 0, "title=Ship+it&status=draft&minesweeper=on")).await.unwrap();
+    let res = router
+        .clone()
+        .oneshot(post("/ui/ticket", 0, "title=Ship+it&status=draft&minesweeper=on"))
+        .await
+        .unwrap();
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
     let board = store.read_board().unwrap();
     let t = board.ticket(&TicketId("K-1".into())).unwrap();
     assert_eq!(t.status, Status::Ready, "handing over implies the spec is ready");
-    assert!(matches!(t.column, claude_kanban::store::model::Column::Todo), "failed handoff released it: {:?}", t.column);
-    assert!(t.notes.last().unwrap().text.contains("handing to minesweeper failed"), "{:?}", t.notes);
+    assert!(
+        matches!(t.column, claude_kanban::store::model::Column::Todo),
+        "failed handoff released it: {:?}",
+        t.column
+    );
+    assert!(
+        t.notes.last().unwrap().text.contains("handing to minesweeper failed"),
+        "{:?}",
+        t.notes
+    );
 
     // Unchecked, the dropdown is honoured and no handoff is attempted.
     let version = board.version;
-    let res = router.clone().oneshot(post("/ui/ticket", version, "title=Just+a+draft&status=draft")).await.unwrap();
+    let res = router
+        .clone()
+        .oneshot(post("/ui/ticket", version, "title=Just+a+draft&status=draft"))
+        .await
+        .unwrap();
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
     let t2 = store.read_board().unwrap();
     let t2 = t2.ticket(&TicketId("K-2".into())).unwrap();
@@ -349,22 +498,47 @@ async fn the_edit_modal_offers_the_handoff_checkbox_and_saving_with_it_hands_ove
     let board = store.read_board().unwrap();
     let t = board.ticket(&TicketId("K-1".into())).unwrap();
     assert_eq!(t.status, Status::Ready);
-    assert!(t.notes.last().unwrap().text.contains("handing to minesweeper failed"), "{:?}", t.notes);
+    assert!(
+        t.notes.last().unwrap().text.contains("handing to minesweeper failed"),
+        "{:?}",
+        t.notes
+    );
 
     // A ticket already bound is past handing over — the edit form hides the box.
-    ops::apply(&store, None, Op::BindExternal { id: TicketId("K-1".into()), external: Some(External::github_issue(9)) }).unwrap();
+    ops::apply(
+        &store,
+        None,
+        Op::BindExternal {
+            id: TicketId("K-1".into()),
+            external: Some(External::github_issue(9)),
+        },
+    )
+    .unwrap();
     let html = body_text(router.oneshot(get("/ui/ticket/K-1/edit")).await.unwrap()).await;
     assert!(!html.contains("Hand to minesweeper"), "{html}");
 }
 
 /// Seed an epic and file `titles` under it, returning the epic's id.
 fn seed_epic(store: &Store, title: &str, titles: &[&str]) -> EpicId {
-    let created =
-        ops::apply(store, None, Op::CreateEpic { title: title.into(), color: None, body: String::new(), status: Status::Ready, auto_merge: false }).unwrap();
+    let created = ops::apply(
+        store,
+        None,
+        Op::CreateEpic {
+            title: title.into(),
+            color: None,
+            body: String::new(),
+            status: Status::Ready,
+            auto_merge: false,
+        },
+    )
+    .unwrap();
     let epic = EpicId(created.created_ids[0].clone());
     let file_under = |title: &&str| {
         let id = TicketId(seed_ticket(store, title));
-        let patch = ops::TicketPatch { epic: Some(Some(epic.clone())), ..ops::TicketPatch::default() };
+        let patch = ops::TicketPatch {
+            epic: Some(Some(epic.clone())),
+            ..ops::TicketPatch::default()
+        };
         ops::apply(store, None, Op::UpdateTicket { id, patch }).unwrap();
     };
     titles.iter().for_each(file_under);
@@ -393,17 +567,33 @@ async fn deleting_an_epic_from_the_board_takes_its_tickets() {
 async fn the_epic_delete_confirm_says_the_tickets_go_too() {
     let (_dir, router, store) = test_app();
     seed_epic(&store, "Auth", &["Inside one", "Inside two"]);
-    ops::apply(&store, None, Op::MoveTicket { id: TicketId("K-1".into()), to: ColumnId::Done, position: None, owner: None, branch: None })
-        .unwrap();
+    ops::apply(
+        &store,
+        None,
+        Op::MoveTicket {
+            id: TicketId("K-1".into()),
+            to: ColumnId::Done,
+            position: None,
+            owner: None,
+            branch: None,
+        },
+    )
+    .unwrap();
 
     let html = body_text(router.clone().oneshot(get("/ui/epic/EP-1")).await.unwrap()).await;
-    assert!(html.contains("its 2 tickets (1 already done)"), "the confirm must count the tickets and the done ones: {html}");
+    assert!(
+        html.contains("its 2 tickets (1 already done)"),
+        "the confirm must count the tickets and the done ones: {html}"
+    );
     assert!(html.contains("There is no undo."), "and say the cascade is final: {html}");
     assert!(!html.contains("survive, detached"), "the old promise must be gone: {html}");
 
     seed_epic(&store, "Empty", &[]);
     let html = body_text(router.oneshot(get("/ui/epic/EP-2")).await.unwrap()).await;
-    assert!(html.contains("Delete EP-2 — Empty? It has no tickets."), "an empty epic gets the short wording: {html}");
+    assert!(
+        html.contains("Delete EP-2 — Empty? It has no tickets."),
+        "an empty epic gets the short wording: {html}"
+    );
 }
 
 /// The edit form posts every field, so a save that omits nothing must still be able to *clear* the pair — and a bad
@@ -429,7 +619,11 @@ async fn the_edit_form_round_trips_model_and_effort_and_refuses_a_bad_level() {
 
     let form = "title=hard+one&body=&epic=&labels=&depends_on=&model=&effort=ludicrous";
     let res = router.clone().oneshot(post("/ui/ticket/K-1", 3, form)).await.unwrap();
-    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY, "a level that doesn't exist is a 422 toast, not a shrug");
+    assert_eq!(
+        res.status(),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a level that doesn't exist is a 422 toast, not a shrug"
+    );
 }
 
 #[tokio::test]
@@ -442,7 +636,10 @@ async fn the_auto_merge_toggle_flips_the_flag_and_hands_back_the_refreshed_pane(
     assert_eq!(res.status(), StatusCode::OK);
     let html = body_text(res).await;
     assert!(flagged(), "the click writes the ticket's own flag");
-    assert!(html.contains("lands itself"), "and answers with the refreshed pane, not a bare 204: {html}");
+    assert!(
+        html.contains("lands itself"),
+        "and answers with the refreshed pane, not a bare 204: {html}"
+    );
     assert!(html.contains(">auto-merge</span>"), "which now wears the warning badge: {html}");
 
     let version = store.read_board().unwrap().version;
@@ -459,13 +656,25 @@ async fn the_auto_merge_confirm_names_the_ticket_and_says_main_moves_unreviewed(
     seed_ticket(&store, "risky one");
 
     let html = body_text(router.clone().oneshot(get("/ui/ticket/K-1")).await.unwrap()).await;
-    assert!(html.contains("Turn on auto-merge for K-1 — risky one?"), "the confirm must name the ticket: {html}");
-    assert!(html.contains("fast-forward main into it with no human review of the merge"), "and what it costs: {html}");
-    assert!(html.contains("There is no undo once main has moved."), "and that it is final: {html}");
+    assert!(
+        html.contains("Turn on auto-merge for K-1 — risky one?"),
+        "the confirm must name the ticket: {html}"
+    );
+    assert!(
+        html.contains("fast-forward main into it with no human review of the merge"),
+        "and what it costs: {html}"
+    );
+    assert!(
+        html.contains("There is no undo once main has moved."),
+        "and that it is final: {html}"
+    );
 
     router.clone().oneshot(post("/ui/ticket/K-1/auto-merge", 1, "")).await.unwrap();
     let html = body_text(router.oneshot(get("/ui/ticket/K-1")).await.unwrap()).await;
-    assert!(html.contains("Turn off auto-merge for K-1 — risky one?"), "switching it off is the safe direction: {html}");
+    assert!(
+        html.contains("Turn off auto-merge for K-1 — risky one?"),
+        "switching it off is the safe direction: {html}"
+    );
     assert!(!html.contains("There is no undo"), "so it gets no scare text: {html}");
 }
 
@@ -477,24 +686,61 @@ async fn a_card_credits_the_epic_when_the_grant_is_inherited() {
     seed_epic(&store, "Auth", &["under the epic"]);
     seed_ticket(&store, "on its own");
     let patch_ticket = |id: &str, on: bool| {
-        let patch = ops::TicketPatch { auto_merge: Some(on), ..ops::TicketPatch::default() };
-        ops::apply(&store, None, Op::UpdateTicket { id: TicketId(id.into()), patch }).unwrap();
+        let patch = ops::TicketPatch {
+            auto_merge: Some(on),
+            ..ops::TicketPatch::default()
+        };
+        ops::apply(
+            &store,
+            None,
+            Op::UpdateTicket {
+                id: TicketId(id.into()),
+                patch,
+            },
+        )
+        .unwrap();
     };
 
     patch_ticket("K-2", true);
     let html = body_text(router.clone().oneshot(get("/ui/board")).await.unwrap()).await;
-    assert!(html.contains(">auto-merge</span>"), "a ticket flagged in its own right wears the plain badge: {html}");
+    assert!(
+        html.contains(">auto-merge</span>"),
+        "a ticket flagged in its own right wears the plain badge: {html}"
+    );
     assert!(!html.contains("auto-merge (epic)"), "nothing is inherited yet: {html}");
 
-    let patch = ops::EpicPatch { auto_merge: Some(true), ..ops::EpicPatch::default() };
-    ops::apply(&store, None, Op::UpdateEpic { id: EpicId("EP-1".into()), patch }).unwrap();
+    let patch = ops::EpicPatch {
+        auto_merge: Some(true),
+        ..ops::EpicPatch::default()
+    };
+    ops::apply(
+        &store,
+        None,
+        Op::UpdateEpic {
+            id: EpicId("EP-1".into()),
+            patch,
+        },
+    )
+    .unwrap();
     let html = body_text(router.clone().oneshot(get("/ui/board")).await.unwrap()).await;
-    assert!(html.contains(">auto-merge (epic)</span>"), "K-1 never set the flag, so the epic gets the credit: {html}");
-    assert!(!store.read_board().unwrap().tickets[0].auto_merge, "and the epic's grant never wrote itself onto the ticket");
+    assert!(
+        html.contains(">auto-merge (epic)</span>"),
+        "K-1 never set the flag, so the epic gets the credit: {html}"
+    );
+    assert!(
+        !store.read_board().unwrap().tickets[0].auto_merge,
+        "and the epic's grant never wrote itself onto the ticket"
+    );
 
     let html = body_text(router.oneshot(get("/ui/ticket/K-1")).await.unwrap()).await;
-    assert!(html.contains("Auto-merge (epic)</button>"), "the pane's button says where the grant lives: {html}");
-    assert!(html.contains("still auto-merges — switch it off on the epic instead"), "and its confirm says so too: {html}");
+    assert!(
+        html.contains("Auto-merge (epic)</button>"),
+        "the pane's button says where the grant lives: {html}"
+    );
+    assert!(
+        html.contains("still auto-merges — switch it off on the epic instead"),
+        "and its confirm says so too: {html}"
+    );
 }
 
 /// The edit form has no auto-merge control, and `update_ticket` leaves `auto_merge: None` in its patch precisely so that
@@ -508,11 +754,17 @@ async fn an_ordinary_edit_form_save_leaves_auto_merge_alone() {
 
     let version = store.read_board().unwrap().version;
     let form = "title=flagged+and+renamed&body=&epic=&labels=&depends_on=&model=&effort=";
-    assert_eq!(router.oneshot(post("/ui/ticket/K-1", version, form)).await.unwrap().status(), StatusCode::OK);
+    assert_eq!(
+        router.oneshot(post("/ui/ticket/K-1", version, form)).await.unwrap().status(),
+        StatusCode::OK
+    );
 
     let board = store.read_board().unwrap();
     assert_eq!(board.tickets[0].title, "flagged and renamed", "the save landed");
-    assert!(board.tickets[0].auto_merge, "and it left the one field it carries no control for untouched");
+    assert!(
+        board.tickets[0].auto_merge,
+        "and it left the one field it carries no control for untouched"
+    );
 }
 
 #[tokio::test]
@@ -521,15 +773,27 @@ async fn the_epic_auto_merge_confirm_counts_the_tickets_the_grant_reaches() {
     seed_epic(&store, "Auth", &["one", "two"]);
 
     let html = body_text(router.clone().oneshot(get("/ui/epic/EP-1")).await.unwrap()).await;
-    assert!(html.contains("Turn on auto-merge for EP-1 — Auth and its 2 tickets?"), "one click covers the list: {html}");
+    assert!(
+        html.contains("Turn on auto-merge for EP-1 — Auth and its 2 tickets?"),
+        "one click covers the list: {html}"
+    );
 
     let version = store.read_board().unwrap().version;
     let res = router.oneshot(post("/ui/epic/EP-1/auto-merge", version, "")).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
-    assert!(store.read_board().unwrap().epics[0].auto_merge, "the toggle flips the epic's own flag");
+    assert!(
+        store.read_board().unwrap().epics[0].auto_merge,
+        "the toggle flips the epic's own flag"
+    );
     let html = body_text(res).await;
-    assert!(html.contains(">auto-merge</span>"), "the refreshed epic pane wears the badge: {html}");
-    assert!(html.contains("Turn off auto-merge for EP-1 — Auth?"), "and the confirm has flipped with it: {html}");
+    assert!(
+        html.contains(">auto-merge</span>"),
+        "the refreshed epic pane wears the badge: {html}"
+    );
+    assert!(
+        html.contains("Turn off auto-merge for EP-1 — Auth?"),
+        "and the confirm has flipped with it: {html}"
+    );
 }
 
 #[tokio::test]
@@ -538,7 +802,11 @@ async fn loopback_hardening_rejects_what_it_should() {
     seed_ticket(&store, "target");
 
     // Wrong Host (DNS rebinding shape) — refused even for reads.
-    let req = Request::builder().uri("/ui/board").header(header::HOST, "evil.example:4747").body(Body::empty()).unwrap();
+    let req = Request::builder()
+        .uri("/ui/board")
+        .header(header::HOST, "evil.example:4747")
+        .body(Body::empty())
+        .unwrap();
     assert_eq!(router.clone().oneshot(req).await.unwrap().status(), StatusCode::FORBIDDEN);
 
     // Mutation without the custom header (cross-site form shape) — refused.
@@ -577,10 +845,18 @@ async fn raw_markdown_is_plain_text_and_assets_are_embedded() {
     let res = router.clone().oneshot(get("/assets/glue.js")).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     assert_eq!(res.headers()[header::CONTENT_TYPE], "text/javascript; charset=utf-8");
-    assert!(body_text(res).await.contains("X-Board-Version"), "embedded glue.js must be the real one");
+    assert!(
+        body_text(res).await.contains("X-Board-Version"),
+        "embedded glue.js must be the real one"
+    );
 
     // The diff view's vendored assets ride along in the binary too.
-    for asset in ["/assets/highlight.min.js", "/assets/diff.css", "/assets/github.min.css", "/assets/github-dark.min.css"] {
+    for asset in [
+        "/assets/highlight.min.js",
+        "/assets/diff.css",
+        "/assets/github.min.css",
+        "/assets/github-dark.min.css",
+    ] {
         let res = router.clone().oneshot(get(asset)).await.unwrap();
         assert_eq!(res.status(), StatusCode::OK, "{asset} must be embedded");
     }
@@ -602,22 +878,64 @@ async fn detail_and_edit_panes_render_and_404_cleanly() {
 
     let res = router.oneshot(get("/ui/ticket/K-99")).await.unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
-    assert_eq!(res.headers()["hx-retarget"], "#toasts", "a missing ticket toasts instead of breaking the pane");
+    assert_eq!(
+        res.headers()["hx-retarget"],
+        "#toasts",
+        "a missing ticket toasts instead of breaking the pane"
+    );
 }
 
 /// Walk a seeded ticket to `review` carrying `branch`, the shape `pr::eligible` inspects.
 fn to_review_with_branch(store: &Store, id: &str, branch: &str) {
     let id = TicketId(id.into());
-    ops::apply(store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
-    ops::apply(store, None, Op::StampWorktree { id: id.clone(), branch: branch.into(), path: "/tmp/unused".into() }).unwrap();
-    ops::apply(store, None, Op::MoveTicket { id, to: ColumnId::Review, position: None, owner: None, branch: None }).unwrap();
+    ops::apply(
+        store,
+        None,
+        Op::Claim {
+            id: id.clone(),
+            agent: "claude".into(),
+        },
+    )
+    .unwrap();
+    ops::apply(
+        store,
+        None,
+        Op::StampWorktree {
+            id: id.clone(),
+            branch: branch.into(),
+            path: "/tmp/unused".into(),
+        },
+    )
+    .unwrap();
+    ops::apply(
+        store,
+        None,
+        Op::MoveTicket {
+            id,
+            to: ColumnId::Review,
+            position: None,
+            owner: None,
+            branch: None,
+        },
+    )
+    .unwrap();
 }
 
 /// Walk a seeded ticket all the way to `done` carrying `branch` — the merged-badge shape.
 fn to_done_with_branch(store: &Store, id: &str, branch: &str) {
     to_review_with_branch(store, id, branch);
-    ops::apply(store, None, Op::MoveTicket { id: TicketId(id.into()), to: ColumnId::Done, position: None, owner: None, branch: None })
-        .unwrap();
+    ops::apply(
+        store,
+        None,
+        Op::MoveTicket {
+            id: TicketId(id.into()),
+            to: ColumnId::Done,
+            position: None,
+            owner: None,
+            branch: None,
+        },
+    )
+    .unwrap();
 }
 
 #[tokio::test]
@@ -626,7 +944,22 @@ async fn the_create_pr_button_tracks_eligibility_live() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     git(repo, &["init", "-q", "-b", "main"]).unwrap();
-    git(repo, &["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "seed"]).unwrap();
+    git(
+        repo,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "seed",
+        ],
+    )
+    .unwrap();
     git(repo, &["branch", "k-1/work"]).unwrap();
     let store = Store::at(repo.join(".kanban"));
     store.init().unwrap();
@@ -705,23 +1038,47 @@ async fn the_view_diff_button_and_endpoint_work_without_a_remote() {
     let res = router.clone().oneshot(get("/ui/ticket/K-1/diff")).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     let diff = body_text(res).await;
-    assert!(diff.contains("f.rs") && diff.contains("println!"), "the diff names the changed file and its hunk: {diff}");
+    assert!(
+        diff.contains("f.rs") && diff.contains("println!"),
+        "the diff names the changed file and its hunk: {diff}"
+    );
     // File TOC (K-44): a nav listing files, a per-file anchor id, and the collapsible <details> wrapper.
     assert!(diff.contains("diff-toc"), "the diff has a file-list TOC: {diff}");
-    assert!(diff.contains("id=\"f0\"") && diff.contains("href=\"#f0\""), "each file has an anchor the TOC links to: {diff}");
+    assert!(
+        diff.contains("id=\"f0\"") && diff.contains("href=\"#f0\""),
+        "each file has an anchor the TOC links to: {diff}"
+    );
     assert!(diff.contains("<details"), "each file is a collapsible <details>: {diff}");
 
     // Inline comments (K-46) anchor on these three attributes alone: the ticket, the file, and the line. Nothing reads
     // them back server-side, so this is the only place their absence would ever be noticed.
-    assert!(diff.contains("data-ticket=\"K-1\""), "the diff names the ticket its comments belong to: {diff}");
-    assert!(diff.contains("data-path=\"f.rs\""), "each file carries its path for the comment reference: {diff}");
-    assert!(diff.contains("data-new=\"2\""), "added lines carry their new-file line number: {diff}");
-    assert!(diff.contains("data-old=\"1\""), "deleted lines carry their old-file line number: {diff}");
+    assert!(
+        diff.contains("data-ticket=\"K-1\""),
+        "the diff names the ticket its comments belong to: {diff}"
+    );
+    assert!(
+        diff.contains("data-path=\"f.rs\""),
+        "each file carries its path for the comment reference: {diff}"
+    );
+    assert!(
+        diff.contains("data-new=\"2\""),
+        "added lines carry their new-file line number: {diff}"
+    );
+    assert!(
+        diff.contains("data-old=\"1\""),
+        "deleted lines carry their old-file line number: {diff}"
+    );
 
     // The review pane is where the comments land, so it offers its own way into the diff and says which ticket it is.
     let review = body_text(router.clone().oneshot(get("/ui/ticket/K-1/review")).await.unwrap()).await;
-    assert!(review.contains("data-ticket=\"K-1\""), "the verdict form names its ticket: {review}");
-    assert!(review.contains("View diff"), "the review pane offers the diff its comments are written in: {review}");
+    assert!(
+        review.contains("data-ticket=\"K-1\""),
+        "the verdict form names its ticket: {review}"
+    );
+    assert!(
+        review.contains("View diff"),
+        "the review pane offers the diff its comments are written in: {review}"
+    );
 
     // A todo ticket has no branch: no button, and the endpoint refuses with a toast rather than an empty modal.
     seed_ticket(&store, "Still todo");
@@ -768,7 +1125,10 @@ async fn done_tickets_all_show_whatever_their_branch_did() {
     // Both are done, so both show: done is the record of what shipped, with no badge and no hidden-card hint.
     let html = body_text(router.clone().oneshot(get("/ui/board")).await.unwrap()).await;
     assert!(html.contains("Merged and deleted") && html.contains("Branch still alive"), "{html}");
-    assert!(!html.contains("merged</span>") && !html.contains("#a855f7"), "no merged badge survives: {html}");
+    assert!(
+        !html.contains("merged</span>") && !html.contains("#a855f7"),
+        "no merged badge survives: {html}"
+    );
     assert!(!html.contains("+1 merged"), "no hidden-card hint: {html}");
     assert!(html.contains(r#"data-draggable="true""#), "an unfiltered board still drags: {html}");
 
@@ -784,9 +1144,39 @@ async fn the_review_column_renders_with_pr_and_branch_state_badges() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     git(repo, &["init", "-q", "-b", "main"]).unwrap();
-    git(repo, &["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "seed"]).unwrap();
+    git(
+        repo,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "seed",
+        ],
+    )
+    .unwrap();
     git(repo, &["checkout", "-q", "-b", "k-1/alive"]).unwrap();
-    git(repo, &["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "work"]).unwrap();
+    git(
+        repo,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "work",
+        ],
+    )
+    .unwrap();
     git(repo, &["checkout", "-q", "main"]).unwrap();
     let store = Store::at(repo.join(".kanban"));
     store.init().unwrap();
@@ -799,7 +1189,12 @@ async fn the_review_column_renders_with_pr_and_branch_state_badges() {
         None,
         Op::SetPr {
             id: TicketId("K-1".into()),
-            pr: Some(PrRef { number: 7, url: "https://github.com/x/y/pull/7".into(), state: PrState::Open, merged_commit: None }),
+            pr: Some(PrRef {
+                number: 7,
+                url: "https://github.com/x/y/pull/7".into(),
+                state: PrState::Open,
+                merged_commit: None,
+            }),
         },
     )
     .unwrap();
@@ -810,14 +1205,22 @@ async fn the_review_column_renders_with_pr_and_branch_state_badges() {
         None,
         Op::SetPr {
             id: TicketId("K-2".into()),
-            pr: Some(PrRef { number: 8, url: "https://github.com/x/y/pull/8".into(), state: PrState::Merged, merged_commit: Some("0".repeat(40)) }),
+            pr: Some(PrRef {
+                number: 8,
+                url: "https://github.com/x/y/pull/8".into(),
+                state: PrState::Merged,
+                merged_commit: Some("0".repeat(40)),
+            }),
         },
     )
     .unwrap();
 
     let html = body_text(router.clone().oneshot(get("/ui/board")).await.unwrap()).await;
-    let (doing_at, review_at, done_at) =
-        (html.find(">Doing<").unwrap(), html.find(">Review<").unwrap(), html.find(">Done<").unwrap());
+    let (doing_at, review_at, done_at) = (
+        html.find(">Doing<").unwrap(),
+        html.find(">Review<").unwrap(),
+        html.find(">Done<").unwrap(),
+    );
     assert!(doing_at < review_at && review_at < done_at, "review sits between doing and done");
     assert!(html.contains(">PR #7</a>"), "{html}");
     assert!(html.contains("PR #8 merged — pull main"), "{html}");
@@ -826,7 +1229,10 @@ async fn the_review_column_renders_with_pr_and_branch_state_badges() {
 
     // The detail pane links the PR and offers Discard on review tickets.
     let html = body_text(router.clone().oneshot(get("/ui/ticket/K-1")).await.unwrap()).await;
-    assert!(html.contains(r#"href="https://github.com/x/y/pull/7""#) && html.contains("/ui/ticket/K-1/discard"), "{html}");
+    assert!(
+        html.contains(r#"href="https://github.com/x/y/pull/7""#) && html.contains("/ui/ticket/K-1/discard"),
+        "{html}"
+    );
 }
 
 #[tokio::test]
@@ -836,7 +1242,17 @@ async fn discard_closes_the_ticket_and_keeps_dependents_blocked_on_the_board() {
     ops::apply(
         &store,
         None,
-        Op::CreateTicket { title: "Blocked follow-up".into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![TicketId("K-1".into())], status: Status::Ready, model: None, effort: None, auto_merge: false },
+        Op::CreateTicket {
+            title: "Blocked follow-up".into(),
+            body: String::new(),
+            epic: None,
+            labels: vec![],
+            depends_on: vec![TicketId("K-1".into())],
+            status: Status::Ready,
+            model: None,
+            effort: None,
+            auto_merge: false,
+        },
     )
     .unwrap();
     to_review_with_branch(&store, "K-1", "k-1/doomed");
@@ -848,7 +1264,10 @@ async fn discard_closes_the_ticket_and_keeps_dependents_blocked_on_the_board() {
 
     let html = body_text(router.clone().oneshot(get("/ui/board")).await.unwrap()).await;
     assert!(html.contains(">discarded</span>") && html.contains(">blocked</span>"), "{html}");
-    assert!(!html.contains(">merged</span>"), "no card wears a merged badge — the surface is gone: {html}");
+    assert!(
+        !html.contains(">merged</span>"),
+        "no card wears a merged badge — the surface is gone: {html}"
+    );
 
     // Discarding anything not in review refuses with a toast.
     let res = router.oneshot(post("/ui/ticket/K-2/discard", 6, "")).await.unwrap();
@@ -859,12 +1278,26 @@ async fn discard_closes_the_ticket_and_keeps_dependents_blocked_on_the_board() {
 async fn dragging_a_card_to_review_closes_it_out() {
     let (_dir, router, store) = test_app();
     seed_ticket(&store, "Dragged along");
-    ops::apply(&store, None, Op::Claim { id: TicketId("K-1".into()), agent: "claude".into() }).unwrap();
+    ops::apply(
+        &store,
+        None,
+        Op::Claim {
+            id: TicketId("K-1".into()),
+            agent: "claude".into(),
+        },
+    )
+    .unwrap();
 
-    let res = router.oneshot(post("/ui/ticket/K-1/move", 2, "to=review&position=0")).await.unwrap();
+    let res = router
+        .oneshot(post("/ui/ticket/K-1/move", 2, "to=review&position=0"))
+        .await
+        .unwrap();
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
     let board = store.read_board().unwrap();
-    assert!(matches!(board.tickets[0].column, claude_kanban::store::model::Column::Review { .. }));
+    assert!(matches!(
+        board.tickets[0].column,
+        claude_kanban::store::model::Column::Review { .. }
+    ));
     assert!(store.read_claims().unwrap().is_empty(), "entering review drops the claim");
 }
 
@@ -875,22 +1308,52 @@ async fn dropping_a_card_into_review_observes_its_branch_tip() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     git(repo, &["init", "-q", "-b", "main"]).unwrap();
-    git(repo, &["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "seed"]).unwrap();
+    git(
+        repo,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "seed",
+        ],
+    )
+    .unwrap();
     git(repo, &["branch", "k-1/dragged"]).unwrap();
     let store = Store::at(repo.join(".kanban"));
     store.init().unwrap();
     let router = router_for(&store);
 
     seed_ticket(&store, "Dragged to review");
-    ops::apply(&store, None, Op::Claim { id: TicketId("K-1".into()), agent: "claude".into() }).unwrap();
     ops::apply(
         &store,
         None,
-        Op::StampWorktree { id: TicketId("K-1".into()), branch: "k-1/dragged".into(), path: "/tmp/unused".into() },
+        Op::Claim {
+            id: TicketId("K-1".into()),
+            agent: "claude".into(),
+        },
+    )
+    .unwrap();
+    ops::apply(
+        &store,
+        None,
+        Op::StampWorktree {
+            id: TicketId("K-1".into()),
+            branch: "k-1/dragged".into(),
+            path: "/tmp/unused".into(),
+        },
     )
     .unwrap();
 
-    let res = router.oneshot(post("/ui/ticket/K-1/move", 3, "to=review&position=0")).await.unwrap();
+    let res = router
+        .oneshot(post("/ui/ticket/K-1/move", 3, "to=review&position=0"))
+        .await
+        .unwrap();
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
     let tip = git(repo, &["rev-parse", "k-1/dragged"]).unwrap();
     assert_eq!(store.read_land_state().unwrap().get("k-1/dragged"), Some(&tip));
@@ -903,7 +1366,22 @@ async fn done_cards_carry_no_merged_badge() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     git(repo, &["init", "-q", "-b", "main"]).unwrap();
-    git(repo, &["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "seed"]).unwrap();
+    git(
+        repo,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "seed",
+        ],
+    )
+    .unwrap();
     let store = Store::at(repo.join(".kanban"));
     store.init().unwrap();
     let router = router_for(&store);
@@ -921,8 +1399,11 @@ async fn done_cards_carry_no_merged_badge() {
     // The daemon's branch name lands on the column by hand-edit shape: no local branch of that name exists.
     store
         .mutate(None, |board, _| {
-            board.tickets[0].column =
-                claude_kanban::store::model::Column::Done { branch: Some("myrepo-issue0042".into()), completed_at: chrono::Utc::now(), discarded: false };
+            board.tickets[0].column = claude_kanban::store::model::Column::Done {
+                branch: Some("myrepo-issue0042".into()),
+                completed_at: chrono::Utc::now(),
+                discarded: false,
+            };
             Ok::<_, claude_kanban::store::StoreError>(())
         })
         .unwrap();
@@ -936,9 +1417,28 @@ async fn done_cards_carry_no_merged_badge() {
 async fn a_flagged_delegated_ticket_wears_the_minesweeper_warning() {
     let (_dir, router, store) = test_app();
     seed_ticket(&store, "delegated and stuck");
-    ops::apply(&store, None, Op::Claim { id: TicketId("K-1".into()), agent: "minesweeper".into() }).unwrap();
-    let flagged = External { flag: Some("minesweeperFailed".into()), ..External::github_issue(42) };
-    ops::apply(&store, None, Op::BindExternal { id: TicketId("K-1".into()), external: Some(flagged) }).unwrap();
+    ops::apply(
+        &store,
+        None,
+        Op::Claim {
+            id: TicketId("K-1".into()),
+            agent: "minesweeper".into(),
+        },
+    )
+    .unwrap();
+    let flagged = External {
+        flag: Some("minesweeperFailed".into()),
+        ..External::github_issue(42)
+    };
+    ops::apply(
+        &store,
+        None,
+        Op::BindExternal {
+            id: TicketId("K-1".into()),
+            external: Some(flagged),
+        },
+    )
+    .unwrap();
 
     let html = body_text(router.clone().oneshot(get("/ui/board")).await.unwrap()).await;
     assert!(html.contains("⚠ minesweeperFailed"), "the card wears the flag: {html}");
@@ -998,13 +1498,22 @@ async fn the_default_port_hunts_but_an_explicit_port_fails_loudly() {
     });
     tokio::spawn(async move { axum::serve(listener, router(app)).await });
     let mut conn = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
-    conn.write_all(format!("GET /ui/board HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+    conn.write_all(format!("GET /ui/board HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n").as_bytes())
+        .await
+        .unwrap();
     let mut response = String::new();
     conn.read_to_string(&mut response).await.unwrap();
-    assert!(response.starts_with("HTTP/1.1 200"), "the hunted port must answer /ui/board: {response}");
+    assert!(
+        response.starts_with("HTTP/1.1 200"),
+        "the hunted port must answer /ui/board: {response}"
+    );
 
     // An explicit port that is taken stays a loud failure, hinting at the live serve the pid file names.
-    std::fs::write(store.dir().join("serve.pid"), format!(r#"{{"pid": {}, "port": {port}}}"#, std::process::id())).unwrap();
+    std::fs::write(
+        store.dir().join("serve.pid"),
+        format!(r#"{{"pid": {}, "port": {port}}}"#, std::process::id()),
+    )
+    .unwrap();
     let err = bind_listener(&store, Some(taken), taken).await.unwrap_err();
     assert!(format!("{err:#}").contains("already seems to be running"), "{err:#}");
 
@@ -1048,20 +1557,40 @@ async fn the_settings_pane_round_trips_the_config_and_refuses_garbage() {
     assert!(config.port.is_none(), "empty port stays 'nobody chose'");
     assert!(config.minesweeper(), "the checkbox posted 'on'");
     assert_eq!(config.minesweeper_label(), "tryFix");
-    assert_eq!(config.minesweeper_flag_labels(), vec!["minesweeperFailed", "broken"], "comma-separated input splits");
-    assert_eq!(config.models, vec!["opus", "venice/zai-org-glm-5-2"], "newline-separated textarea splits");
+    assert_eq!(
+        config.minesweeper_flag_labels(),
+        vec!["minesweeperFailed", "broken"],
+        "comma-separated input splits"
+    );
+    assert_eq!(
+        config.models,
+        vec!["opus", "venice/zai-org-glm-5-2"],
+        "newline-separated textarea splits"
+    );
     assert_eq!(config.implement_model(), Some("venice/deepseek-v4-flash".to_owned()));
-    assert_eq!(config.refine_model(), Some("venice/z-ai-glm-5-3".to_owned()), "surrounding whitespace is trimmed");
+    assert_eq!(
+        config.refine_model(),
+        Some("venice/z-ai-glm-5-3".to_owned()),
+        "surrounding whitespace is trimmed"
+    );
 
     // A non-numeric number is a 422 toast and the file stays as-saved.
     let res = router.clone().oneshot(post("/ui/settings", 2, "max_workers=lots")).await.unwrap();
     assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(res.headers()["hx-retarget"], "#toasts");
-    assert_eq!(claude_kanban::config::Config::load(store.dir()).unwrap().max_workers(), 3, "bad input must not clobber the file");
+    assert_eq!(
+        claude_kanban::config::Config::load(store.dir()).unwrap().max_workers(),
+        3,
+        "bad input must not clobber the file"
+    );
 
     // A form without the checkbox (unchecked boxes post nothing) turns delegation back off — and the whole-file save
     // means an emptied models textarea clears the list back to the defaults.
-    let res = router.clone().oneshot(post("/ui/settings", 3, "minesweeper_label=autofix")).await.unwrap();
+    let res = router
+        .clone()
+        .oneshot(post("/ui/settings", 3, "minesweeper_label=autofix"))
+        .await
+        .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     let config = claude_kanban::config::Config::load(store.dir()).unwrap();
     assert!(!config.minesweeper(), "unchecked box means off");
@@ -1070,7 +1599,12 @@ async fn the_settings_pane_round_trips_the_config_and_refuses_garbage() {
     assert_eq!(config.refine_model(), None);
 
     // The guard covers settings like every mutation: no version header, no write.
-    let req = Request::builder().method("POST").uri("/ui/settings").header(header::HOST, HOST).body(Body::empty()).unwrap();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/ui/settings")
+        .header(header::HOST, HOST)
+        .body(Body::empty())
+        .unwrap();
     assert_eq!(router.oneshot(req).await.unwrap().status(), StatusCode::FORBIDDEN);
 }
 
@@ -1085,12 +1619,23 @@ async fn the_model_datalists_follow_the_configured_vocabulary() {
     assert!(html.contains(r#"placeholder="opus""#), "{html}");
 
     // A configured list replaces them — create form and edit fragment alike, no restart.
-    store.write_config(&claude_kanban::config::Config { models: vec!["venice/zai-org-glm-5-2".into()], ..Default::default() }).unwrap();
+    store
+        .write_config(&claude_kanban::config::Config {
+            models: vec!["venice/zai-org-glm-5-2".into()],
+            ..Default::default()
+        })
+        .unwrap();
     let html = body_text(router.clone().oneshot(get("/")).await.unwrap()).await;
-    assert!(html.contains(r#"<option value="venice/zai-org-glm-5-2">"#) && !html.contains(r#"<option value="sonnet">"#), "{html}");
+    assert!(
+        html.contains(r#"<option value="venice/zai-org-glm-5-2">"#) && !html.contains(r#"<option value="sonnet">"#),
+        "{html}"
+    );
     assert!(html.contains(r#"placeholder="venice/zai-org-glm-5-2""#), "{html}");
     let html = body_text(router.oneshot(get("/ui/ticket/K-1/edit")).await.unwrap()).await;
-    assert!(html.contains(r#"<option value="venice/zai-org-glm-5-2">"#) && !html.contains(r#"<option value="sonnet">"#), "{html}");
+    assert!(
+        html.contains(r#"<option value="venice/zai-org-glm-5-2">"#) && !html.contains(r#"<option value="sonnet">"#),
+        "{html}"
+    );
 }
 
 #[tokio::test]
@@ -1107,7 +1652,22 @@ async fn the_poller_lands_merged_review_tickets_and_stops_on_shutdown() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     git(repo, &["init", "-q", "-b", "main"]).unwrap();
-    git(repo, &["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "seed"]).unwrap();
+    git(
+        repo,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "seed",
+        ],
+    )
+    .unwrap();
     git(repo, &["branch", "k-1/work"]).unwrap(); // at main's tip: already an ancestor, i.e. merged
     let store = Store::at(repo.join(".kanban"));
     store.init().unwrap();
@@ -1126,12 +1686,18 @@ async fn the_poller_lands_merged_review_tickets_and_stops_on_shutdown() {
     assert!(version > 0);
     let board = store.read_board().unwrap();
     assert!(
-        matches!(board.tickets[0].column, claude_kanban::store::model::Column::Done { discarded: false, .. }),
+        matches!(
+            board.tickets[0].column,
+            claude_kanban::store::model::Column::Done { discarded: false, .. }
+        ),
         "the poller's sweep lands the merged ticket"
     );
 
     shutdown.cancel();
-    tokio::time::timeout(std::time::Duration::from_secs(5), poller).await.expect("cancellation must end the poller").unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), poller)
+        .await
+        .expect("cancellation must end the poller")
+        .unwrap();
 }
 
 #[tokio::test]
@@ -1181,7 +1747,10 @@ async fn the_auto_merge_filter_splits_the_board_both_ways() {
     assert!(!html.contains("Waits for a human"), "an unflagged card must go: {html}");
 
     let html = body_text(router.oneshot(get("/ui/board?q=auto-merge:false")).await.unwrap()).await;
-    assert!(html.contains("Waits for a human"), "false selects the rest, rather than nothing: {html}");
+    assert!(
+        html.contains("Waits for a human"),
+        "false selects the rest, rather than nothing: {html}"
+    );
     assert!(!html.contains("Merges itself"), "and only the rest: {html}");
 }
 
@@ -1189,31 +1758,53 @@ async fn the_auto_merge_filter_splits_the_board_both_ways() {
 #[tokio::test]
 async fn auto_merge_true_finds_a_ticket_that_inherits_the_flag_from_its_epic() {
     let (_dir, router, store) = test_app();
-    let created =
-        ops::apply(&store, None, Op::CreateEpic { title: "Chores".into(), color: None, body: String::new(), status: Status::Ready, auto_merge: true })
-            .unwrap();
+    let created = ops::apply(
+        &store,
+        None,
+        Op::CreateEpic {
+            title: "Chores".into(),
+            color: None,
+            body: String::new(),
+            status: Status::Ready,
+            auto_merge: true,
+        },
+    )
+    .unwrap();
     let epic = EpicId(created.created_ids[0].clone());
     let id = TicketId(seed_ticket(&store, "Inherits from its epic"));
-    let patch = ops::TicketPatch { epic: Some(Some(epic)), ..ops::TicketPatch::default() };
+    let patch = ops::TicketPatch {
+        epic: Some(Some(epic)),
+        ..ops::TicketPatch::default()
+    };
     ops::apply(&store, None, Op::UpdateTicket { id: id.clone(), patch }).unwrap();
     seed_auto_merging(&store, "Filed under nothing", false);
 
     let html = body_text(router.oneshot(get("/ui/board?q=auto-merge:true")).await.unwrap()).await;
-    assert!(html.contains("Inherits from its epic"), "the epic's flag must reach its ticket: {html}");
-    assert!(!store.read_board().unwrap().ticket(&id).unwrap().auto_merge, "though the ticket's own flag stays false");
-    assert!(!html.contains("Filed under nothing"), "a ticket under no epic keeps its own answer: {html}");
+    assert!(
+        html.contains("Inherits from its epic"),
+        "the epic's flag must reach its ticket: {html}"
+    );
+    assert!(
+        !store.read_board().unwrap().ticket(&id).unwrap().auto_merge,
+        "though the ticket's own flag stays false"
+    );
+    assert!(
+        !html.contains("Filed under nothing"),
+        "a ticket under no epic keeps its own answer: {html}"
+    );
 }
 
 // ---- in-app documentation viewer -------------------------------------------------------------------------------------
 
 mod docs_ui {
-    use super::{HOST, body_text, get, test_app};
     use axum::{
         body::Body,
         http::{Request, StatusCode, header},
     };
     use http_body_util::BodyExt;
     use tower::ServiceExt;
+
+    use super::{HOST, body_text, get, test_app};
 
     /// The three seed docs shipped under `docs/`. Kept as a shared expectation so a fourth file added later fails the
     /// TOC test loudly rather than being silently omitted.
@@ -1244,7 +1835,10 @@ mod docs_ui {
         assert!(html.contains(r#"data-md-src="/raw/docs/getting-started.md""#), "{html}");
         assert!(html.contains("prose"), "the article carries the prose class for typography: {html}");
         // The whole point of client-side rendering is that the server never emits the markdown text — a smoke check.
-        assert!(!html.contains("# Getting started"), "the H1 belongs to the client-side render, not the fragment: {html}");
+        assert!(
+            !html.contains("# Getting started"),
+            "the H1 belongs to the client-side render, not the fragment: {html}"
+        );
     }
 
     #[tokio::test]
@@ -1264,7 +1858,11 @@ mod docs_ui {
         let res = router.oneshot(get("/docs/page/foo/bar")).await.unwrap();
         // Axum's matchit rejects the nested path against `/docs/page/{name}` (a single segment), so this may 404 at
         // the routing layer rather than the handler — either way, nothing is served.
-        assert!(matches!(res.status(), StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED), "unexpected {}", res.status());
+        assert!(
+            matches!(res.status(), StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED),
+            "unexpected {}",
+            res.status()
+        );
     }
 
     #[tokio::test]
@@ -1275,7 +1873,10 @@ mod docs_ui {
         let ct = res.headers().get(header::CONTENT_TYPE).unwrap().to_str().unwrap().to_owned();
         assert_eq!(ct, "text/plain; charset=utf-8");
         let body = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
-        assert!(body.starts_with("# Getting started"), "the raw endpoint returns markdown untouched: {body:.80}");
+        assert!(
+            body.starts_with("# Getting started"),
+            "the raw endpoint returns markdown untouched: {body:.80}"
+        );
     }
 
     #[tokio::test]
@@ -1307,7 +1908,11 @@ mod docs_ui {
     async fn docs_routes_require_the_host_header() {
         let (_dir, router, _store) = test_app();
         // Same middleware guards every route; one 403 is enough to prove docs isn't wired around it.
-        let req = Request::builder().uri("/docs").header(header::HOST, "evil.example").body(Body::empty()).unwrap();
+        let req = Request::builder()
+            .uri("/docs")
+            .header(header::HOST, "evil.example")
+            .body(Body::empty())
+            .unwrap();
         let res = router.oneshot(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::FORBIDDEN);
         // Silence the unused-constant warning that would fire for a module with no other reference to HOST.
@@ -1327,15 +1932,27 @@ async fn the_review_pane_renders_for_a_review_ticket_and_not_otherwise() {
     let res = router.clone().oneshot(get("/ui/ticket/K-1/review")).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     let pane = body_text(res).await;
-    assert!(pane.contains("Request changes") && pane.contains("Accept") && pane.contains("Discard"), "{pane}");
+    assert!(
+        pane.contains("Request changes") && pane.contains("Accept") && pane.contains("Discard"),
+        "{pane}"
+    );
     assert!(pane.contains(r#"name="comment""#), "the verdicts share one comment box: {pane}");
-    assert!(pane.contains("k-1/done-ish"), "the reviewer needs to know which branch they are judging: {pane}");
+    assert!(
+        pane.contains("k-1/done-ish"),
+        "the reviewer needs to know which branch they are judging: {pane}"
+    );
 
     // The detail pane offers the tab only for a review ticket.
     let detail = body_text(router.clone().oneshot(get("/ui/ticket/K-1")).await.unwrap()).await;
-    assert!(detail.contains("/ui/ticket/K-1/review"), "a review ticket's pane links its verdict view: {detail}");
+    assert!(
+        detail.contains("/ui/ticket/K-1/review"),
+        "a review ticket's pane links its verdict view: {detail}"
+    );
     let todo = body_text(router.clone().oneshot(get("/ui/ticket/K-2")).await.unwrap()).await;
-    assert!(!todo.contains("/ui/ticket/K-2/review"), "a todo ticket has nothing to review: {todo}");
+    assert!(
+        !todo.contains("/ui/ticket/K-2/review"),
+        "a todo ticket has nothing to review: {todo}"
+    );
 
     // And a todo ticket's pane is refused outright rather than rendered empty.
     let res = router.oneshot(get("/ui/ticket/K-2/review")).await.unwrap();
@@ -1352,19 +1969,37 @@ async fn the_panes_put_their_actions_above_the_reading_matter() {
     let (_dir, router, store) = test_app();
     seed_ticket(&store, "Long-running");
     to_review_with_branch(&store, "K-1", "k-1/long");
-    ops::apply(&store, None, Op::AddNote { id: TicketId("K-1".into()), text: "a note from the worker".into(), author: None }).unwrap();
+    ops::apply(
+        &store,
+        None,
+        Op::AddNote {
+            id: TicketId("K-1".into()),
+            text: "a note from the worker".into(),
+            author: None,
+        },
+    )
+    .unwrap();
 
     let detail = body_text(router.clone().oneshot(get("/ui/ticket/K-1")).await.unwrap()).await;
     let switch = detail.find("/ui/ticket/K-1/review").expect("the view switch");
     let actions = detail.find("/ui/ticket/K-1/edit").expect("the action row");
     let log = detail.find("a note from the worker").expect("the progress log");
-    assert!(switch < actions && actions < log, "the detail pane's actions sit under the switch, above the log: {detail}");
+    assert!(
+        switch < actions && actions < log,
+        "the detail pane's actions sit under the switch, above the log: {detail}"
+    );
 
     let pane = body_text(router.oneshot(get("/ui/ticket/K-1/review")).await.unwrap()).await;
     let accept = pane.find("/ui/ticket/K-1/review/accept").expect("Accept");
     let discard = pane.find("/ui/ticket/K-1/discard").expect("Discard");
-    assert!(accept < pane.find("k-1/long").expect("the branch"), "the verdicts lead the review pane: {pane}");
-    assert!(!pane[accept..discard].contains("hx-confirm"), "neither reversible verdict asks twice: {pane}");
+    assert!(
+        accept < pane.find("k-1/long").expect("the branch"),
+        "the verdicts lead the review pane: {pane}"
+    );
+    assert!(
+        !pane[accept..discard].contains("hx-confirm"),
+        "neither reversible verdict asks twice: {pane}"
+    );
     assert!(pane[discard..].contains("hx-confirm"), "the irreversible one still does: {pane}");
 }
 
@@ -1374,10 +2009,21 @@ async fn an_external_review_ticket_gets_no_review_pane() {
     let (_dir, router, store) = test_app();
     seed_ticket(&store, "Delegated");
     to_review_with_branch(&store, "K-1", "k-1/elsewhere");
-    ops::apply(&store, None, Op::BindExternal { id: TicketId("K-1".into()), external: Some(External::github_issue(4)) }).unwrap();
+    ops::apply(
+        &store,
+        None,
+        Op::BindExternal {
+            id: TicketId("K-1".into()),
+            external: Some(External::github_issue(4)),
+        },
+    )
+    .unwrap();
 
     let detail = body_text(router.clone().oneshot(get("/ui/ticket/K-1")).await.unwrap()).await;
-    assert!(!detail.contains("/ui/ticket/K-1/review"), "no verdict tab on delegated work: {detail}");
+    assert!(
+        !detail.contains("/ui/ticket/K-1/review"),
+        "no verdict tab on delegated work: {detail}"
+    );
 
     let res = router.oneshot(get("/ui/ticket/K-1/review")).await.unwrap();
     assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
@@ -1389,17 +2035,28 @@ async fn request_changes_sends_the_card_back_to_doing_with_the_comment_as_a_note
     seed_ticket(&store, "Needs another pass");
     to_review_with_branch(&store, "K-1", "k-1/again");
 
-    let res = router.clone().oneshot(post("/ui/ticket/K-1/review/changes", 4, "comment=the+naming+is+off")).await.unwrap();
+    let res = router
+        .clone()
+        .oneshot(post("/ui/ticket/K-1/review/changes", 4, "comment=the+naming+is+off"))
+        .await
+        .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     let pane = body_text(res).await;
-    assert!(pane.contains(">changes requested</span>"), "the pane badges the outstanding feedback: {pane}");
+    assert!(
+        pane.contains(">changes requested</span>"),
+        "the pane badges the outstanding feedback: {pane}"
+    );
 
     let board = store.read_board().unwrap();
     let t = board.ticket(&TicketId("K-1".into())).unwrap();
     assert_eq!(t.column.id(), ColumnId::Doing);
     assert!(t.changes_requested);
     assert_eq!(t.notes.last().unwrap().text, "changes requested: the naming is off");
-    assert_eq!(t.notes.last().unwrap().author.as_deref(), Some("tester"), "the browser user owns the verdict");
+    assert_eq!(
+        t.notes.last().unwrap().author.as_deref(),
+        Some("tester"),
+        "the browser user owns the verdict"
+    );
 
     // The card wears it too, so an unclaimed doing card waiting for rework reads differently from an unstarted one.
     let html = body_text(router.clone().oneshot(get("/ui/board")).await.unwrap()).await;
@@ -1409,7 +2066,10 @@ async fn request_changes_sends_the_card_back_to_doing_with_the_comment_as_a_note
     seed_ticket(&store, "Second");
     to_review_with_branch(&store, "K-2", "k-2/x");
     let version = store.read_board().unwrap().version;
-    let res = router.oneshot(post("/ui/ticket/K-2/review/changes", version, "comment=+++")).await.unwrap();
+    let res = router
+        .oneshot(post("/ui/ticket/K-2/review/changes", version, "comment=+++"))
+        .await
+        .unwrap();
     assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
 
@@ -1423,31 +2083,63 @@ async fn accept_arms_the_landing_and_leaves_the_card_in_review() {
     ops::apply(
         &store,
         None,
-        Op::CreateTicket { title: "Waits on it".into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![TicketId("K-1".into())], status: Status::Ready, model: None, effort: None, auto_merge: false },
+        Op::CreateTicket {
+            title: "Waits on it".into(),
+            body: String::new(),
+            epic: None,
+            labels: vec![],
+            depends_on: vec![TicketId("K-1".into())],
+            status: Status::Ready,
+            model: None,
+            effort: None,
+            auto_merge: false,
+        },
     )
     .unwrap();
     to_review_with_branch(&store, "K-1", "k-1/good");
 
     let version = store.read_board().unwrap().version;
-    let res = router.clone().oneshot(post("/ui/ticket/K-1/review/accept", version, "comment=ship+it")).await.unwrap();
+    let res = router
+        .clone()
+        .oneshot(post("/ui/ticket/K-1/review/accept", version, "comment=ship+it"))
+        .await
+        .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     let pane = body_text(res).await;
-    assert!(pane.contains("Accepted and waiting to land"), "the answer is the review pane, saying what it waits for: {pane}");
+    assert!(
+        pane.contains("Accepted and waiting to land"),
+        "the answer is the review pane, saying what it waits for: {pane}"
+    );
 
     let board = store.read_board().unwrap();
     let t = board.ticket(&TicketId("K-1".into())).unwrap();
-    assert_eq!(t.column.id(), ColumnId::Review, "accepting never moves the card — done still means landed");
+    assert_eq!(
+        t.column.id(),
+        ColumnId::Review,
+        "accepting never moves the card — done still means landed"
+    );
     assert!(t.accepted);
     assert!(!t.landing_blocked);
     // The comment is review, not progress: it rides on the verdict entry of the review log and stays out of the notes.
     let last = t.review.last().unwrap();
-    assert!(matches!(&last.kind, ReviewKind::Verdict { verdict: Verdict::Accept, text } if text == "ship it"), "{:?}", t.review);
+    assert!(
+        matches!(&last.kind, ReviewKind::Verdict { verdict: Verdict::Accept, text } if text == "ship it"),
+        "{:?}",
+        t.review
+    );
     assert_eq!(last.author, "tester");
     assert!(t.notes.iter().all(|n| n.text != "ship it"), "{:?}", t.notes);
-    assert!(t.notes.iter().any(|n| n.text.contains("accepted by tester")), "the verdict itself is on the record: {:?}", t.notes);
+    assert!(
+        t.notes.iter().any(|n| n.text.contains("accepted by tester")),
+        "the verdict itself is on the record: {:?}",
+        t.notes
+    );
 
     // The old hazard, gone: a dependent waits for the code to actually reach main, not for a reviewer's opinion.
-    assert!(claude_kanban::store::derive::blocked(board.ticket(&TicketId("K-2".into())).unwrap(), &board));
+    assert!(claude_kanban::store::derive::blocked(
+        board.ticket(&TicketId("K-2".into())).unwrap(),
+        &board
+    ));
 
     // And the card now advertises itself for landing.
     let html = body_text(router.oneshot(get("/ui/board")).await.unwrap()).await;
@@ -1469,19 +2161,56 @@ async fn an_accepted_ticket_is_offered_for_landing_until_it_is_taken_or_blocked(
     };
     assert_eq!(next(&store), None, "an unaccepted review ticket is nobody's to land");
 
-    ops::apply(&store, None, Op::AcceptReview { id: id.clone(), by: "tester".into(), review: VerdictReview::default() }).unwrap();
+    ops::apply(
+        &store,
+        None,
+        Op::AcceptReview {
+            id: id.clone(),
+            by: "tester".into(),
+            review: VerdictReview::default(),
+        },
+    )
+    .unwrap();
     assert_eq!(next(&store), Some(id.clone()), "accepted: the loop's first duty");
 
-    ops::apply(&store, None, Op::StartLanding { id: id.clone(), agent: "claude".into() }).unwrap();
+    ops::apply(
+        &store,
+        None,
+        Op::StartLanding {
+            id: id.clone(),
+            agent: "claude".into(),
+        },
+    )
+    .unwrap();
     assert_eq!(next(&store), None, "in flight: a second loop is not handed the same branch");
 
-    ops::apply(&store, None, Op::BlockLanding { id: id.clone(), reason: "conflicts in src/a.rs".into() }).unwrap();
+    ops::apply(
+        &store,
+        None,
+        Op::BlockLanding {
+            id: id.clone(),
+            reason: "conflicts in src/a.rs".into(),
+        },
+    )
+    .unwrap();
     assert_eq!(next(&store), None, "blocked: retrying the same conflict forever helps nobody");
     let note = store.read_board().unwrap().ticket(&id).unwrap().notes.last().unwrap().text.clone();
-    assert_eq!(note, "landing blocked: conflicts in src/a.rs", "the human is told exactly where to look");
+    assert_eq!(
+        note, "landing blocked: conflicts in src/a.rs",
+        "the human is told exactly where to look"
+    );
 
     // Only the human puts it back — and accepting again is that act.
-    ops::apply(&store, None, Op::AcceptReview { id: id.clone(), by: "tester".into(), review: VerdictReview::default() }).unwrap();
+    ops::apply(
+        &store,
+        None,
+        Op::AcceptReview {
+            id: id.clone(),
+            by: "tester".into(),
+            review: VerdictReview::default(),
+        },
+    )
+    .unwrap();
     assert_eq!(next(&store), Some(id));
 }
 
@@ -1494,14 +2223,45 @@ async fn the_board_shows_a_landing_in_flight_and_a_blocked_one() {
     to_review_with_branch(&store, "K-1", "k-1/now");
     to_review_with_branch(&store, "K-2", "k-2/refused");
     for id in ["K-1", "K-2"] {
-        ops::apply(&store, None, Op::AcceptReview { id: TicketId(id.into()), by: "tester".into(), review: VerdictReview::default() }).unwrap();
+        ops::apply(
+            &store,
+            None,
+            Op::AcceptReview {
+                id: TicketId(id.into()),
+                by: "tester".into(),
+                review: VerdictReview::default(),
+            },
+        )
+        .unwrap();
     }
-    ops::apply(&store, None, Op::StartLanding { id: TicketId("K-1".into()), agent: "claude".into() }).unwrap();
-    ops::apply(&store, None, Op::BlockLanding { id: TicketId("K-2".into()), reason: "conflicts in Cargo.toml".into() }).unwrap();
+    ops::apply(
+        &store,
+        None,
+        Op::StartLanding {
+            id: TicketId("K-1".into()),
+            agent: "claude".into(),
+        },
+    )
+    .unwrap();
+    ops::apply(
+        &store,
+        None,
+        Op::BlockLanding {
+            id: TicketId("K-2".into()),
+            reason: "conflicts in Cargo.toml".into(),
+        },
+    )
+    .unwrap();
 
     let html = body_text(router.clone().oneshot(get("/ui/board")).await.unwrap()).await;
-    assert!(html.contains("claude is landing this"), "an in-flight landing is visible, not idle-looking: {html}");
-    assert!(!html.contains("claude is working on this"), "…but it is not ownership — a review ticket has no owner: {html}");
+    assert!(
+        html.contains("claude is landing this"),
+        "an in-flight landing is visible, not idle-looking: {html}"
+    );
+    assert!(
+        !html.contains("claude is working on this"),
+        "…but it is not ownership — a review ticket has no owner: {html}"
+    );
     assert!(html.contains("⚠ landing blocked"), "{html}");
     assert!(html.contains("#ef4444"), "a blocked landing shades the card red: {html}");
 
@@ -1518,7 +2278,10 @@ async fn discard_folds_the_reviewers_comment_into_the_reason() {
     to_review_with_branch(&store, "K-1", "k-1/gone");
 
     let version = store.read_board().unwrap().version;
-    let res = router.oneshot(post("/ui/ticket/K-1/discard", version, "comment=replaced+by+K-9")).await.unwrap();
+    let res = router
+        .oneshot(post("/ui/ticket/K-1/discard", version, "comment=replaced+by+K-9"))
+        .await
+        .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
 
     let board = store.read_board().unwrap();
@@ -1529,7 +2292,13 @@ async fn discard_folds_the_reviewers_comment_into_the_reason() {
 /// Percent-encode a form value the way a browser would, so a JSON `inline` field survives the form body.
 fn enc(s: &str) -> String {
     s.bytes()
-        .map(|b| if b.is_ascii_alphanumeric() { char::from(b).to_string() } else { format!("%{b:02X}") })
+        .map(|b| {
+            if b.is_ascii_alphanumeric() {
+                char::from(b).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
         .collect()
 }
 
@@ -1545,23 +2314,43 @@ async fn a_verdict_files_inline_comments_as_review_entries() {
     let inline = r#"[{"path":"src/a.rs","line":7,"text":"nit"},{"path":"src/a.rs","line":3,"side":"old","text":"why gone?"}]"#;
     let version = store.read_board().unwrap().version;
     let form = format!("comment=&inline={}", enc(inline));
-    let res = router.clone().oneshot(post("/ui/ticket/K-1/review/changes", version, &form)).await.unwrap();
+    let res = router
+        .clone()
+        .oneshot(post("/ui/ticket/K-1/review/changes", version, &form))
+        .await
+        .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
 
     let board = store.read_board().unwrap();
     let t = board.ticket(&TicketId("K-1".into())).unwrap();
     assert_eq!(t.column.id(), ColumnId::Doing);
-    assert_eq!(t.notes.last().unwrap().text, "changes requested: - src/a.rs:7 — nit\n- src/a.rs:3 (old line) — why gone?");
+    assert_eq!(
+        t.notes.last().unwrap().text,
+        "changes requested: - src/a.rs:7 — nit\n- src/a.rs:3 (old line) — why gone?"
+    );
     let kinds: Vec<&ReviewKind> = t.review.iter().map(|e| &e.kind).collect();
     assert_eq!(kinds.len(), 3, "{:?}", t.review);
     assert!(matches!(kinds[0], ReviewKind::Inline { path, line: 7, text, .. } if path == "src/a.rs" && text == "nit"));
     assert!(matches!(kinds[1], ReviewKind::Inline { line: 3, .. }));
-    assert!(matches!(kinds[2], ReviewKind::Verdict { verdict: Verdict::RequestChanges, .. }));
+    assert!(matches!(
+        kinds[2],
+        ReviewKind::Verdict {
+            verdict: Verdict::RequestChanges,
+            ..
+        }
+    ));
     assert!(t.review.iter().all(|e| e.author == "tester"));
 
     // Malformed JSON in the field is a 422 toast, not a silent drop.
     let version = board.version;
-    let res = router.oneshot(post("/ui/ticket/K-1/review/accept", version, &format!("inline={}", enc("[not json")))).await.unwrap();
+    let res = router
+        .oneshot(post(
+            "/ui/ticket/K-1/review/accept",
+            version,
+            &format!("inline={}", enc("[not json")),
+        ))
+        .await
+        .unwrap();
     assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
 
@@ -1578,43 +2367,87 @@ async fn add_to_review_appends_without_a_verdict_and_the_log_outlives_review() {
     ops::apply(
         &store,
         None,
-        Op::AddReview { id: TicketId("K-1".into()), author: "auto-review".into(), entries: vec![ReviewKind::Comment { text: "auto-review — verdict: accept".into() }] },
+        Op::AddReview {
+            id: TicketId("K-1".into()),
+            author: "auto-review".into(),
+            entries: vec![ReviewKind::Comment {
+                text: "auto-review — verdict: accept".into(),
+            }],
+        },
     )
     .unwrap();
 
     let version = store.read_board().unwrap().version;
-    let form = format!("comment=agreed%2C+one+nit&inline={}", enc(r#"[{"path":"src/b.rs","line":2,"text":"typo"}]"#));
-    let res = router.clone().oneshot(post("/ui/ticket/K-1/review/comment", version, &form)).await.unwrap();
+    let form = format!(
+        "comment=agreed%2C+one+nit&inline={}",
+        enc(r#"[{"path":"src/b.rs","line":2,"text":"typo"}]"#)
+    );
+    let res = router
+        .clone()
+        .oneshot(post("/ui/ticket/K-1/review/comment", version, &form))
+        .await
+        .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     let pane = body_text(res).await;
-    assert!(pane.contains("auto-review — verdict: accept") && pane.contains("agreed, one nit") && pane.contains("src/b.rs:2"), "{pane}");
-    assert!(pane.contains(r#"hx-get="/ui/ticket/K-1/review/log""#), "the pane's log refreshes itself live: {pane}");
+    assert!(
+        pane.contains("auto-review — verdict: accept") && pane.contains("agreed, one nit") && pane.contains("src/b.rs:2"),
+        "{pane}"
+    );
+    assert!(
+        pane.contains(r#"hx-get="/ui/ticket/K-1/review/log""#),
+        "the pane's log refreshes itself live: {pane}"
+    );
 
     let board = store.read_board().unwrap();
     let t = board.ticket(&TicketId("K-1".into())).unwrap();
     assert_eq!(t.review.len(), 3);
     assert_eq!(t.column.id(), ColumnId::Review, "no verdict was given");
-    assert!(t.notes.iter().all(|n| !n.text.contains("agreed")), "review text stays out of the progress log: {:?}", t.notes);
+    assert!(
+        t.notes.iter().all(|n| !n.text.contains("agreed")),
+        "review text stays out of the progress log: {:?}",
+        t.notes
+    );
 
     // An empty post has nothing to file.
-    let res = router.clone().oneshot(post("/ui/ticket/K-1/review/comment", board.version, "comment=+")).await.unwrap();
+    let res = router
+        .clone()
+        .oneshot(post("/ui/ticket/K-1/review/comment", board.version, "comment=+"))
+        .await
+        .unwrap();
     assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
 
     // The partial on its own, for any ticket — a card that just left review must not toast on every refresh.
     let log = body_text(router.clone().oneshot(get("/ui/ticket/K-1/review/log")).await.unwrap()).await;
-    assert!(log.contains("typo") && !log.contains("Request changes"), "the log alone, not the pane: {log}");
+    assert!(
+        log.contains("typo") && !log.contains("Request changes"),
+        "the log alone, not the pane: {log}"
+    );
     let res = router.clone().oneshot(get("/ui/ticket/K-2/review/log")).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK, "an empty log is an empty partial");
     let res = router.clone().oneshot(get("/ui/ticket/K-99/review/log")).await.unwrap();
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
 
     // Landed: the detail pane still shows the review, under its own heading, above the progress notes.
-    ops::apply(&store, None, Op::MoveTicket { id: TicketId("K-1".into()), to: ColumnId::Done, position: None, owner: None, branch: None }).unwrap();
+    ops::apply(
+        &store,
+        None,
+        Op::MoveTicket {
+            id: TicketId("K-1".into()),
+            to: ColumnId::Done,
+            position: None,
+            owner: None,
+            branch: None,
+        },
+    )
+    .unwrap();
     let detail = body_text(router.oneshot(get("/ui/ticket/K-1")).await.unwrap()).await;
     let review = detail.find("agreed, one nit").expect("the review survives landing");
     let progress = detail.find("Add a progress note").expect("the progress log");
     assert!(review < progress, "review above progress, not inside it: {detail}");
-    assert!(!detail.contains("/ui/ticket/K-1/review/log"), "read-only there — no live refresh: {detail}");
+    assert!(
+        !detail.contains("/ui/ticket/K-1/review/log"),
+        "read-only there — no live refresh: {detail}"
+    );
 }
 
 /// The detail pane's own Discard button posts an empty body and predates the comment box — it must keep working.
@@ -1660,10 +2493,16 @@ async fn the_archive_column_is_absent_until_the_toggle_is_on() {
     let html = body_text(router.clone().oneshot(get("/ui/board")).await.unwrap()).await;
     assert!(archive_column(&html).is_none(), "no toggle, no column: {html}");
     assert!(html.contains(r#"data-archive="false""#), "{html}");
-    assert!(!html.contains("Retired long ago"), "archived tickets must stay out of the board: {html}");
+    assert!(
+        !html.contains("Retired long ago"),
+        "archived tickets must stay out of the board: {html}"
+    );
 
     let page = body_text(router.oneshot(get("/")).await.unwrap()).await;
-    assert!(page.contains(r#"id="archive-toggle" type="checkbox" name="archive""#), "the toolbar carries the toggle: {page}");
+    assert!(
+        page.contains(r#"id="archive-toggle" type="checkbox" name="archive""#),
+        "the toolbar carries the toggle: {page}"
+    );
     assert!(page.contains(r#"aria-label="🗄️""#), "{page}");
 }
 
@@ -1676,7 +2515,10 @@ async fn the_toggle_adds_an_empty_archive_column_when_there_is_no_archive_file()
     let html = body_text(res).await;
     assert!(html.contains(r#"data-archive="true""#), "{html}");
     let column = archive_column(&html).expect("the column renders");
-    assert!(column.contains(">Archive</h2>") && column.contains("Nothing archived yet"), "{column}");
+    assert!(
+        column.contains(">Archive</h2>") && column.contains("Nothing archived yet"),
+        "{column}"
+    );
     assert!(!column.contains("<article"), "{column}");
 }
 
@@ -1688,14 +2530,32 @@ async fn the_archive_column_lists_the_archived_tickets_read_only() {
 
     let html = body_text(router.clone().oneshot(get("/ui/board?archive=on")).await.unwrap()).await;
     let column = archive_column(&html).expect("the column renders");
-    assert!(column.contains("Retired long ago") && column.contains("Retired without an epic"), "{column}");
+    assert!(
+        column.contains("Retired long ago") && column.contains("Retired without an epic"),
+        "{column}"
+    );
     assert!(!column.contains("Live work"), "board tickets belong to their own columns: {column}");
     assert!(column.contains(r#"badge-sm" title="2 archived in all">2</span>"#), "{column}");
-    assert!(column.contains("border-left-color: #123456"), "the archived epic paints its ticket's stripe: {column}");
-    assert!(column.contains("border-left-color: #9ca3af"), "no epic anywhere means the neutral stripe: {column}");
-    assert!(column.contains(">discarded</span>") && column.contains("⎇ k-90/retired"), "{column}");
-    assert!(!column.contains("hx-get") && !column.contains("ticket-list") && !column.contains("cursor-pointer"), "read-only: {column}");
-    assert!(html.contains(r#"data-draggable="true""#), "the archive is not a filter, so the board still drags");
+    assert!(
+        column.contains("border-left-color: #123456"),
+        "the archived epic paints its ticket's stripe: {column}"
+    );
+    assert!(
+        column.contains("border-left-color: #9ca3af"),
+        "no epic anywhere means the neutral stripe: {column}"
+    );
+    assert!(
+        column.contains(">discarded</span>") && column.contains("⎇ k-90/retired"),
+        "{column}"
+    );
+    assert!(
+        !column.contains("hx-get") && !column.contains("ticket-list") && !column.contains("cursor-pointer"),
+        "read-only: {column}"
+    );
+    assert!(
+        html.contains(r#"data-draggable="true""#),
+        "the archive is not a filter, so the board still drags"
+    );
 
     // The live board is untouched: the fragment's version is the board's, and the store never sees the archive.
     assert!(html.contains(r#"data-version="1""#), "{html}");
@@ -1708,12 +2568,21 @@ async fn the_search_box_narrows_the_archive_column_too() {
     std::fs::write(store.archive_path(), ARCHIVE_JSON).unwrap();
     let html = body_text(router.clone().oneshot(get("/ui/board?archive=on&q=label:ux")).await.unwrap()).await;
     let column = archive_column(&html).expect("the column renders");
-    assert!(column.contains("Retired long ago") && !column.contains("Retired without an epic"), "{column}");
-    assert!(column.contains(r#"title="2 archived in all">1</span>"#), "the badge counts what is shown: {column}");
+    assert!(
+        column.contains("Retired long ago") && !column.contains("Retired without an epic"),
+        "{column}"
+    );
+    assert!(
+        column.contains(r#"title="2 archived in all">1</span>"#),
+        "the badge counts what is shown: {column}"
+    );
 
     let html = body_text(router.oneshot(get("/ui/board?archive=on&q=epic:none")).await.unwrap()).await;
     let column = archive_column(&html).expect("the column renders");
-    assert!(!column.contains("Retired long ago") && column.contains("Retired without an epic"), "{column}");
+    assert!(
+        !column.contains("Retired long ago") && column.contains("Retired without an epic"),
+        "{column}"
+    );
 }
 
 #[tokio::test]

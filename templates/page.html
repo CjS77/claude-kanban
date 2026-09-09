@@ -51,15 +51,6 @@
                 <button class="btn btn-epic" onclick="document.getElementById('new-epic-modal').showModal()">+ Epic</button>
             </div>
             {#-
-              The archive toggle is a checkbox because it lives in #filters: htmx harvests it with the epic dropdown and the
-              search box, so `archive=on` rides the same /ui/board request and the fifth column comes and goes with the
-              rest of the board. daisyUI paints the aria-label as the button face. glue.js remembers the state in
-              localStorage so a reload keeps the column open.
-            -#}
-            <input id="archive-toggle" type="checkbox" name="archive" class="btn btn-sm btn-ghost text-lg" aria-label="🗄️"
-                   title="Show archived tickets (.kanban/archive.json)"
-                   hx-get="/ui/board" hx-target="#board" hx-include="#filters" hx-trigger="change">
-            {#-
               The search is a different kind of control from the create buttons, so it gets air. The margin is inline
               because assets/app.css is a committed Tailwind build whose widest gap utility is gap-4 — see the note on
               the repo mark below for the same reasoning applied to sizing.
@@ -77,7 +68,7 @@
                     </svg>
                     <input name="q" aria-label="Search tickets"
                            placeholder="search… or label:ux, status:ready, landed:true"
-                           hx-get="/ui/board" hx-target="#board" hx-include="#filters" hx-trigger="input changed delay:300ms">
+                           hx-get="/ui/board" hx-target="#board" hx-include="#filters, #archive-toggle" hx-trigger="input changed delay:300ms">
                 </label>
                 {#-
                   The grammar reference, opened with no JavaScript at all: daisyUI's dropdown hide rule is
@@ -141,6 +132,17 @@
             </a>
             <button class="btn btn-ghost btn-sm btn-circle text-lg" aria-label="Documentation" title="Documentation"
                     hx-get="/docs" hx-target="#docs" hx-swap="innerHTML">📖</button>
+            {#-
+              The archive toggle is a checkbox, and it lives here — after the help/book icon, at the header's right
+              edge — rather than inside #filters, so every other filter request needs its value spelled out
+              explicitly: hx-include="#filters, #archive-toggle" (see the epic dropdown, the search box, and #board's
+              own load trigger). `archive=on` still rides the same /ui/board request either way, so the fifth column
+              comes and goes with the rest of the board. daisyUI paints the aria-label as the button face. glue.js
+              remembers the state in localStorage so a reload keeps the column open.
+            -#}
+            <input id="archive-toggle" type="checkbox" name="archive" class="btn btn-sm btn-ghost text-lg" aria-label="🗄️"
+                   title="Show archived tickets (.kanban/archive.json)"
+                   hx-get="/ui/board" hx-target="#board" hx-include="#filters, #archive-toggle" hx-trigger="change">
         </div>
     </header>
 
@@ -148,7 +150,7 @@
         <div id="board"
              hx-get="/ui/board"
              hx-trigger="load, kanban:refresh from:body"
-             hx-include="#filters"
+             hx-include="#filters, #archive-toggle"
              hx-swap="innerHTML"></div>
     </main>
 

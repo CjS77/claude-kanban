@@ -29,7 +29,10 @@ pub(crate) struct StoreLock {
 /// Block until the store's exclusive lock is acquired. The lock file is created on first use and never removed.
 pub(crate) fn acquire(dir: &Path) -> Result<StoreLock, StoreError> {
     let path = dir.join(LOCK_FILE);
-    let io_err = |source| StoreError::Io { path: path.clone(), source };
+    let io_err = |source| StoreError::Io {
+        path: path.clone(),
+        source,
+    };
     let file = File::create(&path).map_err(io_err)?;
     FileExt::lock(&file).map_err(io_err)?;
     Ok(StoreLock { file })

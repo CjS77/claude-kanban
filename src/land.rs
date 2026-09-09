@@ -3,28 +3,27 @@
 //! Done means *landed in the local main branch* (or explicitly discarded), so somebody has to notice the landing. Two
 //! passes do, both driven from here:
 //!
-//! - [`sweep`] — the **offline** pass, pure git: land every review ticket whose code has provably reached the local
-//!   main branch. Run by the serve poller every tick and by `kanban_next` before it computes eligibility, so dependents
-//!   unblock even in an MCP-only session, with no network.
-//! - [`poll`] — the **gh** pass, serve-only: keep each review ticket's PR binding fresh (`gh pr view`/`gh pr list`),
-//!   recording state transitions on the board. Discovery is by branch when no PR is recorded, which is how skill- and
-//!   daemon-created PRs get bound with no extra step.
+//! - [`sweep`] — the **offline** pass, pure git: land every review ticket whose code has provably reached the local main branch. Run by the
+//!   serve poller every tick and by `kanban_next` before it computes eligibility, so dependents unblock even in an MCP-only session, with
+//!   no network.
+//! - [`poll`] — the **gh** pass, serve-only: keep each review ticket's PR binding fresh (`gh pr view`/`gh pr list`), recording state
+//!   transitions on the board. Discovery is by branch when no PR is recorded, which is how skill- and daemon-created PRs get bound with no
+//!   extra step.
 //!
 //! Three principles, settled with the user, bound everything here:
 //!
-//! 1. **Auto-landing requires positive proof.** A branch tip (or PR merge commit) that is an ancestor of local main; a
-//!    last-observed tip that proves patch-equivalent (`git cherry` — rebase-then-fast-forward keeps patch-ids); or one
-//!    whose content main already contains outright (`git merge-tree`, which is the only rule a squash cannot hide
-//!    from). No proof → the ticket stays in review, flagged for the human.
-//! 2. **Discard is always a human action.** The sweep never marks work discarded; ambiguity never silently unblocks —
-//!    or blocks — anything.
-//! 3. **External tickets never land from local branch state.** Their `branch` is whatever the delegate created on the
-//!    far side and was never a local ref, so its absence proves nothing; only the PR route (rule 5) applies to them.
-//! 4. **Worktree retirement is a consequence of landing, never a cause of it.** A ticket's worktree now survives review
-//!    — the human reads the code on disk, and rework re-attaches to it — so landing is what finally removes it, via
-//!    [`crate::worktree::retire`] in [`land_and_retire`]. It runs after the board write, cannot fail the landing, and
-//!    keeps a dirty worktree rather than touching uncommitted work. Nothing here ever *asks* about a worktree before
-//!    deciding: the proof rules above are unchanged, and a missing or stubborn worktree never blocks a landing.
+//! 1. **Auto-landing requires positive proof.** A branch tip (or PR merge commit) that is an ancestor of local main; a last-observed tip
+//!    that proves patch-equivalent (`git cherry` — rebase-then-fast-forward keeps patch-ids); or one whose content main already contains
+//!    outright (`git merge-tree`, which is the only rule a squash cannot hide from). No proof → the ticket stays in review, flagged for the
+//!    human.
+//! 2. **Discard is always a human action.** The sweep never marks work discarded; ambiguity never silently unblocks — or blocks — anything.
+//! 3. **External tickets never land from local branch state.** Their `branch` is whatever the delegate created on the far side and was
+//!    never a local ref, so its absence proves nothing; only the PR route (rule 5) applies to them.
+//! 4. **Worktree retirement is a consequence of landing, never a cause of it.** A ticket's worktree now survives review — the human reads
+//!    the code on disk, and rework re-attaches to it — so landing is what finally removes it, via [`crate::worktree::retire`] in
+//!    [`land_and_retire`]. It runs after the board write, cannot fail the landing, and keeps a dirty worktree rather than touching
+//!    uncommitted work. Nothing here ever *asks* about a worktree before deciding: the proof rules above are unchanged, and a missing or
+//!    stubborn worktree never blocks a landing.
 //!
 //! Detection runs *outside* the store lock — git and gh are slow — and every landing goes through
 //! [`Op::LandTicket`], which re-checks its evidence under the lock and refuses harmlessly when the board moved.
@@ -100,14 +99,18 @@ pub fn sweep_reporting(store: &Store) -> anyhow::Result<Sweep> {
     let observations = store.read_land_state()?;
 
     let mut swept = Sweep::default();
-    board.tickets.iter().filter(|t| matches!(t.column, Column::Review { .. })).for_each(|t| {
-        match verdict(t, &board, &repo, &main, &heads, &observations) {
-            Verdict::Land(reason) if land(store, t, &reason) => swept.landed += 1,
-            // A refused landing is the CAS working, not a stall: the board moved, and the next pass reads it fresh.
-            Verdict::Land(_) => {}
-            Verdict::Wait(reason) => swept.stalled.push((t.id.clone(), reason)),
-        }
-    });
+    board
+        .tickets
+        .iter()
+        .filter(|t| matches!(t.column, Column::Review { .. }))
+        .for_each(|t| {
+            match verdict(t, &board, &repo, &main, &heads, &observations) {
+                Verdict::Land(reason) if land(store, t, &reason) => swept.landed += 1,
+                // A refused landing is the CAS working, not a stall: the board moved, and the next pass reads it fresh.
+                Verdict::Land(_) => {}
+                Verdict::Wait(reason) => swept.stalled.push((t.id.clone(), reason)),
+            }
+        });
 
     refresh_observations(store, &repo, &heads, observations)?;
     Ok(swept)
@@ -218,9 +221,12 @@ fn branch_proof(t: &Ticket, repo: &Path, main: &str, heads: &HashSet<String>, ob
 /// commit to reach the *local* main branch — origin/main is not done.
 fn pr_proof(t: &Ticket, repo: &Path, main: &str) -> Option<String> {
     match &t.pr {
-        Some(PrRef { number, state: PrState::Merged, merged_commit: Some(oid), .. }) if git::is_ancestor(repo, oid, main) == Some(true) => {
-            Some(format!("PR #{number} merged and pulled into {main}"))
-        }
+        Some(PrRef {
+            number,
+            state: PrState::Merged,
+            merged_commit: Some(oid),
+            ..
+        }) if git::is_ancestor(repo, oid, main) == Some(true) => Some(format!("PR #{number} merged and pulled into {main}")),
         _ => None,
     }
 }
@@ -236,7 +242,11 @@ fn refined_parent_proof(t: &Ticket, board: &Board) -> Option<String> {
         return None;
     }
     ext.sub_issues.iter().all(|&n| sub_issue_landed(board, n)).then(|| {
-        format!("issue #{} closed and all {} mirrored sub-issue tickets landed", ext.number, ext.sub_issues.len())
+        format!(
+            "issue #{} closed and all {} mirrored sub-issue tickets landed",
+            ext.number,
+            ext.sub_issues.len()
+        )
     })
 }
 
@@ -274,7 +284,11 @@ fn waiting_on(t: &Ticket, board: &Board, main: &str, heads: &HashSet<String>, ob
             })
             .collect();
         return match (outstanding.is_empty(), ext.closed) {
-            (false, false) => format!("refined parent — waiting on {} to land, and issue #{} to be closed", outstanding.join(", "), ext.number),
+            (false, false) => format!(
+                "refined parent — waiting on {} to land, and issue #{} to be closed",
+                outstanding.join(", "),
+                ext.number
+            ),
             (false, true) => format!("refined parent — waiting on {} to land", outstanding.join(", ")),
             (true, false) => format!("refined parent — sub-issues all landed; close issue #{} to land it", ext.number),
             (true, true) => "refined parent — the next sweep will land it".to_owned(),
@@ -306,7 +320,11 @@ fn land(store: &Store, t: &Ticket, reason: &str) -> bool {
 /// store lock is per open file description (retiring under it would deadlock) and because retirement is a consequence
 /// of landing, never a cause of it. It cannot fail the landing — it returns nothing and swallows its own errors.
 fn land_and_retire(store: &Store, id: &TicketId, expected_branch: Option<String>, reason: &str) -> bool {
-    let op = Op::LandTicket { id: id.clone(), expected_branch, reason: reason.to_owned() };
+    let op = Op::LandTicket {
+        id: id.clone(),
+        expected_branch,
+        reason: reason.to_owned(),
+    };
     match ops::apply(store, None, op) {
         Ok(_) => {
             crate::worktree::retire(store, id);
@@ -326,7 +344,12 @@ fn land_and_retire(store: &Store, id: &TicketId, expected_branch: Option<String>
 /// Record the current tip of every live, non-external review branch and drop observations for branches no ticket in
 /// review references any more. Reads the board itself, which is what lets [`sweep`] call it *after* its landings so a
 /// landed ticket's observation retires with it.
-fn refresh_observations(store: &Store, repo: &Path, heads: &HashSet<String>, mut observations: HashMap<String, String>) -> anyhow::Result<()> {
+fn refresh_observations(
+    store: &Store,
+    repo: &Path,
+    heads: &HashSet<String>,
+    mut observations: HashMap<String, String>,
+) -> anyhow::Result<()> {
     let board = store.read_board()?;
     let review_branches: HashSet<String> = board
         .tickets
@@ -340,7 +363,11 @@ fn refresh_observations(store: &Store, repo: &Path, heads: &HashSet<String>, mut
     review_branches
         .iter()
         .filter(|b| heads.contains(*b))
-        .filter_map(|b| git::git(repo, &["rev-parse", &format!("refs/heads/{b}")]).ok().map(|tip| (b.clone(), tip)))
+        .filter_map(|b| {
+            git::git(repo, &["rev-parse", &format!("refs/heads/{b}")])
+                .ok()
+                .map(|tip| (b.clone(), tip))
+        })
         .for_each(|(branch, tip)| {
             observations.insert(branch, tip);
         });
@@ -357,7 +384,9 @@ fn refresh_observations(store: &Store, repo: &Path, heads: &HashSet<String>, mut
 fn warn_if_not_ignored(store: &Store, repo: &Path) {
     static WARNED: OnceLock<()> = OnceLock::new();
     let path = store.land_state_path();
-    let Some(rel) = path.strip_prefix(repo).ok().and_then(Path::to_str) else { return };
+    let Some(rel) = path.strip_prefix(repo).ok().and_then(Path::to_str) else {
+        return;
+    };
     if git::git(repo, &["check-ignore", "-q", rel]).is_err() && WARNED.set(()).is_ok() {
         tracing::warn!("{rel} is not gitignored — add it to .kanban/.gitignore (it records machine-local branch observations)");
     }
@@ -376,12 +405,23 @@ pub fn poll(store: &Store) -> anyhow::Result<usize> {
     let mut updated = 0;
     for t in board.tickets.iter().filter(|t| matches!(t.column, Column::Review { .. })) {
         // Merged is terminal for the poll — the sweep owns the rest of that ticket's journey.
-        if matches!(&t.pr, Some(PrRef { state: PrState::Merged, .. })) {
+        if matches!(
+            &t.pr,
+            Some(PrRef {
+                state: PrState::Merged,
+                ..
+            })
+        ) {
             continue;
         }
         let fresh = match (&t.pr, t.column.branch()) {
             (Some(pr), _) => lookup(&repo, &["pr", "view", &pr.number.to_string(), "--json", GH_FIELDS]),
-            (None, Some(branch)) => lookup(&repo, &["pr", "list", "--head", branch, "--state", "all", "--limit", "1", "--json", GH_FIELDS]),
+            (None, Some(branch)) => lookup(
+                &repo,
+                &[
+                    "pr", "list", "--head", branch, "--state", "all", "--limit", "1", "--json", GH_FIELDS,
+                ],
+            ),
             (None, None) => continue,
         };
         let fresh = match fresh {
@@ -397,13 +437,31 @@ pub fn poll(store: &Store) -> anyhow::Result<usize> {
         }
 
         let newly_closed = fresh.state == PrState::Closed && t.pr.as_ref().is_none_or(|old| old.state != PrState::Closed);
-        let landable = fresh.merged_commit.clone().filter(|oid| fresh.state == PrState::Merged && git::is_ancestor(&repo, oid, &main) == Some(true));
+        let landable = fresh
+            .merged_commit
+            .clone()
+            .filter(|oid| fresh.state == PrState::Merged && git::is_ancestor(&repo, oid, &main) == Some(true));
         let (id, number) = (t.id.clone(), fresh.number);
-        ops::apply(store, None, Op::SetPr { id: id.clone(), pr: Some(fresh) })?;
+        ops::apply(
+            store,
+            None,
+            Op::SetPr {
+                id: id.clone(),
+                pr: Some(fresh),
+            },
+        )?;
         updated += 1;
         if newly_closed {
             let text = format!("PR #{number} was closed without merging — rework the ticket, or discard it");
-            ops::apply(store, None, Op::AddNote { id: id.clone(), text, author: Some("kanban".into()) })?;
+            ops::apply(
+                store,
+                None,
+                Op::AddNote {
+                    id: id.clone(),
+                    text,
+                    author: Some("kanban".into()),
+                },
+            )?;
         }
         // Merge recorded and already pulled: land in this tick, not the next.
         if landable.is_some() {
@@ -490,18 +548,56 @@ mod tests {
         ops::apply(
             &store,
             None,
-            Op::CreateTicket { title: "the work".into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![], status: Status::Ready, model: None, effort: None, auto_merge: false },
+            Op::CreateTicket {
+                title: "the work".into(),
+                body: String::new(),
+                epic: None,
+                labels: vec![],
+                depends_on: vec![],
+                status: Status::Ready,
+                model: None,
+                effort: None,
+                auto_merge: false,
+            },
         )
         .unwrap();
         let id = TicketId("K-1".into());
-        ops::apply(&store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
+        ops::apply(
+            &store,
+            None,
+            Op::Claim {
+                id: id.clone(),
+                agent: "claude".into(),
+            },
+        )
+        .unwrap();
 
         git(&repo, &["checkout", "-q", "-b", "k-1/work"]).unwrap();
         commit(&repo, "feat: the work");
         git(&repo, &["checkout", "-q", "main"]).unwrap();
 
-        ops::apply(&store, None, Op::StampWorktree { id: id.clone(), branch: "k-1/work".into(), path: "/tmp/unused".into() }).unwrap();
-        ops::apply(&store, None, Op::MoveTicket { id, to: ColumnId::Review, position: None, owner: None, branch: None }).unwrap();
+        ops::apply(
+            &store,
+            None,
+            Op::StampWorktree {
+                id: id.clone(),
+                branch: "k-1/work".into(),
+                path: "/tmp/unused".into(),
+            },
+        )
+        .unwrap();
+        ops::apply(
+            &store,
+            None,
+            Op::MoveTicket {
+                id,
+                to: ColumnId::Review,
+                position: None,
+                owner: None,
+                branch: None,
+            },
+        )
+        .unwrap();
         Scratch { _dir: dir, repo, store }
     }
 
@@ -522,7 +618,17 @@ mod tests {
         ops::apply(
             &s.store,
             None,
-            Op::CreateTicket { title: "dependent".into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![TicketId("K-1".into())], status: Status::Ready, model: None, effort: None, auto_merge: false },
+            Op::CreateTicket {
+                title: "dependent".into(),
+                body: String::new(),
+                epic: None,
+                labels: vec![],
+                depends_on: vec![TicketId("K-1".into())],
+                status: Status::Ready,
+                model: None,
+                effort: None,
+                auto_merge: false,
+            },
         )
         .unwrap();
         git(&s.repo, &["merge", "-q", "--ff-only", "k-1/work"]).unwrap();
@@ -532,7 +638,11 @@ mod tests {
         let k1 = board.ticket(&TicketId("K-1".into())).unwrap();
         assert!(matches!(k1.column, Column::Done { discarded: false, .. }));
         assert!(k1.notes.last().unwrap().text.contains("merged into main"), "{:?}", k1.notes);
-        assert_eq!(crate::store::derive::next_ticket(&board, &[]).unwrap().id.0, "K-2", "the dependent unblocked");
+        assert_eq!(
+            crate::store::derive::next_ticket(&board, &[]).unwrap().id.0,
+            "K-2",
+            "the dependent unblocked"
+        );
         assert_eq!(sweep(&s.store).unwrap(), 0, "a second sweep finds nothing to do");
     }
 
@@ -548,7 +658,11 @@ mod tests {
         git(&s.repo, &["add", "drift"]).unwrap();
         commit(&s.repo, "mainline moves"); // forces the rebase to rewrite shas
         git(&s.repo, &["checkout", "-q", "k-1/work"]).unwrap();
-        git(&s.repo, &["-c", "user.name=t", "-c", "user.email=t@example.com", "rebase", "-q", "main"]).unwrap();
+        git(
+            &s.repo,
+            &["-c", "user.name=t", "-c", "user.email=t@example.com", "rebase", "-q", "main"],
+        )
+        .unwrap();
         git(&s.repo, &["checkout", "-q", "main"]).unwrap();
         git(&s.repo, &["merge", "-q", "--ff-only", "k-1/work"]).unwrap();
         git(&s.repo, &["branch", "-q", "-d", "k-1/work"]).unwrap();
@@ -558,7 +672,10 @@ mod tests {
         let k1 = board.ticket(&TicketId("K-1".into())).unwrap();
         assert!(matches!(k1.column, Column::Done { discarded: false, .. }));
         assert!(k1.notes.last().unwrap().text.contains("rebased into main"), "{:?}", k1.notes);
-        assert!(s.store.read_land_state().unwrap().is_empty(), "the landed ticket's observation retires with it");
+        assert!(
+            s.store.read_land_state().unwrap().is_empty(),
+            "the landed ticket's observation retires with it"
+        );
     }
 
     /// The gymbuddy shape: the last ticket of a `/kanban:work` run enters review, the loop ends, and no server is
@@ -570,13 +687,20 @@ mod tests {
         let s = scratch();
         assert!(s.store.read_land_state().unwrap().is_empty(), "nothing has swept yet");
         observe(&s.store).unwrap(); // what both faces now do as the ticket enters review
-        assert_eq!(s.store.read_land_state().unwrap().get("k-1/work"), Some(&git(&s.repo, &["rev-parse", "k-1/work"]).unwrap()));
+        assert_eq!(
+            s.store.read_land_state().unwrap().get("k-1/work"),
+            Some(&git(&s.repo, &["rev-parse", "k-1/work"]).unwrap())
+        );
 
         std::fs::write(s.repo.join("drift"), "x").unwrap();
         git(&s.repo, &["add", "drift"]).unwrap();
         commit(&s.repo, "mainline moves"); // forces the rebase to rewrite shas
         git(&s.repo, &["checkout", "-q", "k-1/work"]).unwrap();
-        git(&s.repo, &["-c", "user.name=t", "-c", "user.email=t@example.com", "rebase", "-q", "main"]).unwrap();
+        git(
+            &s.repo,
+            &["-c", "user.name=t", "-c", "user.email=t@example.com", "rebase", "-q", "main"],
+        )
+        .unwrap();
         git(&s.repo, &["checkout", "-q", "main"]).unwrap();
         git(&s.repo, &["merge", "-q", "--ff-only", "k-1/work"]).unwrap();
         git(&s.repo, &["branch", "-q", "-d", "k-1/work"]).unwrap();
@@ -629,7 +753,11 @@ mod tests {
         let board = s.store.read_board().unwrap();
         let k1 = board.ticket(&TicketId("K-1".into())).unwrap();
         assert!(matches!(k1.column, Column::Done { discarded: false, .. }));
-        assert!(k1.notes.last().unwrap().text.contains("squashed or rewritten into main"), "{:?}", k1.notes);
+        assert!(
+            k1.notes.last().unwrap().text.contains("squashed or rewritten into main"),
+            "{:?}",
+            k1.notes
+        );
     }
 
     #[test]
@@ -647,7 +775,15 @@ mod tests {
         let board = s.store.read_board().unwrap();
         let k1 = board.ticket(&TicketId("K-1".into())).unwrap();
         assert!(matches!(k1.column, Column::Done { discarded: false, .. }));
-        assert!(k1.notes.last().unwrap().text.contains("squashed or rewritten into main and deleted"), "{:?}", k1.notes);
+        assert!(
+            k1.notes
+                .last()
+                .unwrap()
+                .text
+                .contains("squashed or rewritten into main and deleted"),
+            "{:?}",
+            k1.notes
+        );
     }
 
     /// Every refusal the sweep makes has to come back out of it. This is what stops a board full of unprovable review
@@ -658,7 +794,10 @@ mod tests {
         let stalled = sweep_reporting(&s.store).unwrap().stalled;
         assert_eq!(stalled.len(), 1);
         assert_eq!(stalled[0].0.0, "K-1");
-        assert!(stalled[0].1.contains("k-1/work") && stalled[0].1.contains("does not contain"), "{stalled:?}");
+        assert!(
+            stalled[0].1.contains("k-1/work") && stalled[0].1.contains("does not contain"),
+            "{stalled:?}"
+        );
 
         // Force-deleted after that first sweep observed it: the tip is known and refutes the landing, which is a
         // different sentence from knowing nothing at all.
@@ -673,8 +812,21 @@ mod tests {
         assert!(stalled[0].1.contains("no tip was ever observed"), "{stalled:?}");
 
         // A PR outranks the branch: it is the thing whose state the human is steering.
-        let pr = PrRef { number: 12, url: "https://example.invalid/pull/12".into(), state: PrState::Open, merged_commit: None };
-        ops::apply(&s.store, None, Op::SetPr { id: TicketId("K-1".into()), pr: Some(pr) }).unwrap();
+        let pr = PrRef {
+            number: 12,
+            url: "https://example.invalid/pull/12".into(),
+            state: PrState::Open,
+            merged_commit: None,
+        };
+        ops::apply(
+            &s.store,
+            None,
+            Op::SetPr {
+                id: TicketId("K-1".into()),
+                pr: Some(pr),
+            },
+        )
+        .unwrap();
         assert_eq!(sweep_reporting(&s.store).unwrap().stalled[0].1, "PR #12 is open");
     }
 
@@ -713,8 +865,27 @@ mod tests {
         // tickets weren't exempt.
         let s = scratch();
         let id = TicketId("K-1".into());
-        ops::apply(&s.store, None, Op::BindExternal { id: id.clone(), external: Some(External::github_issue(42)) }).unwrap();
-        ops::apply(&s.store, None, Op::MoveTicket { id, to: ColumnId::Review, position: None, owner: None, branch: Some("myrepo-issue0042".into()) }).unwrap();
+        ops::apply(
+            &s.store,
+            None,
+            Op::BindExternal {
+                id: id.clone(),
+                external: Some(External::github_issue(42)),
+            },
+        )
+        .unwrap();
+        ops::apply(
+            &s.store,
+            None,
+            Op::MoveTicket {
+                id,
+                to: ColumnId::Review,
+                position: None,
+                owner: None,
+                branch: Some("myrepo-issue0042".into()),
+            },
+        )
+        .unwrap();
 
         assert_eq!(sweep(&s.store).unwrap(), 0);
         assert!(matches!(column_of(&s.store, "K-1"), Column::Review { .. }));
@@ -729,25 +900,58 @@ mod tests {
 
         let stalled = |id: &str| {
             let swept = sweep_reporting(&s.store).unwrap();
-            swept.stalled.into_iter().find(|(t, _)| t.0 == id).map(|(_, r)| r).expect("still in review")
+            swept
+                .stalled
+                .into_iter()
+                .find(|(t, _)| t.0 == id)
+                .map(|(_, r)| r)
+                .expect("still in review")
         };
         assert!(stalled("K-2").contains("waiting on K-3, K-4"), "{}", stalled("K-2"));
 
         let to_done = |id: &str| {
-            ops::apply(&s.store, None, Op::MoveTicket { id: TicketId(id.into()), to: ColumnId::Done, position: None, owner: None, branch: None })
-                .unwrap();
+            ops::apply(
+                &s.store,
+                None,
+                Op::MoveTicket {
+                    id: TicketId(id.into()),
+                    to: ColumnId::Done,
+                    position: None,
+                    owner: None,
+                    branch: None,
+                },
+            )
+            .unwrap();
         };
         to_done("K-3");
         let reason = stalled("K-2");
-        assert!(reason.contains("K-4") && !reason.contains("K-3,"), "landed children drop out of the answer: {reason}");
+        assert!(
+            reason.contains("K-4") && !reason.contains("K-3,"),
+            "landed children drop out of the answer: {reason}"
+        );
 
         to_done("K-4");
         assert!(stalled("K-2").contains("close issue #42"), "{}", stalled("K-2"));
-        assert!(matches!(column_of(&s.store, "K-2"), Column::Review { .. }), "children landed, but no human closed the issue yet");
+        assert!(
+            matches!(column_of(&s.store, "K-2"), Column::Review { .. }),
+            "children landed, but no human closed the issue yet"
+        );
 
         // The poll records the closure as a durable board fact; the ordinary offline sweep then does the landing.
-        let closed = External { closed: true, sub_issues: vec![43, 44], ..External::github_issue(42) };
-        ops::apply(&s.store, None, Op::BindExternal { id: parent.clone(), external: Some(closed) }).unwrap();
+        let closed = External {
+            closed: true,
+            sub_issues: vec![43, 44],
+            ..External::github_issue(42)
+        };
+        ops::apply(
+            &s.store,
+            None,
+            Op::BindExternal {
+                id: parent.clone(),
+                external: Some(closed),
+            },
+        )
+        .unwrap();
         assert_eq!(sweep(&s.store).unwrap(), 1);
         let board = s.store.read_board().unwrap();
         let p = board.ticket(&parent).unwrap();
@@ -759,13 +963,49 @@ mod tests {
     fn a_discarded_child_keeps_its_refined_parent_in_review_forever() {
         let s = scratch();
         let parent = refined_parent(&s, &[43]);
-        ops::apply(&s.store, None, Op::MoveTicket { id: TicketId("K-3".into()), to: ColumnId::Review, position: None, owner: None, branch: None })
-            .unwrap();
-        ops::apply(&s.store, None, Op::DiscardTicket { id: TicketId("K-3".into()), reason: "retired".into(), by: "tester".into(), review: VerdictReview::default() }).unwrap();
-        let closed = External { closed: true, sub_issues: vec![43], ..External::github_issue(42) };
-        ops::apply(&s.store, None, Op::BindExternal { id: parent, external: Some(closed) }).unwrap();
+        ops::apply(
+            &s.store,
+            None,
+            Op::MoveTicket {
+                id: TicketId("K-3".into()),
+                to: ColumnId::Review,
+                position: None,
+                owner: None,
+                branch: None,
+            },
+        )
+        .unwrap();
+        ops::apply(
+            &s.store,
+            None,
+            Op::DiscardTicket {
+                id: TicketId("K-3".into()),
+                reason: "retired".into(),
+                by: "tester".into(),
+                review: VerdictReview::default(),
+            },
+        )
+        .unwrap();
+        let closed = External {
+            closed: true,
+            sub_issues: vec![43],
+            ..External::github_issue(42)
+        };
+        ops::apply(
+            &s.store,
+            None,
+            Op::BindExternal {
+                id: parent,
+                external: Some(closed),
+            },
+        )
+        .unwrap();
 
-        assert_eq!(sweep(&s.store).unwrap(), 0, "a discarded child never satisfies rule 6 — that is the discard contract");
+        assert_eq!(
+            sweep(&s.store).unwrap(),
+            0,
+            "a discarded child never satisfies rule 6 — that is the discard contract"
+        );
         assert!(matches!(column_of(&s.store, "K-2"), Column::Review { .. }));
         let swept = sweep_reporting(&s.store).unwrap();
         let reason = &swept.stalled.iter().find(|(t, _)| t.0 == "K-2").unwrap().1;
@@ -777,8 +1017,19 @@ mod tests {
         // Closed-without-a-PR is the *failure* shape; only the mirror op writes `sub_issues`, so rule 6 cannot fire.
         let s = scratch();
         let id = TicketId("K-1".into());
-        let closed = External { closed: true, ..External::github_issue(42) };
-        ops::apply(&s.store, None, Op::BindExternal { id, external: Some(closed) }).unwrap();
+        let closed = External {
+            closed: true,
+            ..External::github_issue(42)
+        };
+        ops::apply(
+            &s.store,
+            None,
+            Op::BindExternal {
+                id,
+                external: Some(closed),
+            },
+        )
+        .unwrap();
 
         assert_eq!(sweep(&s.store).unwrap(), 0);
         assert!(matches!(column_of(&s.store, "K-1"), Column::Review { .. }));
@@ -793,14 +1044,56 @@ mod tests {
         ops::apply(
             &s.store,
             None,
-            Op::CreateTicket { title: "parent".into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![], status: Status::Ready, model: None, effort: None, auto_merge: false },
+            Op::CreateTicket {
+                title: "parent".into(),
+                body: String::new(),
+                epic: None,
+                labels: vec![],
+                depends_on: vec![],
+                status: Status::Ready,
+                model: None,
+                effort: None,
+                auto_merge: false,
+            },
         )
         .unwrap();
         let parent = TicketId("K-2".into());
-        ops::apply(&s.store, None, Op::BindExternal { id: parent.clone(), external: Some(External::github_issue(42)) }).unwrap();
-        ops::apply(&s.store, None, Op::Claim { id: parent.clone(), agent: "minesweeper".into() }).unwrap();
-        let children = numbers.iter().map(|&n| crate::ops::SubIssueSpec { number: n, title: format!("part {n}"), body: String::new() }).collect();
-        ops::apply(&s.store, None, Op::MirrorSubIssues { parent: parent.clone(), agent: "minesweeper".into(), children }).unwrap();
+        ops::apply(
+            &s.store,
+            None,
+            Op::BindExternal {
+                id: parent.clone(),
+                external: Some(External::github_issue(42)),
+            },
+        )
+        .unwrap();
+        ops::apply(
+            &s.store,
+            None,
+            Op::Claim {
+                id: parent.clone(),
+                agent: "minesweeper".into(),
+            },
+        )
+        .unwrap();
+        let children = numbers
+            .iter()
+            .map(|&n| crate::ops::SubIssueSpec {
+                number: n,
+                title: format!("part {n}"),
+                body: String::new(),
+            })
+            .collect();
+        ops::apply(
+            &s.store,
+            None,
+            Op::MirrorSubIssues {
+                parent: parent.clone(),
+                agent: "minesweeper".into(),
+                children,
+            },
+        )
+        .unwrap();
         parent
     }
 
@@ -808,17 +1101,47 @@ mod tests {
     fn a_merged_pr_lands_only_once_its_commit_reaches_local_main() {
         let s = scratch();
         // The PR merged on GitHub as a squash commit that does not exist locally yet.
-        let pr = PrRef { number: 12, url: "https://example.invalid/pull/12".into(), state: PrState::Merged, merged_commit: Some("0".repeat(40)) };
-        ops::apply(&s.store, None, Op::SetPr { id: TicketId("K-1".into()), pr: Some(pr) }).unwrap();
-        assert_eq!(sweep(&s.store).unwrap(), 0, "merged on GitHub is not done — local main hasn't got it");
+        let pr = PrRef {
+            number: 12,
+            url: "https://example.invalid/pull/12".into(),
+            state: PrState::Merged,
+            merged_commit: Some("0".repeat(40)),
+        };
+        ops::apply(
+            &s.store,
+            None,
+            Op::SetPr {
+                id: TicketId("K-1".into()),
+                pr: Some(pr),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            sweep(&s.store).unwrap(),
+            0,
+            "merged on GitHub is not done — local main hasn't got it"
+        );
         assert!(matches!(column_of(&s.store, "K-1"), Column::Review { .. }));
 
         // "git pull": simulate the squash landing locally by making a commit and recording ITS oid as the merge commit.
         git(&s.repo, &["merge", "-q", "--squash", "k-1/work"]).unwrap();
         commit(&s.repo, "K-1: the work (#12)");
         let oid = git(&s.repo, &["rev-parse", "HEAD"]).unwrap();
-        let pr = PrRef { number: 12, url: "https://example.invalid/pull/12".into(), state: PrState::Merged, merged_commit: Some(oid) };
-        ops::apply(&s.store, None, Op::SetPr { id: TicketId("K-1".into()), pr: Some(pr) }).unwrap();
+        let pr = PrRef {
+            number: 12,
+            url: "https://example.invalid/pull/12".into(),
+            state: PrState::Merged,
+            merged_commit: Some(oid),
+        };
+        ops::apply(
+            &s.store,
+            None,
+            Op::SetPr {
+                id: TicketId("K-1".into()),
+                pr: Some(pr),
+            },
+        )
+        .unwrap();
 
         assert_eq!(sweep(&s.store).unwrap(), 1);
         let board = s.store.read_board().unwrap();
@@ -853,7 +1176,15 @@ mod tests {
         // Claim the review ticket back (rework), then merge the branch: the ticket is in doing, so the sweep must not
         // touch it — landing only ever moves review tickets.
         let s = scratch();
-        ops::apply(&s.store, None, Op::Claim { id: TicketId("K-1".into()), agent: "claude".into() }).unwrap();
+        ops::apply(
+            &s.store,
+            None,
+            Op::Claim {
+                id: TicketId("K-1".into()),
+                agent: "claude".into(),
+            },
+        )
+        .unwrap();
         git(&s.repo, &["merge", "-q", "--ff-only", "k-1/work"]).unwrap();
         assert_eq!(sweep(&s.store).unwrap(), 0);
         assert!(matches!(column_of(&s.store, "K-1"), Column::Doing { .. }));
@@ -865,15 +1196,38 @@ mod tests {
         ops::apply(
             &s.store,
             None,
-            Op::CreateTicket { title: "dependent".into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![TicketId("K-1".into())], status: Status::Ready, model: None, effort: None, auto_merge: false },
+            Op::CreateTicket {
+                title: "dependent".into(),
+                body: String::new(),
+                epic: None,
+                labels: vec![],
+                depends_on: vec![TicketId("K-1".into())],
+                status: Status::Ready,
+                model: None,
+                effort: None,
+                auto_merge: false,
+            },
         )
         .unwrap();
-        ops::apply(&s.store, None, Op::DiscardTicket { id: TicketId("K-1".into()), reason: "abandoned".into(), by: "tester".into(), review: VerdictReview::default() }).unwrap();
+        ops::apply(
+            &s.store,
+            None,
+            Op::DiscardTicket {
+                id: TicketId("K-1".into()),
+                reason: "abandoned".into(),
+                by: "tester".into(),
+                review: VerdictReview::default(),
+            },
+        )
+        .unwrap();
         // Even though the branch still exists and could later merge, the ticket is done+discarded: no sweep revives it,
         // and the dependent stays blocked.
         git(&s.repo, &["merge", "-q", "--ff-only", "k-1/work"]).unwrap();
         assert_eq!(sweep(&s.store).unwrap(), 0);
         let board = s.store.read_board().unwrap();
-        assert!(crate::store::derive::blocked(board.ticket(&TicketId("K-2".into())).unwrap(), &board));
+        assert!(crate::store::derive::blocked(
+            board.ticket(&TicketId("K-2".into())).unwrap(),
+            &board
+        ));
     }
 }

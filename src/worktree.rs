@@ -46,8 +46,9 @@ use crate::{
 const SPARSE_GIT_FLOOR: (u32, u32) = (2, 36);
 
 /// Words that carry no weight in a branch slug.
-const STOPWORDS: [&str; 18] =
-    ["the", "a", "an", "of", "for", "to", "and", "or", "in", "on", "with", "from", "into", "at", "by", "is", "be", "based"];
+const STOPWORDS: [&str; 18] = [
+    "the", "a", "an", "of", "for", "to", "and", "or", "in", "on", "with", "from", "into", "at", "by", "is", "be", "based",
+];
 
 /// Options for [`start`], mirroring the CLI flags and the MCP tool's arguments.
 #[derive(Debug, Default)]
@@ -139,9 +140,24 @@ pub fn start(store: &Store, id: &TicketId, opts: &StartOpts) -> anyhow::Result<S
     }
     copy_authorised_files(store, &repo, &path, &mut warnings)?;
 
-    ops::apply(store, None, Op::StampWorktree { id: id.clone(), branch: branch.clone(), path: path.clone() })?;
+    ops::apply(
+        store,
+        None,
+        Op::StampWorktree {
+            id: id.clone(),
+            branch: branch.clone(),
+            path: path.clone(),
+        },
+    )?;
     tracing::info!(ticket = %id, %branch, path = %path.display(), reattached, sparse, "worktree started");
-    Ok(StartReport { ticket: id.to_string(), branch, path, reattached, sparse, warnings })
+    Ok(StartReport {
+        ticket: id.to_string(),
+        branch,
+        path,
+        reattached,
+        sparse,
+        warnings,
+    })
 }
 
 /// Remove the ticket's worktree (refusing if dirty unless `force_discard`), optionally merging the branch into the main
@@ -168,7 +184,9 @@ pub fn finish(store: &Store, id: &TicketId, force_discard: bool, merge: bool) ->
 
     let mut merged = false;
     if merge {
-        let Some(branch) = &branch else { bail!("{id} has no branch to merge") };
+        let Some(branch) = &branch else {
+            bail!("{id} has no branch to merge")
+        };
         // --merge targets THE integration branch, not wherever the checkout happens to sit: done means landed in main.
         // With no configured or detectable main branch there is no target to enforce, and the v1 behaviour (merge into
         // the current branch) is all that's left.
@@ -195,7 +213,12 @@ pub fn finish(store: &Store, id: &TicketId, force_discard: bool, merge: bool) ->
 
     ops::apply(store, None, Op::ClearWorktreePath { id: id.clone() })?;
     tracing::info!(ticket = %id, branch = branch.as_deref().unwrap_or("-"), merged, "worktree finished");
-    Ok(FinishReport { ticket: id.to_string(), branch, merged, removed: worktree })
+    Ok(FinishReport {
+        ticket: id.to_string(),
+        branch,
+        merged,
+        removed: worktree,
+    })
 }
 
 /// `git worktree remove`, forcing past uncommitted changes only when told to. The branch is untouched either way.
@@ -213,7 +236,9 @@ fn remove_worktree(repo: &Path, path: &Path, force: bool) -> anyhow::Result<()> 
 /// The ticket's live worktree on this machine, if git still has one registered for its branch.
 pub fn path_for(store: &Store, id: &TicketId) -> anyhow::Result<Option<PathBuf>> {
     let repo = repo_root(store)?;
-    let Some(branch) = branch_for(store, &repo, id)? else { return Ok(None) };
+    let Some(branch) = branch_for(store, &repo, id)? else {
+        return Ok(None);
+    };
     Ok(live_worktree_for(&repo, &branch)?.filter(|p| p.exists()))
 }
 
@@ -254,7 +279,15 @@ pub fn retire(store: &Store, id: &TicketId) {
             "worktree kept at {} — it has uncommitted changes; remove it by hand once you have salvaged them",
             path.display()
         );
-        if let Err(e) = ops::apply(store, None, Op::AddNote { id: id.clone(), text, author: Some("kanban".into()) }) {
+        if let Err(e) = ops::apply(
+            store,
+            None,
+            Op::AddNote {
+                id: id.clone(),
+                text,
+                author: Some("kanban".into()),
+            },
+        ) {
             tracing::warn!(ticket = %id, error = %e, "and the kept-worktree warning could not be noted on the card either");
         }
         return;
@@ -324,12 +357,21 @@ pub fn list(store: &Store) -> anyhow::Result<Vec<WorktreeRow>> {
 /// The repository the store belongs to: the store's parent directory, which by anchoring *is* the main working tree.
 /// Shared with `pr.rs`, whose git questions are about the same repository.
 pub(crate) fn repo_root(store: &Store) -> anyhow::Result<PathBuf> {
-    let parent = store.dir().parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new(".")).to_path_buf();
+    let parent = store
+        .dir()
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."))
+        .to_path_buf();
     git::main_worktree(&parent).with_context(|| format!("{} is not inside a git repository — worktrees need one", parent.display()))
 }
 
 fn load_ticket(store: &Store, id: &TicketId) -> anyhow::Result<Ticket> {
-    store.read_board()?.ticket(id).cloned().with_context(|| format!("{id} not found on the board"))
+    store
+        .read_board()?
+        .ticket(id)
+        .cloned()
+        .with_context(|| format!("{id} not found on the board"))
 }
 
 /// The ticket's existing branch, by the `<id>/*` naming scheme that makes branch → ticket unambiguous.
@@ -354,7 +396,10 @@ fn worktree_entries(repo: &Path) -> anyhow::Result<Vec<WorktreeEntry>> {
             if let Some(done) = current.take() {
                 entries.push(done);
             }
-            current = Some(WorktreeEntry { path: PathBuf::from(path), branch: None });
+            current = Some(WorktreeEntry {
+                path: PathBuf::from(path),
+                branch: None,
+            });
         } else if let Some(branch) = line.strip_prefix("branch refs/heads/")
             && let Some(entry) = current.as_mut()
         {
@@ -367,7 +412,11 @@ fn worktree_entries(repo: &Path) -> anyhow::Result<Vec<WorktreeEntry>> {
 
 /// The registered worktree currently on `branch`, if any.
 fn live_worktree_for(repo: &Path, branch: &str) -> anyhow::Result<Option<PathBuf>> {
-    Ok(worktree_entries(repo)?.into_iter().skip(1).find(|e| e.branch.as_deref() == Some(branch)).map(|e| e.path))
+    Ok(worktree_entries(repo)?
+        .into_iter()
+        .skip(1)
+        .find(|e| e.branch.as_deref() == Some(branch))
+        .map(|e| e.path))
 }
 
 /// `k-7/rate-limit-login` → `K-7`.
@@ -427,7 +476,9 @@ fn worktree_path(store: &Store, repo: &Path, id: &TicketId, opts: &StartOpts) ->
     let mut hasher = std::hash::DefaultHasher::new();
     canonical.hash(&mut hasher);
     let hash8 = format!("{:08x}", hasher.finish() & 0xffff_ffff);
-    let name = repo.file_name().map_or_else(|| "repo".to_owned(), |n| n.to_string_lossy().into_owned());
+    let name = repo
+        .file_name()
+        .map_or_else(|| "repo".to_owned(), |n| n.to_string_lossy().into_owned());
     Ok(root.join(format!("{name}-{hash8}")).join(&id.0))
 }
 
@@ -457,7 +508,9 @@ fn copy_authorised_files(store: &Store, repo: &Path, worktree: &Path, warnings: 
             continue;
         }
         if git(repo, &["check-ignore", "-q", entry]).is_err() {
-            warnings.push(format!("copy_to_worktrees: {entry} is not gitignored — skipped (only ignored files may be copied)"));
+            warnings.push(format!(
+                "copy_to_worktrees: {entry} is not gitignored — skipped (only ignored files may be copied)"
+            ));
             continue;
         }
         let target = worktree.join(entry);
@@ -477,9 +530,16 @@ mod tests {
     fn slugs_condense_like_design_md_says() {
         assert_eq!(derive_slug("Rate-limit the login route"), "rate-limit-login");
         assert_eq!(derive_slug("Add session refresh"), "add-session-refresh");
-        assert_eq!(derive_slug("Add authorization based on OAuth from Google"), "add-authorization-oauth");
+        assert_eq!(
+            derive_slug("Add authorization based on OAuth from Google"),
+            "add-authorization-oauth"
+        );
         assert_eq!(derive_slug("The Of For"), "work", "all-stopword titles still get a slug");
-        assert_eq!(derive_slug("Ünïcode Tïtle Here Now"), "code-tle-here", "non-ascii splits rather than panics");
+        assert_eq!(
+            derive_slug("Ünïcode Tïtle Here Now"),
+            "code-tle-here",
+            "non-ascii splits rather than panics"
+        );
     }
 
     #[test]
@@ -494,7 +554,11 @@ mod tests {
         assert_ne!(path_a, path_b, "the path hash keeps two repos both named `api` apart");
         for p in [&path_a, &path_b] {
             assert!(p.ends_with("K-1"), "{}", p.display());
-            assert!(p.parent().unwrap().file_name().unwrap().to_string_lossy().starts_with("api-"), "{}", p.display());
+            assert!(
+                p.parent().unwrap().file_name().unwrap().to_string_lossy().starts_with("api-"),
+                "{}",
+                p.display()
+            );
         }
     }
 
@@ -504,6 +568,10 @@ mod tests {
         assert_eq!(ticket_for_branch("k-12/x").as_deref(), Some("K-12"));
         assert_eq!(ticket_for_branch("feature/nope"), None);
         assert_eq!(ticket_for_branch("k-x/nope"), None);
-        assert_eq!(ticket_for_branch("myrepo-issue0042"), None, "external branches are data, not a format");
+        assert_eq!(
+            ticket_for_branch("myrepo-issue0042"),
+            None,
+            "external branches are data, not a format"
+        );
     }
 }

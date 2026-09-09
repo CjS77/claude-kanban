@@ -52,8 +52,22 @@ fn create_pr_pushes_once_dedupes_and_names_a_missing_gh() {
     // A repo with a done ticket's branch, its "remote" a bare sibling directory — pushes never leave the disk.
     std::fs::create_dir_all(&repo).unwrap();
     git(&repo, &["init", "-q", "-b", "main"]).unwrap();
-    git(&repo, &["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "seed"])
-        .unwrap();
+    git(
+        &repo,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "seed",
+        ],
+    )
+    .unwrap();
     git(&repo, &["branch", "k-1/work"]).unwrap();
     git(scratch.path(), &["init", "-q", "--bare", "origin.git"]).unwrap();
     git(&repo, &["remote", "add", "origin", bare.to_str().unwrap()]).unwrap();
@@ -77,9 +91,37 @@ fn create_pr_pushes_once_dedupes_and_names_a_missing_gh() {
     )
     .unwrap();
     let id = TicketId("K-1".into());
-    ops::apply(&store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
-    ops::apply(&store, None, Op::StampWorktree { id: id.clone(), branch: "k-1/work".into(), path: "/tmp/unused".into() }).unwrap();
-    ops::apply(&store, None, Op::MoveTicket { id, to: ColumnId::Review, position: None, owner: None, branch: None }).unwrap();
+    ops::apply(
+        &store,
+        None,
+        Op::Claim {
+            id: id.clone(),
+            agent: "claude".into(),
+        },
+    )
+    .unwrap();
+    ops::apply(
+        &store,
+        None,
+        Op::StampWorktree {
+            id: id.clone(),
+            branch: "k-1/work".into(),
+            path: "/tmp/unused".into(),
+        },
+    )
+    .unwrap();
+    ops::apply(
+        &store,
+        None,
+        Op::MoveTicket {
+            id,
+            to: ColumnId::Review,
+            position: None,
+            owner: None,
+            branch: None,
+        },
+    )
+    .unwrap();
 
     // The gh shim: logs argv, answers `pr list` from a swappable file and `pr create` with the canned URL.
     let shims = scratch.path().join("shims");
@@ -118,13 +160,23 @@ fn create_pr_pushes_once_dedupes_and_names_a_missing_gh() {
     let outcome = create_pr_with_path(&shim_path, &store_dir, &out);
     assert_eq!(outcome, format!("ok created=false url={PR_URL}"));
     let gh_log = std::fs::read_to_string(&log).unwrap();
-    assert_eq!(gh_log.matches("pr create").count(), 1, "dedupe must prevent a second create: {gh_log}");
+    assert_eq!(
+        gh_log.matches("pr create").count(),
+        1,
+        "dedupe must prevent a second create: {gh_log}"
+    );
 
     // gh absent (PATH holds git alone): install advice, not a bare spawn error.
-    let real_git = String::from_utf8(std::process::Command::new("which").arg("git").output().unwrap().stdout).unwrap().trim().to_owned();
+    let real_git = String::from_utf8(std::process::Command::new("which").arg("git").output().unwrap().stdout)
+        .unwrap()
+        .trim()
+        .to_owned();
     let gitonly = scratch.path().join("gitonly");
     std::fs::create_dir_all(&gitonly).unwrap();
     std::os::unix::fs::symlink(&real_git, gitonly.join("git")).unwrap();
     let outcome = create_pr_with_path(gitonly.to_str().unwrap(), &store_dir, &out);
-    assert!(outcome.starts_with("err") && outcome.contains("GitHub CLI (gh) not found"), "{outcome}");
+    assert!(
+        outcome.starts_with("err") && outcome.contains("GitHub CLI (gh) not found"),
+        "{outcome}"
+    );
 }

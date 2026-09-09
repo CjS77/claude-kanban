@@ -1,14 +1,12 @@
 //! Hardening for a loopback HTTP server. The threat is not the network — the listener binds `127.0.0.1` only — it is the
 //! user's own browser running someone else's page. Two attacks matter, and one middleware kills both:
 //!
-//! - **DNS rebinding**: a malicious page at `evil.example` re-points its DNS at `127.0.0.1` and reads our responses as if
-//!   same-origin. Its requests necessarily carry `Host: evil.example`, so an exact Host allowlist stops every one of them,
-//!   reads included.
-//! - **CSRF**: a cross-site form POSTs to `http://127.0.0.1:4747/ui/...`. Cross-site forms cannot set custom headers, and a
-//!   cross-origin `fetch` with one triggers a CORS preflight this server never grants (it sends no `Access-Control-Allow-*`
-//!   at all — the absence is the feature). So requiring the `X-Board-Version` header on every non-GET — a header our own
-//!   UI already sends for optimistic concurrency — makes mutations unforgeable. A present-but-wrong `Origin` is rejected
-//!   as belt-and-braces.
+//! - **DNS rebinding**: a malicious page at `evil.example` re-points its DNS at `127.0.0.1` and reads our responses as if same-origin. Its
+//!   requests necessarily carry `Host: evil.example`, so an exact Host allowlist stops every one of them, reads included.
+//! - **CSRF**: a cross-site form POSTs to `http://127.0.0.1:4747/ui/...`. Cross-site forms cannot set custom headers, and a cross-origin
+//!   `fetch` with one triggers a CORS preflight this server never grants (it sends no `Access-Control-Allow-*` at all — the absence is the
+//!   feature). So requiring the `X-Board-Version` header on every non-GET — a header our own UI already sends for optimistic concurrency —
+//!   makes mutations unforgeable. A present-but-wrong `Origin` is rejected as belt-and-braces.
 //!
 //! There are no cookies and no auth state, so there is nothing else for a cross-site request to ride on.
 

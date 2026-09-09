@@ -19,8 +19,11 @@ fn launcher() -> PathBuf {
 fn uname_stub() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let stub = dir.path().join("uname");
-    std::fs::write(&stub, "#!/bin/sh\ncase \"$1\" in\n-s) echo \"$STUB_SYS\" ;;\n-m) echo \"$STUB_MACHINE\" ;;\n*) echo \"$STUB_SYS\" ;;\nesac\n")
-        .unwrap();
+    std::fs::write(
+        &stub,
+        "#!/bin/sh\ncase \"$1\" in\n-s) echo \"$STUB_SYS\" ;;\n-m) echo \"$STUB_MACHINE\" ;;\n*) echo \"$STUB_SYS\" ;;\nesac\n",
+    )
+    .unwrap();
     std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
     dir
 }
@@ -55,7 +58,10 @@ fn git_bash_flavours_resolve_the_windows_msvc_target() {
 
 #[test]
 fn existing_platforms_still_resolve() {
-    let cases = [("Linux", "x86_64", "x86_64-unknown-linux-musl"), ("Darwin", "arm64", "aarch64-apple-darwin")];
+    let cases = [
+        ("Linux", "x86_64", "x86_64-unknown-linux-musl"),
+        ("Darwin", "arm64", "aarch64-apple-darwin"),
+    ];
     for (sys, machine, want) in cases {
         let (out, ok) = run(sys, machine, "release_target");
         assert!(ok, "{sys}/{machine} must still resolve");
@@ -79,23 +85,35 @@ fn windows_installs_the_exe_path_the_shim_uses() {
     // extensionless name here would have each materialise its own copy and re-download over the other forever.
     let (bin, ok) = run("MINGW64_NT-10.0", "x86_64", "echo \"$bin\"");
     assert!(ok, "the launcher must resolve $bin on Windows");
-    assert!(bin.ends_with("/target/release/claude-kanban.exe"), "Windows must install the .exe the shim installs, got {bin}");
+    assert!(
+        bin.ends_with("/target/release/claude-kanban.exe"),
+        "Windows must install the .exe the shim installs, got {bin}"
+    );
 
     let (bin, ok) = run("Linux", "x86_64", "echo \"$bin\"");
     assert!(ok, "the launcher must resolve $bin on Linux");
     // A path ending in the extensionless name cannot also end in .exe, so this alone pins the non-Windows install.
-    assert!(bin.ends_with("/target/release/claude-kanban"), "non-Windows must keep the extensionless binary, got {bin}");
+    assert!(
+        bin.ends_with("/target/release/claude-kanban"),
+        "non-Windows must keep the extensionless binary, got {bin}"
+    );
 }
 
 #[test]
 fn release_archive_is_zip_on_windows_and_tarball_elsewhere() {
     let (zip, ok) = run("Linux", "x86_64", "release_archive x86_64-pc-windows-msvc");
     assert!(ok, "release_archive must succeed for a windows target");
-    assert_eq!(zip, "claude-kanban-x86_64-pc-windows-msvc.zip", "release.yml attaches a .zip on Windows");
+    assert_eq!(
+        zip, "claude-kanban-x86_64-pc-windows-msvc.zip",
+        "release.yml attaches a .zip on Windows"
+    );
 
     let (tar, ok) = run("Linux", "x86_64", "release_archive x86_64-unknown-linux-musl");
     assert!(ok, "release_archive must succeed for a non-windows target");
-    assert_eq!(tar, "claude-kanban-x86_64-unknown-linux-musl.tar.gz", "release.yml attaches a .tar.gz elsewhere");
+    assert_eq!(
+        tar, "claude-kanban-x86_64-unknown-linux-musl.tar.gz",
+        "release.yml attaches a .tar.gz elsewhere"
+    );
 }
 
 #[test]
@@ -113,6 +131,9 @@ fn release_checksum_is_named_after_the_archive_stem() {
         let (out, ok) = run("Linux", "x86_64", &format!("release_checksum {target}"));
         assert!(ok, "release_checksum must succeed for {target}");
         assert_eq!(out, want, "{target} checksum name must match the published asset");
-        assert!(!out.contains(".tar.gz") && !out.contains(".zip"), "the archive extension must not appear in {out}");
+        assert!(
+            !out.contains(".tar.gz") && !out.contains(".zip"),
+            "the archive extension must not appear in {out}"
+        );
     }
 }

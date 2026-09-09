@@ -108,7 +108,13 @@ mod tests {
     use super::*;
 
     fn claim(id: &str, agent: &str) -> Claim {
-        Claim { ticket: TicketId(id.into()), agent: agent.into(), since: Utc::now(), path: None, kind: ClaimKind::Work }
+        Claim {
+            ticket: TicketId(id.into()),
+            agent: agent.into(),
+            since: Utc::now(),
+            path: None,
+            kind: ClaimKind::Work,
+        }
     }
 
     /// The wire contract: a claims file written before landings existed parses, reads as ownership, and never grows the
@@ -123,7 +129,10 @@ mod tests {
         let v = serde_json::to_value(&claims[0]).unwrap();
         assert!(v.get("kind").is_none(), "ownership stays off the wire");
 
-        let landing = Claim { kind: ClaimKind::Landing, ..claims[0].clone() };
+        let landing = Claim {
+            kind: ClaimKind::Landing,
+            ..claims[0].clone()
+        };
         let v = serde_json::to_value(&landing).unwrap();
         assert_eq!(v["kind"], "landing");
         assert_eq!(serde_json::from_value::<Claim>(v).unwrap(), landing);
@@ -133,12 +142,18 @@ mod tests {
     fn a_landing_is_believed_until_it_goes_stale() {
         let id = TicketId("K-1".into());
         let now = Utc::now();
-        let mut claims = vec![Claim { kind: ClaimKind::Landing, ..claim("K-1", "claude") }];
+        let mut claims = vec![Claim {
+            kind: ClaimKind::Landing,
+            ..claim("K-1", "claude")
+        }];
         assert!(landing_in_flight(&claims, &id, now), "a landing taken just now is in hand");
 
         // The crash case: nothing ever cleared it, so after the cutoff the ticket becomes landable again.
         claims[0].since = now - LANDING_STALE_AFTER - chrono::TimeDelta::seconds(1);
-        assert!(!landing_in_flight(&claims, &id, now), "a stale landing must not wedge the ticket forever");
+        assert!(
+            !landing_in_flight(&claims, &id, now),
+            "a stale landing must not wedge the ticket forever"
+        );
 
         // Ownership is never mistaken for a landing, however old it is.
         let owned = vec![claim("K-1", "claude")];
@@ -152,7 +167,10 @@ mod tests {
         remove_landing(&mut owned, &id);
         assert_eq!(owned.len(), 1, "a worker's claim is not a landing marker to clean up");
 
-        let mut landing = vec![Claim { kind: ClaimKind::Landing, ..claim("K-1", "claude") }];
+        let mut landing = vec![Claim {
+            kind: ClaimKind::Landing,
+            ..claim("K-1", "claude")
+        }];
         remove_landing(&mut landing, &id);
         assert!(landing.is_empty());
     }

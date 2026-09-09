@@ -24,7 +24,11 @@ pub enum GitError {
 /// carrying stderr.
 pub fn run(program: &str, dir: &Path, args: &[&str], envs: &[(&str, &str)]) -> Result<String, GitError> {
     tracing::trace!(dir = %dir.display(), args = args.join(" "), "{program}");
-    let output = Command::new(program).current_dir(dir).args(args).envs(envs.iter().copied()).output()?;
+    let output = Command::new(program)
+        .current_dir(dir)
+        .args(args)
+        .envs(envs.iter().copied())
+        .output()?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).trim_end().to_owned())
     } else {
@@ -41,7 +45,7 @@ pub fn git(dir: &Path, args: &[&str]) -> Result<String, GitError> {
 }
 
 /// The installed git's `(major, minor)`, or `None` when git is missing or its version string is unparseable.
-#[must_use] 
+#[must_use]
 pub fn version() -> Option<(u32, u32)> {
     let out = git(Path::new("."), &["version"]).ok()?;
     // "git version 2.43.0" — take the third word, then its first two numeric components.
@@ -66,7 +70,11 @@ pub fn main_worktree(cwd: &Path) -> Option<PathBuf> {
 /// unknown rev — as distinct from a definite no.
 #[must_use]
 pub fn is_ancestor(repo: &Path, rev: &str, of: &str) -> Option<bool> {
-    let out = Command::new("git").current_dir(repo).args(["merge-base", "--is-ancestor", rev, of]).output().ok()?;
+    let out = Command::new("git")
+        .current_dir(repo)
+        .args(["merge-base", "--is-ancestor", rev, of])
+        .output()
+        .ok()?;
     match out.status.code() {
         Some(0) => Some(true),
         Some(1) => Some(false),
@@ -114,7 +122,9 @@ pub fn branch_exists(repo: &Path, branch: &str) -> bool {
 /// (no repo, or the tip's objects have been gc'd).
 #[must_use]
 pub fn cherry_equivalent(repo: &Path, upstream: &str, tip: &str) -> Option<bool> {
-    git(repo, &["cherry", upstream, tip]).ok().map(|out| out.lines().all(|l| l.starts_with('-')))
+    git(repo, &["cherry", upstream, tip])
+        .ok()
+        .map(|out| out.lines().all(|l| l.starts_with('-')))
 }
 
 /// Where `git merge-tree --write-tree` — the two-argument form used by [`contained_in`] — landed.
@@ -145,7 +155,11 @@ pub fn contained_in(repo: &Path, upstream: &str, tip: &str) -> Option<bool> {
 /// the merge base against the tip and so asks only about the branch's own changes. `None` when git can't answer.
 fn adds_nothing(repo: &Path, upstream: &str, tip: &str) -> Option<bool> {
     let range = format!("{upstream}...{tip}");
-    let out = Command::new("git").current_dir(repo).args(["diff", "--quiet", &range]).output().ok()?;
+    let out = Command::new("git")
+        .current_dir(repo)
+        .args(["diff", "--quiet", &range])
+        .output()
+        .ok()?;
     match out.status.code() {
         Some(0) => Some(true),
         Some(1) => Some(false),
@@ -211,7 +225,11 @@ mod tests {
 
         assert_eq!(is_ancestor(repo.path(), "main", "k-1/work"), Some(true));
         assert_eq!(is_ancestor(repo.path(), "k-1/work", "main"), Some(false));
-        assert_eq!(is_ancestor(repo.path(), "no-such-rev", "main"), None, "an unknown rev is no answer, not a no");
+        assert_eq!(
+            is_ancestor(repo.path(), "no-such-rev", "main"),
+            None,
+            "an unknown rev is no answer, not a no"
+        );
         let plain = tempfile::tempdir().unwrap();
         assert_eq!(is_ancestor(plain.path(), "a", "b"), None);
     }
@@ -225,7 +243,11 @@ mod tests {
 
         let clone_parent = tempfile::tempdir().unwrap();
         let clone = clone_parent.path().join("clone");
-        git(clone_parent.path(), &["clone", "-q", upstream.path().to_str().unwrap(), clone.to_str().unwrap()]).unwrap();
+        git(
+            clone_parent.path(),
+            &["clone", "-q", upstream.path().to_str().unwrap(), clone.to_str().unwrap()],
+        )
+        .unwrap();
         assert_eq!(detect_main_branch(&clone).as_deref(), Some("trunk"), "clone sets origin/HEAD");
 
         // No remote: fall back to a local main…
@@ -282,8 +304,14 @@ mod tests {
         commit_in(repo.path(), "main moves");
 
         let out = diff(repo.path(), "main", "k-9/work").unwrap();
-        assert!(out.contains("+TWO") && out.contains("-two"), "the branch's own change is present:\n{out}");
-        assert!(!out.contains("main-only"), "the three-dot range must exclude main's later commits:\n{out}");
+        assert!(
+            out.contains("+TWO") && out.contains("-two"),
+            "the branch's own change is present:\n{out}"
+        );
+        assert!(
+            !out.contains("main-only"),
+            "the three-dot range must exclude main's later commits:\n{out}"
+        );
 
         // A branch even with main diffs to nothing.
         git(repo.path(), &["checkout", "-q", "-b", "k-10/even", "main"]).unwrap();
@@ -314,12 +342,20 @@ mod tests {
         assert_eq!(cherry_equivalent(repo.path(), "main", &original_tip), Some(false), "not landed yet");
 
         git(repo.path(), &["checkout", "-q", "k-4/work"]).unwrap();
-        git(repo.path(), &["-c", "user.name=t", "-c", "user.email=t@example.com", "rebase", "-q", "main"]).unwrap();
+        git(
+            repo.path(),
+            &["-c", "user.name=t", "-c", "user.email=t@example.com", "rebase", "-q", "main"],
+        )
+        .unwrap();
         git(repo.path(), &["checkout", "-q", "main"]).unwrap();
         git(repo.path(), &["merge", "-q", "--ff-only", "k-4/work"]).unwrap();
         git(repo.path(), &["branch", "-q", "-D", "k-4/work"]).unwrap();
 
-        assert_eq!(cherry_equivalent(repo.path(), "main", &original_tip), Some(true), "patch-ids prove the landing");
+        assert_eq!(
+            cherry_equivalent(repo.path(), "main", &original_tip),
+            Some(true),
+            "patch-ids prove the landing"
+        );
         assert_eq!(cherry_equivalent(repo.path(), "main", "no-such-rev"), None);
     }
 
@@ -351,7 +387,11 @@ mod tests {
         git(repo.path(), &["branch", "-q", "-D", "k-5/work"]).unwrap();
 
         assert_eq!(is_ancestor(repo.path(), &tip, "main"), Some(false), "the squash rewrote everything");
-        assert_eq!(cherry_equivalent(repo.path(), "main", &tip), Some(false), "patch-ids are blind to a squash");
+        assert_eq!(
+            cherry_equivalent(repo.path(), "main", &tip),
+            Some(false),
+            "patch-ids are blind to a squash"
+        );
         assert_eq!(contained_in(repo.path(), "main", &tip), Some(true), "the content is all there");
     }
 
@@ -373,7 +413,11 @@ mod tests {
         git(repo.path(), &["add", "f"]).unwrap();
         commit_in(repo.path(), "ours");
 
-        assert_eq!(contained_in(repo.path(), "main", "k-6/theirs"), None, "a conflict is no answer, not a no");
+        assert_eq!(
+            contained_in(repo.path(), "main", "k-6/theirs"),
+            None,
+            "a conflict is no answer, not a no"
+        );
         assert_eq!(contained_in(repo.path(), "main", "no-such-rev"), None);
         let plain = tempfile::tempdir().unwrap();
         assert_eq!(contained_in(plain.path(), "main", "main"), None);
@@ -387,7 +431,11 @@ mod tests {
         git(repo.path(), &["add", "later"]).unwrap();
         commit_in(repo.path(), "main moves on");
         assert_eq!(is_ancestor(repo.path(), "k-7/empty", "main"), Some(false), "genuinely unmerged");
-        assert_eq!(contained_in(repo.path(), "main", "k-7/empty"), None, "an empty branch proves nothing");
+        assert_eq!(
+            contained_in(repo.path(), "main", "k-7/empty"),
+            None,
+            "an empty branch proves nothing"
+        );
     }
 
     #[test]

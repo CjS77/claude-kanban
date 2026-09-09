@@ -3,10 +3,10 @@
 //! The example board in design.md is the contract, and a round-trip test in this module pins it. Two properties of the shape are
 //! load-bearing and worth restating here:
 //!
-//! - [`Column`] is an internally-tagged enum on `"id"`, so a ticket structurally cannot sit in one column while carrying another
-//!   column's fields (`doing` has an `owner`, `done` has a `completed_at`, `todo` has nothing).
-//! - Priority is the order of [`Board::tickets`]. Among tickets sharing a column, earlier in the array means higher on the board.
-//!   There are no rank numbers to rebalance, and the file stays hand-editable.
+//! - [`Column`] is an internally-tagged enum on `"id"`, so a ticket structurally cannot sit in one column while carrying another column's
+//!   fields (`doing` has an `owner`, `done` has a `completed_at`, `todo` has nothing).
+//! - Priority is the order of [`Board::tickets`]. Among tickets sharing a column, earlier in the array means higher on the board. There are
+//!   no rank numbers to rebalance, and the file stays hand-editable.
 //!
 //! Parsing is deliberately lenient — no `deny_unknown_fields` — because the file is meant to survive hand edits. The trade-off
 //! (accepted for v1) is that unknown fields are dropped on the next programmatic rewrite.
@@ -149,7 +149,7 @@ pub enum Status {
 
 impl Status {
     /// The wire name (`draft` / `stub` / `review` / `ready`).
-    #[must_use] 
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Status::Draft => "draft",
@@ -316,7 +316,7 @@ pub struct Ticket {
 }
 
 /// A ticket's workflow state. Internally tagged on `"id"` so each state carries exactly its own fields: `{"id":"todo"}`,
-/// `{"id":"doing","owner":…,"branch":…}`, `{"id":"review","branch":…}`, `{"id":"done","branch":…,"completed_at":…}`.
+/// `{"id":"doing","owner":…,"branch":…}`, `{"id":"review","owner":…,"branch":…}`, `{"id":"done","branch":…,"completed_at":…}`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "id", rename_all = "snake_case")]
 pub enum Column {
@@ -331,9 +331,15 @@ pub enum Column {
         branch: Option<String>,
     },
     /// Code-complete but not landed: the worktree is finished (or the external work delivered), and the branch or PR is
-    /// waiting to reach the local main branch. Nobody owns a review ticket — entering review drops the claim; rework is
-    /// a fresh claim.
+    /// waiting to reach the local main branch. Entering review drops the *claim*, and the card shows no owner — but the
+    /// builder's name is kept latent here so a rework round can return the ticket to whoever wrote it rather than to the
+    /// reviewer who sent it back. `None` when nobody built it here (e.g. a ticket created straight into review, or an
+    /// external delegate's work).
     Review {
+        /// Who built the work, carried over from `doing`. Latent while in review — the review card renders no owner (see
+        /// the card view) — and restored as the `doing` owner if the ticket is sent back for changes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        owner: Option<String>,
         /// The branch carrying the finished work, carried over from `doing` (or supplied on the move for a companion
         /// subtask that shared its parent's branch).
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -433,7 +439,14 @@ impl External {
     /// A plain GitHub-issue binding — the shape the delegation hook, the delegate skill, and the sub-issue mirror create.
     #[must_use]
     pub fn github_issue(number: u64) -> External {
-        External { provider: "github".into(), kind: "issue".into(), number, closed: false, flag: None, sub_issues: vec![] }
+        External {
+            provider: "github".into(),
+            kind: "issue".into(),
+            number,
+            closed: false,
+            flag: None,
+            sub_issues: vec![],
+        }
     }
 
     /// Whether this binding is a GitHub issue — the only shape the minesweeper machinery knows how to track.
@@ -500,8 +513,18 @@ impl ReviewKind {
     #[must_use]
     pub fn anchor(&self) -> Option<String> {
         match self {
-            ReviewKind::Inline { path, line, side: Side::New, .. } => Some(format!("{path}:{line}")),
-            ReviewKind::Inline { path, line, side: Side::Old, .. } => Some(format!("{path}:{line} (old line)")),
+            ReviewKind::Inline {
+                path,
+                line,
+                side: Side::New,
+                ..
+            } => Some(format!("{path}:{line}")),
+            ReviewKind::Inline {
+                path,
+                line,
+                side: Side::Old,
+                ..
+            } => Some(format!("{path}:{line} (old line)")),
             _ => None,
         }
     }
@@ -510,7 +533,8 @@ impl ReviewKind {
     /// the anchor stays scannable. `None` for anything but an inline entry.
     #[must_use]
     pub fn bullet(&self) -> Option<String> {
-        self.anchor().map(|anchor| format!("- {anchor} — {}", self.text().split('\n').collect::<Vec<_>>().join("\n  ")))
+        self.anchor()
+            .map(|anchor| format!("- {anchor} — {}", self.text().split('\n').collect::<Vec<_>>().join("\n  ")))
     }
 }
 
@@ -577,7 +601,9 @@ impl std::str::FromStr for Verdict {
             "accept" => Ok(Verdict::Accept),
             "request_changes" => Ok(Verdict::RequestChanges),
             "discard" => Ok(Verdict::Discard),
-            other => Err(format!("unknown verdict {other:?} — use \"accept\", \"request_changes\", or \"discard\"")),
+            other => Err(format!(
+                "unknown verdict {other:?} — use \"accept\", \"request_changes\", or \"discard\""
+            )),
         }
     }
 }
@@ -632,8 +658,18 @@ pub fn migrate(board: &mut Board) -> Result<bool, u32> {
     // done ticket stays done even if its branch never merged; re-blocking previously satisfied dependencies on load
     // would be a surprise. Drag a card back to review to opt old work into v2 semantics.
     if !board.columns.iter().any(|c| c.id == ColumnId::Review) {
-        let at = board.columns.iter().position(|c| c.id == ColumnId::Done).unwrap_or(board.columns.len());
-        board.columns.insert(at, ColumnMeta { id: ColumnId::Review, title: "Review".into() });
+        let at = board
+            .columns
+            .iter()
+            .position(|c| c.id == ColumnId::Done)
+            .unwrap_or(board.columns.len());
+        board.columns.insert(
+            at,
+            ColumnMeta {
+                id: ColumnId::Review,
+                title: "Review".into(),
+            },
+        );
     }
     board.schema = CURRENT_SCHEMA;
     Ok(true)
@@ -645,7 +681,11 @@ impl Ticket {
     /// new work, and an old review's findings must not read as this round's.
     #[must_use]
     pub fn review_round(&self) -> &[ReviewEntry] {
-        let start = self.review.iter().rposition(|e| matches!(e.kind, ReviewKind::Verdict { .. })).map_or(0, |i| i + 1);
+        let start = self
+            .review
+            .iter()
+            .rposition(|e| matches!(e.kind, ReviewKind::Verdict { .. }))
+            .map_or(0, |i| i + 1);
         &self.review[start..]
     }
 }
@@ -660,17 +700,29 @@ impl Board {
             next_ticket_seq: 1,
             next_epic_seq: 1,
             columns: vec![
-                ColumnMeta { id: ColumnId::Todo, title: "To do".into() },
-                ColumnMeta { id: ColumnId::Doing, title: "Doing".into() },
-                ColumnMeta { id: ColumnId::Review, title: "Review".into() },
-                ColumnMeta { id: ColumnId::Done, title: "Done".into() },
+                ColumnMeta {
+                    id: ColumnId::Todo,
+                    title: "To do".into(),
+                },
+                ColumnMeta {
+                    id: ColumnId::Doing,
+                    title: "Doing".into(),
+                },
+                ColumnMeta {
+                    id: ColumnId::Review,
+                    title: "Review".into(),
+                },
+                ColumnMeta {
+                    id: ColumnId::Done,
+                    title: "Done".into(),
+                },
             ],
             epics: Vec::new(),
             tickets: Vec::new(),
         }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn ticket(&self, id: &TicketId) -> Option<&Ticket> {
         self.tickets.iter().find(|t| &t.id == id)
     }
@@ -679,7 +731,7 @@ impl Board {
         self.tickets.iter_mut().find(|t| &t.id == id)
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn epic(&self, id: &EpicId) -> Option<&Epic> {
         self.epics.iter().find(|e| &e.id == id)
     }
@@ -736,19 +788,25 @@ impl Board {
 
     /// The counter as minting sees it: the persisted value, never below one past the highest ticket id on the board.
     fn ticket_seq(&self) -> u64 {
-        self.next_ticket_seq.max(next_numeric_suffix(self.tickets.iter().map(|t| t.id.0.as_str()), "K-"))
+        self.next_ticket_seq
+            .max(next_numeric_suffix(self.tickets.iter().map(|t| t.id.0.as_str()), "K-"))
     }
 
     /// The epic counter, by the same rule.
     fn epic_seq(&self) -> u64 {
-        self.next_epic_seq.max(next_numeric_suffix(self.epics.iter().map(|e| e.id.0.as_str()), "EP-"))
+        self.next_epic_seq
+            .max(next_numeric_suffix(self.epics.iter().map(|e| e.id.0.as_str()), "EP-"))
     }
 }
 
 /// Max numeric suffix among `ids` that match `<prefix><digits>`, plus one. Ids that don't match the scheme are ignored, so a
 /// hand-named ticket can't wedge id minting.
 fn next_numeric_suffix<'a>(ids: impl Iterator<Item = &'a str>, prefix: &str) -> u64 {
-    ids.filter_map(|id| id.strip_prefix(prefix)).filter_map(|n| n.parse::<u64>().ok()).max().unwrap_or(0) + 1
+    ids.filter_map(|id| id.strip_prefix(prefix))
+        .filter_map(|n| n.parse::<u64>().ok())
+        .max()
+        .unwrap_or(0)
+        + 1
 }
 
 #[cfg(test)]
@@ -831,7 +889,10 @@ mod tests {
         let board: Board = serde_json::from_str(DESIGN_MD_BOARD).expect("design.md example must parse");
         let reserialized = serde_json::to_value(&board).expect("board must serialize");
         let original: serde_json::Value = serde_json::from_str(DESIGN_MD_BOARD).unwrap();
-        assert_eq!(reserialized, original, "re-serializing the design.md example must not add, drop, or alter fields");
+        assert_eq!(
+            reserialized, original,
+            "re-serializing the design.md example must not add, drop, or alter fields"
+        );
     }
 
     #[test]
@@ -849,7 +910,7 @@ mod tests {
             other => panic!("K-1 should be doing, got {other:?}"),
         }
         let k4 = board.ticket(&TicketId("K-4".into())).unwrap();
-        assert!(matches!(&k4.column, Column::Review { branch } if branch.as_deref() == Some("k-4/audit-log")));
+        assert!(matches!(&k4.column, Column::Review { branch, .. } if branch.as_deref() == Some("k-4/audit-log")));
         let pr = k4.pr.as_ref().unwrap();
         assert_eq!((pr.number, pr.state), (12, PrState::Merged));
         assert_eq!(pr.merged_commit.as_deref(), Some("8f7d3a2c1b"));
@@ -869,7 +930,10 @@ mod tests {
         assert_eq!(board.schema, CURRENT_SCHEMA);
         let ids: Vec<ColumnId> = board.columns.iter().map(|c| c.id).collect();
         assert_eq!(ids, ColumnId::ALL, "review lands between doing and done");
-        assert!(matches!(board.tickets[0].column, Column::Done { discarded: false, .. }), "old done stays done, not discarded");
+        assert!(
+            matches!(board.tickets[0].column, Column::Done { discarded: false, .. }),
+            "old done stays done, not discarded"
+        );
         assert!(!migrate(&mut board).unwrap(), "migrating twice is a no-op");
     }
 
@@ -886,12 +950,30 @@ mod tests {
         // internally-tagged Content buffering unchanged.
         let bare: Ticket =
             serde_json::from_str(r#"{ "id": "K-1", "title": "x", "status": "ready", "column": { "id": "review" } }"#).unwrap();
-        assert!(matches!(&bare.column, Column::Review { branch: None }));
+        // A board written before `owner` existed carries only `branch` (or nothing) — both must still parse, with the
+        // absent owner defaulting to None.
+        assert!(matches!(&bare.column, Column::Review { branch: None, owner: None }));
 
-        let col = Column::Review { branch: Some("k-1/x".into()) };
+        let col = Column::Review {
+            owner: None,
+            branch: Some("k-1/x".into()),
+        };
         let v = serde_json::to_value(&col).unwrap();
-        assert_eq!(v, serde_json::json!({ "id": "review", "branch": "k-1/x" }));
+        assert_eq!(
+            v,
+            serde_json::json!({ "id": "review", "branch": "k-1/x" }),
+            "an owner-less review still serializes to the old shape"
+        );
         assert_eq!(serde_json::from_value::<Column>(v).unwrap(), col);
+
+        // With a builder recorded, the owner rides alongside the branch and round-trips.
+        let owned = Column::Review {
+            owner: Some("alice".into()),
+            branch: Some("k-1/x".into()),
+        };
+        let v = serde_json::to_value(&owned).unwrap();
+        assert_eq!(v, serde_json::json!({ "id": "review", "owner": "alice", "branch": "k-1/x" }));
+        assert_eq!(serde_json::from_value::<Column>(v).unwrap(), owned);
     }
 
     #[test]
@@ -905,35 +987,99 @@ mod tests {
 
         let at: DateTime<Utc> = "2026-07-14T09:12:00Z".parse().unwrap();
         let entries = vec![
-            ReviewEntry { at, author: "auto-review".into(), kind: ReviewKind::Comment { text: "looks right".into() } },
-            ReviewEntry { at, author: "user".into(), kind: ReviewKind::Inline { path: "src/a.rs".into(), line: 7, side: Side::New, text: "nit".into() } },
-            ReviewEntry { at, author: "user".into(), kind: ReviewKind::Inline { path: "src/a.rs".into(), line: 3, side: Side::Old, text: "why gone?".into() } },
-            ReviewEntry { at, author: "user".into(), kind: ReviewKind::Verdict { verdict: Verdict::RequestChanges, text: String::new() } },
-            ReviewEntry { at, author: "auto-review".into(), kind: ReviewKind::Comment { text: "second pass".into() } },
+            ReviewEntry {
+                at,
+                author: "auto-review".into(),
+                kind: ReviewKind::Comment {
+                    text: "looks right".into(),
+                },
+            },
+            ReviewEntry {
+                at,
+                author: "user".into(),
+                kind: ReviewKind::Inline {
+                    path: "src/a.rs".into(),
+                    line: 7,
+                    side: Side::New,
+                    text: "nit".into(),
+                },
+            },
+            ReviewEntry {
+                at,
+                author: "user".into(),
+                kind: ReviewKind::Inline {
+                    path: "src/a.rs".into(),
+                    line: 3,
+                    side: Side::Old,
+                    text: "why gone?".into(),
+                },
+            },
+            ReviewEntry {
+                at,
+                author: "user".into(),
+                kind: ReviewKind::Verdict {
+                    verdict: Verdict::RequestChanges,
+                    text: String::new(),
+                },
+            },
+            ReviewEntry {
+                at,
+                author: "auto-review".into(),
+                kind: ReviewKind::Comment {
+                    text: "second pass".into(),
+                },
+            },
         ];
         let v = serde_json::to_value(&entries).unwrap();
-        assert_eq!(v[0], serde_json::json!({ "at": "2026-07-14T09:12:00Z", "author": "auto-review", "kind": "comment", "text": "looks right" }));
-        assert_eq!(v[1], serde_json::json!({ "at": "2026-07-14T09:12:00Z", "author": "user", "kind": "inline", "path": "src/a.rs", "line": 7, "text": "nit" }));
+        assert_eq!(
+            v[0],
+            serde_json::json!({ "at": "2026-07-14T09:12:00Z", "author": "auto-review", "kind": "comment", "text": "looks right" })
+        );
+        assert_eq!(
+            v[1],
+            serde_json::json!({ "at": "2026-07-14T09:12:00Z", "author": "user", "kind": "inline", "path": "src/a.rs", "line": 7, "text": "nit" })
+        );
         assert_eq!(v[2]["side"], "old");
-        assert_eq!(v[3], serde_json::json!({ "at": "2026-07-14T09:12:00Z", "author": "user", "kind": "verdict", "verdict": "request_changes" }));
+        assert_eq!(
+            v[3],
+            serde_json::json!({ "at": "2026-07-14T09:12:00Z", "author": "user", "kind": "verdict", "verdict": "request_changes" })
+        );
         assert_eq!(serde_json::from_value::<Vec<ReviewEntry>>(v).unwrap(), entries);
 
         assert_eq!(entries[1].kind.bullet().as_deref(), Some("- src/a.rs:7 — nit"));
         assert_eq!(entries[2].kind.bullet().as_deref(), Some("- src/a.rs:3 (old line) — why gone?"));
         assert_eq!(entries[0].kind.bullet(), None);
 
-        let t = Ticket { review: entries.clone(), ..old };
-        assert_eq!(t.review_round(), &entries[4..], "a verdict closes the round; what follows it is the next one");
+        let t = Ticket {
+            review: entries.clone(),
+            ..old
+        };
+        assert_eq!(
+            t.review_round(),
+            &entries[4..],
+            "a verdict closes the round; what follows it is the next one"
+        );
     }
 
     #[test]
     fn done_discarded_round_trips_and_defaults_false() {
-        let kept = Column::Done { branch: None, completed_at: "2026-07-14T09:12:00Z".parse().unwrap(), discarded: false };
+        let kept = Column::Done {
+            branch: None,
+            completed_at: "2026-07-14T09:12:00Z".parse().unwrap(),
+            discarded: false,
+        };
         let v = serde_json::to_value(&kept).unwrap();
-        assert!(v.get("discarded").is_none(), "false stays off the wire — v1 done tickets are unchanged bytes");
+        assert!(
+            v.get("discarded").is_none(),
+            "false stays off the wire — v1 done tickets are unchanged bytes"
+        );
         assert_eq!(serde_json::from_value::<Column>(v).unwrap(), kept);
 
-        let dropped = Column::Done { branch: None, completed_at: "2026-07-14T09:12:00Z".parse().unwrap(), discarded: true };
+        let dropped = Column::Done {
+            branch: None,
+            completed_at: "2026-07-14T09:12:00Z".parse().unwrap(),
+            discarded: true,
+        };
         let v = serde_json::to_value(&dropped).unwrap();
         assert_eq!(v["discarded"], true);
         assert_eq!(serde_json::from_value::<Column>(v).unwrap(), dropped);
@@ -968,7 +1114,11 @@ mod tests {
         let v = serde_json::to_value(&t).unwrap();
         assert!(v.get("model").is_none() && v.get("effort").is_none());
 
-        let set = Ticket { model: Some("claude-opus-4-8".into()), effort: Some(Effort::Xhigh), ..t };
+        let set = Ticket {
+            model: Some("claude-opus-4-8".into()),
+            effort: Some(Effort::Xhigh),
+            ..t
+        };
         let v = serde_json::to_value(&set).unwrap();
         assert_eq!(v["model"], "claude-opus-4-8");
         assert_eq!(v["effort"], "xhigh");
@@ -986,7 +1136,10 @@ mod tests {
         let v = serde_json::to_value(&t).unwrap();
         assert!(v.get("changes_requested").is_none(), "false stays off the wire");
 
-        let sent_back = Ticket { changes_requested: true, ..t };
+        let sent_back = Ticket {
+            changes_requested: true,
+            ..t
+        };
         let v = serde_json::to_value(&sent_back).unwrap();
         assert_eq!(v["changes_requested"], true);
         assert_eq!(serde_json::from_value::<Ticket>(v).unwrap(), sent_back);
@@ -1002,7 +1155,10 @@ mod tests {
         let v = serde_json::to_value(&t).unwrap();
         assert!(v.get("landing_blocked").is_none(), "false stays off the wire");
 
-        let flagged = Ticket { landing_blocked: true, ..t };
+        let flagged = Ticket {
+            landing_blocked: true,
+            ..t
+        };
         let v = serde_json::to_value(&flagged).unwrap();
         assert_eq!(v["landing_blocked"], true);
         assert_eq!(serde_json::from_value::<Ticket>(v).unwrap(), flagged);
@@ -1039,8 +1195,18 @@ mod tests {
         assert_eq!(v["auto_merge"], true);
         assert_eq!(serde_json::from_value::<Ticket>(v).unwrap(), armed);
 
-        let e = Epic { id: EpicId("EP-1".into()), title: "e".into(), color: "#fff".into(), status: Status::Ready, body: String::new(), auto_merge: false };
-        assert!(serde_json::to_value(&e).unwrap().get("auto_merge").is_none(), "and the same on an epic");
+        let e = Epic {
+            id: EpicId("EP-1".into()),
+            title: "e".into(),
+            color: "#fff".into(),
+            status: Status::Ready,
+            body: String::new(),
+            auto_merge: false,
+        };
+        assert!(
+            serde_json::to_value(&e).unwrap().get("auto_merge").is_none(),
+            "and the same on an epic"
+        );
         let armed = Epic { auto_merge: true, ..e };
         let v = serde_json::to_value(&armed).unwrap();
         assert_eq!(v["auto_merge"], true);
@@ -1057,7 +1223,12 @@ mod tests {
         let v = serde_json::to_value(&bare).unwrap();
         assert!(v.get("closed").is_none() && v.get("flag").is_none() && v.get("sub_issues").is_none());
 
-        let observed = External { closed: true, flag: Some("minesweeperFailed".into()), sub_issues: vec![43, 44], ..bare };
+        let observed = External {
+            closed: true,
+            flag: Some("minesweeperFailed".into()),
+            sub_issues: vec![43, 44],
+            ..bare
+        };
         let v = serde_json::to_value(&observed).unwrap();
         assert_eq!(v["closed"], true);
         assert_eq!(v["flag"], "minesweeperFailed");
@@ -1065,7 +1236,13 @@ mod tests {
         assert_eq!(serde_json::from_value::<External>(v).unwrap(), observed);
 
         assert!(External::github_issue(1).is_github_issue());
-        assert!(!External { provider: "gitlab".into(), ..External::github_issue(1) }.is_github_issue());
+        assert!(
+            !External {
+                provider: "gitlab".into(),
+                ..External::github_issue(1)
+            }
+            .is_github_issue()
+        );
     }
 
     /// A board written before the field existed: it parses, reads off, and costs no migration — the same additive-field
@@ -1092,13 +1269,21 @@ mod tests {
 
         let mut board: Board = serde_json::from_value(raw).expect("a board without the field still parses");
         assert!(!board.tickets[0].auto_merge && !board.epics[0].auto_merge);
-        assert!(!migrate(&mut board).unwrap(), "an additive default is not a schema change to persist");
+        assert!(
+            !migrate(&mut board).unwrap(),
+            "an additive default is not a schema change to persist"
+        );
         assert_eq!(board.schema, CURRENT_SCHEMA, "and the schema did not have to move for it");
     }
 
     #[test]
     fn pr_state_open_stays_off_the_wire() {
-        let pr = PrRef { number: 7, url: "https://example.invalid/pull/7".into(), state: PrState::Open, merged_commit: None };
+        let pr = PrRef {
+            number: 7,
+            url: "https://example.invalid/pull/7".into(),
+            state: PrState::Open,
+            merged_commit: None,
+        };
         let v = serde_json::to_value(&pr).unwrap();
         assert!(v.get("state").is_none() && v.get("merged_commit").is_none());
         assert_eq!(serde_json::from_value::<PrRef>(v).unwrap(), pr);
@@ -1120,8 +1305,7 @@ mod tests {
     fn todo_cannot_carry_an_owner_column_state() {
         // The tagged enum makes "in todo but owned" structurally inexpressible; unknown fields inside the tagged object are
         // tolerated on parse (hand-editability) but the *state* is todo, with no data.
-        let t: Ticket =
-            serde_json::from_str(r#"{ "id": "K-1", "title": "x", "status": "ready", "column": { "id": "todo" } }"#).unwrap();
+        let t: Ticket = serde_json::from_str(r#"{ "id": "K-1", "title": "x", "status": "ready", "column": { "id": "todo" } }"#).unwrap();
         assert!(matches!(t.column, Column::Todo));
     }
 
@@ -1154,7 +1338,11 @@ mod tests {
         assert_eq!(board.next_ticket_id().0, "K-1");
         assert_eq!(board.next_epic_id().0, "EP-1");
         board.tickets = ["K-2", "K-9", "custom-name", "K-x"].into_iter().map(bare_ticket).collect();
-        assert_eq!(board.next_ticket_id().0, "K-10", "a hand-named ticket can't wedge minting, and the floor still clears K-9");
+        assert_eq!(
+            board.next_ticket_id().0,
+            "K-10",
+            "a hand-named ticket can't wedge minting, and the floor still clears K-9"
+        );
     }
 
     #[test]
@@ -1165,9 +1353,17 @@ mod tests {
         board.tickets = ids.iter().map(|id| bare_ticket(id)).collect();
 
         board.tickets.retain(|t| t.id.0 != "K-3");
-        assert_eq!(board.next_ticket_id().0, "K-4", "K-3 is spent — its branch and worktree may still exist");
+        assert_eq!(
+            board.next_ticket_id().0,
+            "K-4",
+            "K-3 is spent — its branch and worktree may still exist"
+        );
         board.tickets.clear();
-        assert_eq!(board.mint_ticket_id().0, "K-4", "emptying the board doesn't reset the numbering either");
+        assert_eq!(
+            board.mint_ticket_id().0,
+            "K-4",
+            "emptying the board doesn't reset the numbering either"
+        );
     }
 
     #[test]
@@ -1176,7 +1372,10 @@ mod tests {
         let mut board = Board::empty();
         let ids: Vec<String> = board.mint_ticket_ids(3).into_iter().map(|id| id.0).collect();
         assert_eq!(ids, ["K-1", "K-2", "K-3"]);
-        assert_eq!(board.mint_ticket_ids(2).into_iter().map(|id| id.0).collect::<Vec<_>>(), ["K-4", "K-5"]);
+        assert_eq!(
+            board.mint_ticket_ids(2).into_iter().map(|id| id.0).collect::<Vec<_>>(),
+            ["K-4", "K-5"]
+        );
     }
 
     #[test]
@@ -1186,7 +1385,11 @@ mod tests {
         board.mint_epic_id();
         let json = serde_json::to_string(&board).unwrap();
         let back: Board = serde_json::from_str(&json).unwrap();
-        assert_eq!((back.next_ticket_seq, back.next_epic_seq), (2, 2), "the counters are on the wire, not recomputed on load");
+        assert_eq!(
+            (back.next_ticket_seq, back.next_epic_seq),
+            (2, 2),
+            "the counters are on the wire, not recomputed on load"
+        );
         assert_eq!(back, board);
     }
 
@@ -1215,10 +1418,21 @@ mod tests {
         .unwrap();
 
         let mut board: Board = serde_json::from_value(raw).expect("a board without the counters still parses");
-        assert_eq!((board.next_ticket_seq, board.next_epic_seq), (0, 0), "absent means zero, pending reconciliation");
+        assert_eq!(
+            (board.next_ticket_seq, board.next_epic_seq),
+            (0, 0),
+            "absent means zero, pending reconciliation"
+        );
 
-        assert!(!migrate(&mut board).unwrap(), "reconciling the counters is not a schema change to persist eagerly");
-        assert_eq!((board.next_ticket_seq, board.next_epic_seq), (8, 4), "floored above the highest id in use, not reset to one");
+        assert!(
+            !migrate(&mut board).unwrap(),
+            "reconciling the counters is not a schema change to persist eagerly"
+        );
+        assert_eq!(
+            (board.next_ticket_seq, board.next_epic_seq),
+            (8, 4),
+            "floored above the highest id in use, not reset to one"
+        );
         assert_eq!(board.next_ticket_id().0, "K-8");
         assert_eq!(board.next_epic_id().0, "EP-4");
     }
@@ -1227,7 +1441,11 @@ mod tests {
     /// that has fallen behind a hand-added id must never hand that id out a second time.
     #[test]
     fn a_counter_behind_a_hand_added_id_is_floored_on_load() {
-        let mut board = Board { tickets: vec![bare_ticket("K-99")], next_ticket_seq: 3, ..Board::empty() };
+        let mut board = Board {
+            tickets: vec![bare_ticket("K-99")],
+            next_ticket_seq: 3,
+            ..Board::empty()
+        };
         assert!(!migrate(&mut board).unwrap());
         assert_eq!(board.next_ticket_seq, 100);
         assert_eq!(board.mint_ticket_id().0, "K-100");
@@ -1237,7 +1455,11 @@ mod tests {
     fn completed_at_serializes_as_rfc3339_z() {
         // Pins the chrono serde format against design.md's "2026-07-14T09:12:00Z" (internally-tagged enums buffer content
         // through serde's Content type — this also guards that path).
-        let col = Column::Done { branch: None, completed_at: "2026-07-14T09:12:00Z".parse().unwrap(), discarded: false };
+        let col = Column::Done {
+            branch: None,
+            completed_at: "2026-07-14T09:12:00Z".parse().unwrap(),
+            discarded: false,
+        };
         let v = serde_json::to_value(&col).unwrap();
         assert_eq!(v["completed_at"], "2026-07-14T09:12:00Z");
     }

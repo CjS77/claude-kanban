@@ -18,13 +18,26 @@ fn plugin_and_marketplace_manifests_agree() {
     let marketplace = manifest(".claude-plugin/marketplace.json");
 
     assert_eq!(plugin["name"], "kanban");
-    assert_eq!(marketplace["name"], "claude-kanban", "the marketplace name is what users type after @");
+    assert_eq!(
+        marketplace["name"], "claude-kanban",
+        "the marketplace name is what users type after @"
+    );
 
     let entry = &marketplace["plugins"][0];
-    assert_eq!(entry["name"], plugin["name"], "install addresses plugins[0] by the plugin.json name");
+    assert_eq!(
+        entry["name"], plugin["name"],
+        "install addresses plugins[0] by the plugin.json name"
+    );
     assert_eq!(entry["source"], "./", "the repo root is the plugin");
-    assert_eq!(entry["version"], plugin["version"], "marketplace and plugin versions must move in lockstep");
-    assert_eq!(plugin["version"], env!("CARGO_PKG_VERSION"), "--version must agree with the plugin manifest");
+    assert_eq!(
+        entry["version"], plugin["version"],
+        "marketplace and plugin versions must move in lockstep"
+    );
+    assert_eq!(
+        plugin["version"],
+        env!("CARGO_PKG_VERSION"),
+        "--version must agree with the plugin manifest"
+    );
 }
 
 #[test]
@@ -55,9 +68,15 @@ fn the_setup_commands_drive_the_binary_through_the_launcher() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(&rel);
         let body = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{rel} must exist: /kanban:{name} is a command file: {e}"));
 
-        let frontmatter = body.strip_prefix("---\n").and_then(|rest| rest.split_once("\n---")).map(|(front, _)| front);
+        let frontmatter = body
+            .strip_prefix("---\n")
+            .and_then(|rest| rest.split_once("\n---"))
+            .map(|(front, _)| front);
         let frontmatter = frontmatter.unwrap_or_else(|| panic!("{rel} must open with a --- frontmatter block"));
-        assert!(frontmatter.contains("description:"), "{rel}'s frontmatter must carry a description: it is the command's /help line");
+        assert!(
+            frontmatter.contains("description:"),
+            "{rel}'s frontmatter must carry a description: it is the command's /help line"
+        );
 
         assert!(
             body.contains("${CLAUDE_PLUGIN_ROOT}/bin/kanban-mcp"),
@@ -76,7 +95,10 @@ fn the_setup_commands_drive_the_binary_through_the_launcher() {
 /// The fenced `bash` blocks of a markdown document — what the model is told to actually run, as opposed to prose that
 /// may legitimately name `claude-kanban` (quoting its stderr, or warning against calling it directly).
 fn bash_blocks(body: &str) -> impl Iterator<Item = &str> {
-    body.split("```bash").skip(1).filter_map(|rest| rest.split_once("```")).map(|(block, _)| block)
+    body.split("```bash")
+        .skip(1)
+        .filter_map(|rest| rest.split_once("```"))
+        .map(|(block, _)| block)
 }
 
 /// The opencode surface: `opencode/index.js` injects the MCP server, commands, and effort agents through opencode's
@@ -88,7 +110,16 @@ fn opencode_plugin_wires_the_same_surface() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let plugin = fs::read_to_string(root.join("opencode/index.js")).expect("opencode/index.js is the opencode entry point");
 
-    for name in ["kanban:init", "kanban:open", "kanban:work", "kanban:delegate", "kanban:ticket", "kanban:epic", "kanban:archive", "kanban:review"] {
+    for name in [
+        "kanban:init",
+        "kanban:open",
+        "kanban:work",
+        "kanban:delegate",
+        "kanban:ticket",
+        "kanban:epic",
+        "kanban:archive",
+        "kanban:review",
+    ] {
         assert!(plugin.contains(&format!("\"{name}\"")), "index.js must register the {name} command");
     }
     for level in ["low", "medium", "high", "xhigh", "max"] {
@@ -97,15 +128,33 @@ fn opencode_plugin_wires_the_same_surface() {
         assert!(agent.is_file(), "index.js reads the shared agent prompt {}", agent.display());
     }
     // The /kanban:review reviewer is one fixed shared agent — Claude Code auto-discovers it, opencode injects it.
-    assert!(plugin.contains("kanban-reviewer"), "index.js must inject the kanban-reviewer subagent for /kanban:review");
-    assert!(root.join("agents/kanban-reviewer.md").is_file(), "the shared kanban-reviewer agent prompt must exist");
+    assert!(
+        plugin.contains("kanban-reviewer"),
+        "index.js must inject the kanban-reviewer subagent for /kanban:review"
+    );
+    assert!(
+        root.join("agents/kanban-reviewer.md").is_file(),
+        "the shared kanban-reviewer agent prompt must exist"
+    );
     assert!(plugin.contains("kanban-mcp.cmd"), "index.js must pick the .cmd launcher on Windows");
     assert!(plugin.contains("kanban-rules.md"), "index.js must inject the workflow rules file");
-    assert!(plugin.contains("config.json"), "index.js must read the board config for the models vocabulary");
-    assert!(plugin.contains("kanban-model-"), "index.js must inject model-pinned agents for configured provider/model entries");
-    assert!(plugin.contains("{{KANBAN_MODELS}}"), "index.js must substitute the model dispatch table into the command templates");
+    assert!(
+        plugin.contains("config.json"),
+        "index.js must read the board config for the models vocabulary"
+    );
+    assert!(
+        plugin.contains("kanban-model-"),
+        "index.js must inject model-pinned agents for configured provider/model entries"
+    );
+    assert!(
+        plugin.contains("{{KANBAN_MODELS}}"),
+        "index.js must substitute the model dispatch table into the command templates"
+    );
     for key in ["implement_model", "refine_model"] {
-        assert!(plugin.contains(key), "index.js must read the board's {key} role default and give it a pinned agent");
+        assert!(
+            plugin.contains(key),
+            "index.js must read the board's {key} role default and give it a pinned agent"
+        );
     }
 }
 
@@ -135,9 +184,15 @@ fn the_opencode_commands_drive_the_binary_through_the_launcher() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(&rel);
         let body = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{rel} must exist: it is an opencode command template: {e}"));
 
-        let frontmatter = body.strip_prefix("---\n").and_then(|rest| rest.split_once("\n---")).map(|(front, _)| front);
+        let frontmatter = body
+            .strip_prefix("---\n")
+            .and_then(|rest| rest.split_once("\n---"))
+            .map(|(front, _)| front);
         let frontmatter = frontmatter.unwrap_or_else(|| panic!("{rel} must open with a --- frontmatter block"));
-        assert!(frontmatter.contains("description:"), "{rel}'s frontmatter must carry a description: index.js refuses to load without one");
+        assert!(
+            frontmatter.contains("description:"),
+            "{rel}'s frontmatter must carry a description: index.js refuses to load without one"
+        );
 
         assert!(
             body.contains("{{KANBAN_ROOT}}/bin/kanban-mcp"),
@@ -154,7 +209,10 @@ fn the_opencode_commands_drive_the_binary_through_the_launcher() {
         let rel = format!("opencode/command/{name}.md");
         let body = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(&rel)).unwrap_or_else(|e| panic!("{rel} must exist: {e}"));
         assert!(body.contains("description:"), "{rel} must carry a description");
-        assert!(body.contains("kanban_kanban_"), "{rel} must explain opencode's server-name tool prefix");
+        assert!(
+            body.contains("kanban_kanban_"),
+            "{rel} must explain opencode's server-name tool prefix"
+        );
     }
     // No cwd survives between shell calls on this harness, so the work command must root ticket commands at the
     // worktree path rather than telling the agent to cd into it once. See docs/opencode.md.
@@ -172,7 +230,10 @@ fn the_opencode_commands_drive_the_binary_through_the_launcher() {
         "opencode/command/work.md must not tell the agent to cd once — that wording assumes a cwd this harness drops"
     );
     let work = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("opencode/command/work.md")).unwrap();
-    assert!(work.contains("{{KANBAN_MODELS}}"), "work.md must carry the placeholder index.js fills with the model dispatch table");
+    assert!(
+        work.contains("{{KANBAN_MODELS}}"),
+        "work.md must carry the placeholder index.js fills with the model dispatch table"
+    );
 }
 
 /// opencode never surfaces MCP server instructions, so the rules file the plugin injects via `instructions` must
@@ -194,10 +255,22 @@ fn windows_shim_backs_the_same_mcp_command() {
     let bin_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("bin");
     let cmd = fs::read_to_string(bin_dir.join("kanban-mcp.cmd"))
         .expect("bin/kanban-mcp.cmd must exist: Windows resolves .mcp.json's extensionless command to it via PATHEXT");
-    assert!(cmd.contains("kanban-mcp.ps1"), "the .cmd is a trampoline and must hand off to the PowerShell launcher");
+    assert!(
+        cmd.contains("kanban-mcp.ps1"),
+        "the .cmd is a trampoline and must hand off to the PowerShell launcher"
+    );
 
     let shim = fs::read_to_string(bin_dir.join("kanban-mcp.ps1")).expect("bin/kanban-mcp.ps1 must exist: the .cmd only trampolines");
-    assert!(shim.contains("x86_64-pc-windows-msvc"), "the shim must pin the published Windows release target");
-    assert!(shim.contains("claude-kanban.exe"), "the shim must install the exe name the release zip ships");
-    assert!(shim.is_ascii(), "kanban-mcp.ps1 must stay ASCII: Windows PowerShell 5.1 reads an unmarked .ps1 as ANSI");
+    assert!(
+        shim.contains("x86_64-pc-windows-msvc"),
+        "the shim must pin the published Windows release target"
+    );
+    assert!(
+        shim.contains("claude-kanban.exe"),
+        "the shim must install the exe name the release zip ships"
+    );
+    assert!(
+        shim.is_ascii(),
+        "kanban-mcp.ps1 must stay ASCII: Windows PowerShell 5.1 reads an unmarked .ps1 as ANSI"
+    );
 }

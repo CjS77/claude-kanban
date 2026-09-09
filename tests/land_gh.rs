@@ -50,13 +50,41 @@ fn seed_review_ticket(store: &Store, title: &str, branch: &str) -> TicketId {
     let applied = ops::apply(
         store,
         None,
-        Op::CreateTicket { title: title.into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![], status: Status::Ready, model: None, effort: None, auto_merge: false },
+        Op::CreateTicket {
+            title: title.into(),
+            body: String::new(),
+            epic: None,
+            labels: vec![],
+            depends_on: vec![],
+            status: Status::Ready,
+            model: None,
+            effort: None,
+            auto_merge: false,
+        },
     )
     .unwrap();
     let id = TicketId(applied.created_ids[0].clone());
-    ops::apply(store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
-    ops::apply(store, None, Op::MoveTicket { id: id.clone(), to: ColumnId::Review, position: None, owner: None, branch: Some(branch.into()) })
-        .unwrap();
+    ops::apply(
+        store,
+        None,
+        Op::Claim {
+            id: id.clone(),
+            agent: "claude".into(),
+        },
+    )
+    .unwrap();
+    ops::apply(
+        store,
+        None,
+        Op::MoveTicket {
+            id: id.clone(),
+            to: ColumnId::Review,
+            position: None,
+            owner: None,
+            branch: Some(branch.into()),
+        },
+    )
+    .unwrap();
     id
 }
 
@@ -83,7 +111,11 @@ fn the_poll_discovers_records_notes_and_lands() {
     let main_oid = git(&repo, &["rev-parse", "HEAD"]).unwrap();
 
     git(scratch.path(), &["init", "-q", "--bare", "origin.git"]).unwrap();
-    git(&repo, &["remote", "add", "origin", scratch.path().join("origin.git").to_str().unwrap()]).unwrap();
+    git(
+        &repo,
+        &["remote", "add", "origin", scratch.path().join("origin.git").to_str().unwrap()],
+    )
+    .unwrap();
 
     let store = Store::at(repo.join(".kanban"));
     store.init().unwrap();
@@ -117,13 +149,24 @@ fn the_poll_discovers_records_notes_and_lands() {
     // as a commit main already has (records AND lands in the same tick); K-3's PR closed without merging (records + one
     // note, stays in review).
     let url = |n: u64| format!("https://github.com/example/repo/pull/{n}");
-    std::fs::write(answers.join("list-k-1-work.json"), format!(r#"[{{"number":7,"url":"{}","state":"OPEN","mergeCommit":null}}]"#, url(7))).unwrap();
     std::fs::write(
-        answers.join("list-k-2-side.json"),
-        format!(r#"[{{"number":8,"url":"{}","state":"MERGED","mergeCommit":{{"oid":"{main_oid}"}}}}]"#, url(8)),
+        answers.join("list-k-1-work.json"),
+        format!(r#"[{{"number":7,"url":"{}","state":"OPEN","mergeCommit":null}}]"#, url(7)),
     )
     .unwrap();
-    std::fs::write(answers.join("list-k-3-note.json"), format!(r#"[{{"number":9,"url":"{}","state":"CLOSED","mergeCommit":null}}]"#, url(9))).unwrap();
+    std::fs::write(
+        answers.join("list-k-2-side.json"),
+        format!(
+            r#"[{{"number":8,"url":"{}","state":"MERGED","mergeCommit":{{"oid":"{main_oid}"}}}}]"#,
+            url(8)
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        answers.join("list-k-3-note.json"),
+        format!(r#"[{{"number":9,"url":"{}","state":"CLOSED","mergeCommit":null}}]"#, url(9)),
+    )
+    .unwrap();
 
     let outcome = poll_with_path(&shim_path, store.dir(), &out);
     assert_eq!(outcome, "polled=3 swept=0");
@@ -131,21 +174,32 @@ fn the_poll_discovers_records_notes_and_lands() {
     let pr1 = board.ticket(&k1).unwrap().pr.as_ref().unwrap();
     assert_eq!((pr1.number, pr1.state), (7, PrState::Open));
     let t2 = board.ticket(&k2).unwrap();
-    assert!(matches!(t2.column, Column::Done { discarded: false, .. }), "merged-and-pulled lands within the tick");
+    assert!(
+        matches!(t2.column, Column::Done { discarded: false, .. }),
+        "merged-and-pulled lands within the tick"
+    );
     assert!(t2.notes.last().unwrap().text.contains("PR #8 merged and pulled"), "{:?}", t2.notes);
     let t3 = board.ticket(&k3).unwrap();
     assert!(matches!(t3.column, Column::Review { .. }));
-    let closed_notes = |t: &claude_kanban::store::model::Ticket| t.notes.iter().filter(|n| n.text.contains("closed without merging")).count();
+    let closed_notes =
+        |t: &claude_kanban::store::model::Ticket| t.notes.iter().filter(|n| n.text.contains("closed without merging")).count();
     assert_eq!(closed_notes(t3), 1, "{:?}", t3.notes);
 
     // Round 2 — recorded PRs re-polled by number: K-1's PR merges on GitHub as the squash commit main does NOT yet
     // have (records the state, stays in review); K-3 unchanged (no second note).
     std::fs::write(
         answers.join("view-7.json"),
-        format!(r#"{{"number":7,"url":"{}","state":"MERGED","mergeCommit":{{"oid":"{squash_oid}"}}}}"#, url(7)),
+        format!(
+            r#"{{"number":7,"url":"{}","state":"MERGED","mergeCommit":{{"oid":"{squash_oid}"}}}}"#,
+            url(7)
+        ),
     )
     .unwrap();
-    std::fs::write(answers.join("view-9.json"), format!(r#"{{"number":9,"url":"{}","state":"CLOSED","mergeCommit":null}}"#, url(9))).unwrap();
+    std::fs::write(
+        answers.join("view-9.json"),
+        format!(r#"{{"number":9,"url":"{}","state":"CLOSED","mergeCommit":null}}"#, url(9)),
+    )
+    .unwrap();
 
     let outcome = poll_with_path(&shim_path, store.dir(), &out);
     assert_eq!(outcome, "polled=1 swept=0", "merged-but-unpulled must not land");
@@ -153,7 +207,11 @@ fn the_poll_discovers_records_notes_and_lands() {
     let t1 = board.ticket(&k1).unwrap();
     assert!(matches!(t1.column, Column::Review { .. }));
     assert_eq!(t1.pr.as_ref().unwrap().state, PrState::Merged);
-    assert_eq!(closed_notes(board.ticket(&k3).unwrap()), 1, "the closed note fires once, not per poll");
+    assert_eq!(
+        closed_notes(board.ticket(&k3).unwrap()),
+        1,
+        "the closed note fires once, not per poll"
+    );
 
     // Round 3 — the local "git pull": main fast-forwards onto the squash commit; the offline sweep lands K-1. The poll
     // itself skips K-1 now (merged is terminal for polling).
@@ -164,7 +222,10 @@ fn the_poll_discovers_records_notes_and_lands() {
     assert!(matches!(board.ticket(&k1).unwrap().column, Column::Done { discarded: false, .. }));
 
     // Round 4 — gh vanishes (PATH holds git alone): the poll goes quiet, and the board is byte-identical afterwards.
-    let real_git = String::from_utf8(std::process::Command::new("which").arg("git").output().unwrap().stdout).unwrap().trim().to_owned();
+    let real_git = String::from_utf8(std::process::Command::new("which").arg("git").output().unwrap().stdout)
+        .unwrap()
+        .trim()
+        .to_owned();
     let gitonly = scratch.path().join("gitonly");
     std::fs::create_dir_all(&gitonly).unwrap();
     std::os::unix::fs::symlink(&real_git, gitonly.join("git")).unwrap();

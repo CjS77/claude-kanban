@@ -18,18 +18,25 @@ use super::StoreError;
 /// claims), not an error.
 pub(crate) fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, StoreError> {
     match fs::read_to_string(path) {
-        Ok(text) => serde_json::from_str(&text)
-            .map(Some)
-            .map_err(|source| StoreError::Parse { path: path.to_owned(), source }),
+        Ok(text) => serde_json::from_str(&text).map(Some).map_err(|source| StoreError::Parse {
+            path: path.to_owned(),
+            source,
+        }),
         Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
-        Err(source) => Err(StoreError::Io { path: path.to_owned(), source }),
+        Err(source) => Err(StoreError::Io {
+            path: path.to_owned(),
+            source,
+        }),
     }
 }
 
 /// Serialize `value` as pretty JSON (with a trailing newline — the files are meant to be read and hand-edited) and atomically
 /// replace `path` with it via a same-directory temp file and rename.
 pub(crate) fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), StoreError> {
-    let mut text = serde_json::to_string_pretty(value).map_err(|source| StoreError::Parse { path: path.to_owned(), source })?;
+    let mut text = serde_json::to_string_pretty(value).map_err(|source| StoreError::Parse {
+        path: path.to_owned(),
+        source,
+    })?;
     text.push('\n');
     write_bytes_atomic(path, text.as_bytes())
 }
@@ -38,7 +45,10 @@ pub(crate) fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<
 /// [`write_json_atomic`], but with no serialization in the way. The schema backup uses it to preserve the original file
 /// byte-for-byte, key order and hand-edits included.
 pub(crate) fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<(), StoreError> {
-    let io_err = |source| StoreError::Io { path: path.to_owned(), source };
+    let io_err = |source| StoreError::Io {
+        path: path.to_owned(),
+        source,
+    };
 
     let tmp = tmp_path(path);
     let mut file = File::create(&tmp).map_err(io_err)?;
@@ -78,7 +88,10 @@ mod tests {
         write_json_atomic(&path, &vec![1u32, 2, 3]).unwrap();
         assert_eq!(read_json::<Vec<u32>>(&path).unwrap(), Some(vec![1, 2, 3]));
         assert!(!path.with_file_name("board.json.tmp").exists(), "tmp file must be renamed away");
-        assert!(fs::read_to_string(&path).unwrap().ends_with('\n'), "hand-editable files end in a newline");
+        assert!(
+            fs::read_to_string(&path).unwrap().ends_with('\n'),
+            "hand-editable files end in a newline"
+        );
     }
 
     #[test]

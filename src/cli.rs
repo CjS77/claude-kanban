@@ -12,7 +12,11 @@ use crate::store::{Store, model::TicketId};
 
 /// A local-only Kanban board for planning and tracking work with Claude.
 #[derive(Debug, Parser)]
-#[command(name = "claude-kanban", version, about = "A local-only Kanban board for planning and tracking work with Claude")]
+#[command(
+    name = "claude-kanban",
+    version,
+    about = "A local-only Kanban board for planning and tracking work with Claude"
+)]
 pub struct Cli {
     /// Directory holding `board.json`. Defaults to the main working tree's `.kanban` (asked of git), falling back to
     /// `./.kanban` outside a repository.
@@ -140,20 +144,45 @@ pub fn run() -> anyhow::Result<()> {
 fn worktree(store: &Store, command: WorktreeCommand) -> anyhow::Result<()> {
     use crate::worktree as wt;
     match command {
-        WorktreeCommand::Start { ticket, base, slug, dir, no_sparse, json } => {
-            let report = wt::start(store, &TicketId(ticket), &wt::StartOpts { base, slug, dir, no_sparse })?;
+        WorktreeCommand::Start {
+            ticket,
+            base,
+            slug,
+            dir,
+            no_sparse,
+            json,
+        } => {
+            let report = wt::start(
+                store,
+                &TicketId(ticket),
+                &wt::StartOpts {
+                    base,
+                    slug,
+                    dir,
+                    no_sparse,
+                },
+            )?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
                 let how = if report.reattached { "re-attached" } else { "created" };
                 println!("{} worktree for {}:", how, report.ticket);
                 println!("  branch  {}", report.branch);
-                println!("  path    {}{}", report.path.display(), if report.sparse { "  (sparse — no .kanban/)" } else { "" });
+                println!(
+                    "  path    {}{}",
+                    report.path.display(),
+                    if report.sparse { "  (sparse — no .kanban/)" } else { "" }
+                );
                 report.warnings.iter().for_each(|w| println!("  warning: {w}"));
             }
             Ok(())
         }
-        WorktreeCommand::Finish { ticket, force_discard, merge, json } => {
+        WorktreeCommand::Finish {
+            ticket,
+            force_discard,
+            merge,
+            json,
+        } => {
             let report = wt::finish(store, &TicketId(ticket), force_discard, merge)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
@@ -184,7 +213,12 @@ fn worktree(store: &Store, command: WorktreeCommand) -> anyhow::Result<()> {
                         (false, false) => "clean",
                     };
                     let agent = r.agent.as_deref().map(|a| format!("  [{a}]")).unwrap_or_default();
-                    println!("{:<6} {:<32} {}  ({state}){agent}", r.ticket.as_deref().unwrap_or("—"), r.branch, r.path.display());
+                    println!(
+                        "{:<6} {:<32} {}  ({state}){agent}",
+                        r.ticket.as_deref().unwrap_or("—"),
+                        r.branch,
+                        r.path.display()
+                    );
                 }
             }
             Ok(())
@@ -200,7 +234,10 @@ fn worktree(store: &Store, command: WorktreeCommand) -> anyhow::Result<()> {
 fn init_tracing() {
     use tracing_subscriber::EnvFilter;
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("claude_kanban=info,tower_http=warn"));
-    tracing_subscriber::fmt().with_env_filter(filter).with_writer(std::io::stderr).init();
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .init();
 }
 
 /// `claude-kanban init` — seed an empty board, a default config, and the store-local gitignore.

@@ -96,7 +96,8 @@ impl Config {
     /// The effective worktree root: `--dir` flag / `KANBAN_WORKTREE_DIR` (already merged by clap) > config > default.
     #[must_use]
     pub fn worktree_root(&self, flag: Option<PathBuf>) -> PathBuf {
-        flag.or_else(|| self.worktree_root.clone()).unwrap_or_else(|| PathBuf::from(DEFAULT_WORKTREE_ROOT))
+        flag.or_else(|| self.worktree_root.clone())
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_WORKTREE_ROOT))
     }
 
     /// The effective worker count for `/kanban:work`: absent or `0` collapses to `1`.
@@ -144,7 +145,9 @@ impl Config {
     /// The effective eligibility label: absent collapses to [`DEFAULT_MINESWEEPER_LABEL`].
     #[must_use]
     pub fn minesweeper_label(&self) -> String {
-        self.minesweeper_label.clone().unwrap_or_else(|| DEFAULT_MINESWEEPER_LABEL.to_owned())
+        self.minesweeper_label
+            .clone()
+            .unwrap_or_else(|| DEFAULT_MINESWEEPER_LABEL.to_owned())
     }
 
     /// The effective flag labels: empty collapses to [`DEFAULT_MINESWEEPER_FLAG_LABELS`].
@@ -172,14 +175,22 @@ impl Config {
     /// no collapse to a default: absent has to stay distinguishable from set, because absent is what means "inherit".
     #[must_use]
     pub fn implement_model(&self) -> Option<String> {
-        self.implement_model.as_deref().map(str::trim).filter(|m| !m.is_empty()).map(str::to_owned)
+        self.implement_model
+            .as_deref()
+            .map(str::trim)
+            .filter(|m| !m.is_empty())
+            .map(str::to_owned)
     }
 
     /// The default model for refining a stub that names none. Same "absent means inherit" rule as
     /// [`Config::implement_model`].
     #[must_use]
     pub fn refine_model(&self) -> Option<String> {
-        self.refine_model.as_deref().map(str::trim).filter(|m| !m.is_empty()).map(str::to_owned)
+        self.refine_model
+            .as_deref()
+            .map(str::trim)
+            .filter(|m| !m.is_empty())
+            .map(str::to_owned)
     }
 
     /// Whether a review loop may press verdicts on this board: absent collapses to off, exactly like
@@ -205,13 +216,28 @@ mod tests {
     #[test]
     fn auto_review_defaults_off_and_reads_the_flag() {
         assert!(!Config::default().auto_review(), "absent means the verdict stays the human's");
-        assert!(!Config { auto_review: Some(false), ..Config::default() }.auto_review());
-        assert!(Config { auto_review: Some(true), ..Config::default() }.auto_review());
+        assert!(
+            !Config {
+                auto_review: Some(false),
+                ..Config::default()
+            }
+            .auto_review()
+        );
+        assert!(
+            Config {
+                auto_review: Some(true),
+                ..Config::default()
+            }
+            .auto_review()
+        );
     }
 
     #[test]
     fn precedence_is_flag_then_config_then_default() {
-        let cfg = Config { worktree_root: Some(PathBuf::from("/from/config")), ..Config::default() };
+        let cfg = Config {
+            worktree_root: Some(PathBuf::from("/from/config")),
+            ..Config::default()
+        };
         assert_eq!(cfg.worktree_root(Some(PathBuf::from("/from/flag"))), PathBuf::from("/from/flag"));
         assert_eq!(cfg.worktree_root(None), PathBuf::from("/from/config"));
         assert_eq!(Config::default().worktree_root(None), PathBuf::from(DEFAULT_WORKTREE_ROOT));
@@ -227,7 +253,11 @@ mod tests {
     #[test]
     fn a_valid_config_parses() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("config.json"), r#"{ "worktree_root": "/data/wt", "copy_to_worktrees": [".env"] }"#).unwrap();
+        std::fs::write(
+            dir.path().join("config.json"),
+            r#"{ "worktree_root": "/data/wt", "copy_to_worktrees": [".env"] }"#,
+        )
+        .unwrap();
         let cfg = Config::load(dir.path()).unwrap();
         assert_eq!(cfg.worktree_root.unwrap(), PathBuf::from("/data/wt"));
         assert_eq!(cfg.copy_to_worktrees, vec![".env"]);
@@ -236,8 +266,22 @@ mod tests {
     #[test]
     fn max_workers_absent_and_zero_collapse_to_one() {
         assert_eq!(Config::default().max_workers(), 1);
-        assert_eq!(Config { max_workers: Some(0), ..Config::default() }.max_workers(), 1);
-        assert_eq!(Config { max_workers: Some(4), ..Config::default() }.max_workers(), 4);
+        assert_eq!(
+            Config {
+                max_workers: Some(0),
+                ..Config::default()
+            }
+            .max_workers(),
+            1
+        );
+        assert_eq!(
+            Config {
+                max_workers: Some(4),
+                ..Config::default()
+            }
+            .max_workers(),
+            4
+        );
     }
 
     #[test]
@@ -250,8 +294,22 @@ mod tests {
     #[test]
     fn idle_time_absent_and_zero_collapse_to_five_minutes() {
         assert_eq!(Config::default().idle_time(), DEFAULT_IDLE_TIME_SECS);
-        assert_eq!(Config { idle_time: Some(0), ..Config::default() }.idle_time(), DEFAULT_IDLE_TIME_SECS);
-        assert_eq!(Config { idle_time: Some(30), ..Config::default() }.idle_time(), 30);
+        assert_eq!(
+            Config {
+                idle_time: Some(0),
+                ..Config::default()
+            }
+            .idle_time(),
+            DEFAULT_IDLE_TIME_SECS
+        );
+        assert_eq!(
+            Config {
+                idle_time: Some(30),
+                ..Config::default()
+            }
+            .idle_time(),
+            30
+        );
     }
 
     #[test]
@@ -263,16 +321,37 @@ mod tests {
 
     #[test]
     fn poll_interval_defaults_to_a_minute_and_zero_switches_it_off() {
-        assert_eq!(Config::default().poll_interval(), Some(Duration::from_secs(DEFAULT_POLL_INTERVAL_SECS)));
-        assert_eq!(Config { poll_interval: Some(0), ..Config::default() }.poll_interval(), None, "0 is the off switch");
-        assert_eq!(Config { poll_interval: Some(15), ..Config::default() }.poll_interval(), Some(Duration::from_secs(15)));
+        assert_eq!(
+            Config::default().poll_interval(),
+            Some(Duration::from_secs(DEFAULT_POLL_INTERVAL_SECS))
+        );
+        assert_eq!(
+            Config {
+                poll_interval: Some(0),
+                ..Config::default()
+            }
+            .poll_interval(),
+            None,
+            "0 is the off switch"
+        );
+        assert_eq!(
+            Config {
+                poll_interval: Some(15),
+                ..Config::default()
+            }
+            .poll_interval(),
+            Some(Duration::from_secs(15))
+        );
     }
 
     #[test]
     fn main_branch_config_beats_detection() {
         // The tempdir is no git repo, so detection yields nothing — config is the only voice.
         let dir = tempfile::tempdir().unwrap();
-        let cfg = Config { main_branch: Some("trunk".into()), ..Config::default() };
+        let cfg = Config {
+            main_branch: Some("trunk".into()),
+            ..Config::default()
+        };
         assert_eq!(cfg.main_branch(dir.path()).as_deref(), Some("trunk"));
         assert_eq!(Config::default().main_branch(dir.path()), None, "no config, no repo: no answer");
     }
@@ -306,7 +385,10 @@ mod tests {
         let cfg = Config::default();
         assert!(!cfg.minesweeper(), "delegation is opt-in per project");
         assert_eq!(cfg.minesweeper_label(), DEFAULT_MINESWEEPER_LABEL);
-        assert_eq!(cfg.minesweeper_flag_labels(), DEFAULT_MINESWEEPER_FLAG_LABELS.map(str::to_owned).to_vec());
+        assert_eq!(
+            cfg.minesweeper_flag_labels(),
+            DEFAULT_MINESWEEPER_FLAG_LABELS.map(str::to_owned).to_vec()
+        );
     }
 
     #[test]
@@ -323,16 +405,37 @@ mod tests {
     #[test]
     fn models_absent_and_empty_collapse_to_the_claude_aliases() {
         assert_eq!(Config::default().models(), DEFAULT_MODELS.map(str::to_owned).to_vec());
-        assert_eq!(Config { models: vec![], ..Config::default() }.models(), DEFAULT_MODELS.map(str::to_owned).to_vec());
-        let cfg = Config { models: vec!["venice/zai-org-glm-5-2".into()], ..Config::default() };
-        assert_eq!(cfg.models(), vec!["venice/zai-org-glm-5-2"], "a configured list replaces the defaults, never merges");
+        assert_eq!(
+            Config {
+                models: vec![],
+                ..Config::default()
+            }
+            .models(),
+            DEFAULT_MODELS.map(str::to_owned).to_vec()
+        );
+        let cfg = Config {
+            models: vec!["venice/zai-org-glm-5-2".into()],
+            ..Config::default()
+        };
+        assert_eq!(
+            cfg.models(),
+            vec!["venice/zai-org-glm-5-2"],
+            "a configured list replaces the defaults, never merges"
+        );
     }
 
     #[test]
     fn models_parse_from_config_file() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("config.json"), r#"{ "models": ["venice/zai-org-glm-5-2", "anthropic/claude-opus-4-8"] }"#).unwrap();
-        assert_eq!(Config::load(dir.path()).unwrap().models(), vec!["venice/zai-org-glm-5-2", "anthropic/claude-opus-4-8"]);
+        std::fs::write(
+            dir.path().join("config.json"),
+            r#"{ "models": ["venice/zai-org-glm-5-2", "anthropic/claude-opus-4-8"] }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            Config::load(dir.path()).unwrap().models(),
+            vec!["venice/zai-org-glm-5-2", "anthropic/claude-opus-4-8"]
+        );
     }
 
     #[test]
@@ -340,7 +443,11 @@ mod tests {
         let cfg = Config::default();
         assert_eq!(cfg.implement_model(), None, "absent means inherit the session model");
         assert_eq!(cfg.refine_model(), None);
-        let cfg = Config { implement_model: Some("  ".into()), refine_model: Some(String::new()), ..Config::default() };
+        let cfg = Config {
+            implement_model: Some("  ".into()),
+            refine_model: Some(String::new()),
+            ..Config::default()
+        };
         assert_eq!(cfg.implement_model(), None, "blank is not a model name — it collapses to inherit");
         assert_eq!(cfg.refine_model(), None);
     }
@@ -353,12 +460,19 @@ mod tests {
         let cfg = Config::load(dir.path()).unwrap();
         assert_eq!(cfg.implement_model().as_deref(), Some("venice/deepseek-v4-flash"));
         assert_eq!(cfg.refine_model().as_deref(), Some("venice/zai-org-glm-5-3"));
-        assert_eq!(cfg.models(), DEFAULT_MODELS.map(str::to_owned).to_vec(), "role defaults need not appear in the vocabulary");
+        assert_eq!(
+            cfg.models(),
+            DEFAULT_MODELS.map(str::to_owned).to_vec(),
+            "role defaults need not appear in the vocabulary"
+        );
     }
 
     #[test]
     fn port_precedence_is_flag_env_then_config_then_nobody() {
-        let cfg = Config { port: Some(5050), ..Config::default() };
+        let cfg = Config {
+            port: Some(5050),
+            ..Config::default()
+        };
         assert_eq!(cfg.port(Some(8080)), Some(8080), "flag/env (merged by clap) beats config");
         assert_eq!(cfg.port(None), Some(5050), "config beats the default");
         assert_eq!(Config::default().port(None), None, "None means: try 4747, hunt on AddrInUse");

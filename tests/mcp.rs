@@ -30,9 +30,15 @@ impl McpSession {
             "initialize",
             &json!({ "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "smoke", "version": "0" } }),
         );
-        assert!(init["result"]["capabilities"]["tools"].is_object(), "server must advertise tools: {init}");
+        assert!(
+            init["result"]["capabilities"]["tools"].is_object(),
+            "server must advertise tools: {init}"
+        );
         let instructions = init["result"]["instructions"].as_str().unwrap_or_default();
-        assert!(instructions.contains("kanban_next"), "instructions must carry the workflow contract");
+        assert!(
+            instructions.contains("kanban_next"),
+            "instructions must carry the workflow contract"
+        );
         assert!(
             instructions.contains("kanban_move to review") && instructions.contains("Done is not yours to declare"),
             "instructions must carry the v2 close-out contract: {instructions}"
@@ -89,23 +95,56 @@ fn the_mcp_face_reads_claims_and_recovers_from_conflicts() {
 
     // The advertised tool set.
     let tools = mcp.request(2, "tools/list", &json!({}));
-    let names: Vec<&str> = tools["result"]["tools"].as_array().unwrap().iter().filter_map(|t| t["name"].as_str()).collect();
-    for expected in ["kanban_board", "kanban_next", "kanban_claim", "kanban_release", "kanban_move", "kanban_create_ticket", "kanban_create_epic", "kanban_note", "kanban_review_comment", "kanban_review", "kanban_refine"] {
+    let names: Vec<&str> = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    for expected in [
+        "kanban_board",
+        "kanban_next",
+        "kanban_claim",
+        "kanban_release",
+        "kanban_move",
+        "kanban_create_ticket",
+        "kanban_create_epic",
+        "kanban_note",
+        "kanban_review_comment",
+        "kanban_review",
+        "kanban_refine",
+    ] {
         assert!(names.contains(&expected), "missing tool {expected}; got {names:?}");
     }
 
     // Create a ready ticket (explicit status overrides the review default), then read the board.
-    let created = mcp.call_tool(3, "kanban_create_ticket", &json!({ "title": "From Claude", "status": "ready", "expected_version": 0 }));
+    let created = mcp.call_tool(
+        3,
+        "kanban_create_ticket",
+        &json!({ "title": "From Claude", "status": "ready", "expected_version": 0 }),
+    );
     assert_eq!(created["structuredContent"]["id"], "K-1", "{created}");
     assert_eq!(created["structuredContent"]["version"], 1);
 
     let board = mcp.call_tool(4, "kanban_board", &json!({}));
     assert_eq!(board["structuredContent"]["tickets"][0]["title"], "From Claude");
-    assert_eq!(board["structuredContent"]["max_workers"], 1, "unconfigured board defaults to one worker: {board}");
-    assert_eq!(board["structuredContent"]["idle_time"], 300, "unconfigured board defaults to a five-minute idle: {board}");
+    assert_eq!(
+        board["structuredContent"]["max_workers"], 1,
+        "unconfigured board defaults to one worker: {board}"
+    );
+    assert_eq!(
+        board["structuredContent"]["idle_time"], 300,
+        "unconfigured board defaults to a five-minute idle: {board}"
+    );
     let aliases = json!(["opus", "sonnet", "haiku", "fable"]);
-    assert_eq!(board["structuredContent"]["models"], aliases, "unconfigured board suggests the Claude aliases: {board}");
-    assert!(board["structuredContent"]["implement_model"].is_null(), "no role default means inherit the session: {board}");
+    assert_eq!(
+        board["structuredContent"]["models"], aliases,
+        "unconfigured board suggests the Claude aliases: {board}"
+    );
+    assert!(
+        board["structuredContent"]["implement_model"].is_null(),
+        "no role default means inherit the session: {board}"
+    );
     assert!(board["structuredContent"]["refine_model"].is_null(), "{board}");
 
     // max_workers, idle_time, models and the role defaults come from config.json at read time — no server restart needed.
@@ -115,7 +154,11 @@ fn the_mcp_face_reads_claims_and_recovers_from_conflicts() {
     let board = mcp.call_tool(40, "kanban_board", &json!({}));
     assert_eq!(board["structuredContent"]["max_workers"], 2, "{board}");
     assert_eq!(board["structuredContent"]["idle_time"], 60, "{board}");
-    assert_eq!(board["structuredContent"]["models"], json!(["venice/zai-org-glm-5-2"]), "a configured list replaces the defaults: {board}");
+    assert_eq!(
+        board["structuredContent"]["models"],
+        json!(["venice/zai-org-glm-5-2"]),
+        "a configured list replaces the defaults: {board}"
+    );
     assert_eq!(board["structuredContent"]["implement_model"], "venice/deepseek-v4-flash", "{board}");
     assert_eq!(
         board["structuredContent"]["refine_model"], "venice/z-ai-glm-5-3",
@@ -134,13 +177,23 @@ fn the_mcp_face_reads_claims_and_recovers_from_conflicts() {
     let conflicted = mcp.call_tool(8, "kanban_move", &json!({ "ticket": "K-1", "to": "done", "expected_version": 0 }));
     assert_eq!(conflicted["isError"], true, "{conflicted}");
     let text = conflicted["content"][0]["text"].as_str().unwrap();
-    assert!(text.contains("expected_version=2"), "the recovery instruction names the live version: {text}");
+    assert!(
+        text.contains("expected_version=2"),
+        "the recovery instruction names the live version: {text}"
+    );
 
     // Tickets created without an explicit status land in review — the human's gate.
-    let vetted = mcp.call_tool(9, "kanban_create_ticket", &json!({ "title": "Needs vetting", "expected_version": 2 }));
+    let vetted = mcp.call_tool(
+        9,
+        "kanban_create_ticket",
+        &json!({ "title": "Needs vetting", "expected_version": 2 }),
+    );
     assert_eq!(vetted["structuredContent"]["id"], "K-2");
     let board = store.read_board().unwrap();
-    assert_eq!(board.ticket(&claude_kanban::store::model::TicketId("K-2".into())).unwrap().status, claude_kanban::store::model::Status::Review);
+    assert_eq!(
+        board.ticket(&claude_kanban::store::model::TicketId("K-2".into())).unwrap().status,
+        claude_kanban::store::model::Status::Review
+    );
 
     // And a refine splits atomically over MCP.
     let refined = mcp.call_tool(
@@ -166,8 +219,18 @@ fn kanban_ticket_and_kanban_epic_read_a_single_slice() {
     let store = claude_kanban::store::Store::at(&store_dir);
     store.init().unwrap();
 
-    ops::apply(&store, None, Op::CreateEpic { title: "auth".into(), color: None, body: "epic body".into(), status: Status::Ready, auto_merge: false })
-        .unwrap();
+    ops::apply(
+        &store,
+        None,
+        Op::CreateEpic {
+            title: "auth".into(),
+            color: None,
+            body: "epic body".into(),
+            status: Status::Ready,
+            auto_merge: false,
+        },
+    )
+    .unwrap();
     let create = |title: &str, epic: Option<EpicId>| Op::CreateTicket {
         title: title.into(),
         body: "some spec text".into(),
@@ -186,7 +249,12 @@ fn kanban_ticket_and_kanban_epic_read_a_single_slice() {
 
     // Both tools are advertised.
     let tools = mcp.request(1, "tools/list", &json!({}));
-    let names: Vec<&str> = tools["result"]["tools"].as_array().unwrap().iter().filter_map(|t| t["name"].as_str()).collect();
+    let names: Vec<&str> = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
     assert!(names.contains(&"kanban_ticket"), "missing kanban_ticket; got {names:?}");
     assert!(names.contains(&"kanban_epic"), "missing kanban_epic; got {names:?}");
 
@@ -208,22 +276,72 @@ fn kanban_ticket_and_kanban_epic_read_a_single_slice() {
     let content = &epic["structuredContent"];
     assert_eq!(content["epic"]["id"], "EP-1");
     assert_eq!(content["epic"]["title"], "auth");
-    assert_eq!(content["epic"]["column"], "todo", "the epic's derived column rides along, like kanban_board's");
-    let ticket_ids: Vec<&str> = content["tickets"].as_array().unwrap().iter().map(|t| t["id"].as_str().unwrap()).collect();
+    assert_eq!(
+        content["epic"]["column"], "todo",
+        "the epic's derived column rides along, like kanban_board's"
+    );
+    let ticket_ids: Vec<&str> = content["tickets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["id"].as_str().unwrap())
+        .collect();
     assert_eq!(ticket_ids, ["K-1"], "only the ticket that belongs to the epic: {content}");
     assert_eq!(content["tickets"][0]["title"], "in the epic");
-    assert_eq!(content["tickets"][0]["body"], "some spec text", "the full ticket, not just a checklist line: {content}");
+    assert_eq!(
+        content["tickets"][0]["body"], "some spec text",
+        "the full ticket, not just a checklist line: {content}"
+    );
 
     // Not found: the same clear error shape as kanban_ticket.
     let missing_epic = mcp.call_tool(5, "kanban_epic", &json!({ "epic": "EP-99" }));
     assert_eq!(missing_epic["isError"], true, "{missing_epic}");
-    assert!(missing_epic["content"][0]["text"].as_str().unwrap().contains("EP-99"), "{missing_epic}");
+    assert!(
+        missing_epic["content"][0]["text"].as_str().unwrap().contains("EP-99"),
+        "{missing_epic}"
+    );
 
     // An epic that owns no tickets answers with an empty array — a real, empty epic, not an omission.
-    ops::apply(&store, None, Op::CreateEpic { title: "empty".into(), color: None, body: String::new(), status: Status::Ready, auto_merge: false })
-        .unwrap();
+    ops::apply(
+        &store,
+        None,
+        Op::CreateEpic {
+            title: "empty".into(),
+            color: None,
+            body: String::new(),
+            status: Status::Ready,
+            auto_merge: false,
+        },
+    )
+    .unwrap();
     let empty = mcp.call_tool(6, "kanban_epic", &json!({ "epic": "EP-2" }));
     assert_eq!(empty["structuredContent"]["tickets"], json!([]), "{empty}");
+}
+
+#[test]
+fn kanban_version_reports_the_build() {
+    let dir = tempfile::tempdir().unwrap();
+    let store_dir = dir.path().join(".kanban");
+    claude_kanban::store::Store::at(&store_dir).init().unwrap();
+
+    let mut mcp = McpSession::start(&store_dir);
+
+    // Advertised as a tool, not only riding the handshake's serverInfo.
+    let tools = mcp.request(1, "tools/list", &json!({}));
+    let names: Vec<&str> = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    assert!(names.contains(&"kanban_version"), "missing kanban_version; got {names:?}");
+
+    // Reports this build's crate identity, matching what the web UI shows.
+    let version = mcp.call_tool(2, "kanban_version", &json!({}));
+    let content = &version["structuredContent"];
+    assert_eq!(content["name"], env!("CARGO_PKG_NAME"), "{version}");
+    assert_eq!(content["version"], env!("CARGO_PKG_VERSION"), "{version}");
+    assert_eq!(content["repository"], env!("CARGO_PKG_REPOSITORY"), "{version}");
 }
 
 /// A board with one landed ticket carrying a fat spec and a progress log — the shape that dominates a real board — plus
@@ -249,12 +367,35 @@ fn seed_a_fat_done_ticket(dir: &std::path::Path) -> std::path::PathBuf {
         effort: None,
         auto_merge: false,
     };
-    ops::apply(&store, None, create("landed work", "## Refined spec\n".to_owned() + &"every decision, recorded. ".repeat(600))).unwrap();
+    ops::apply(
+        &store,
+        None,
+        create(
+            "landed work",
+            "## Refined spec\n".to_owned() + &"every decision, recorded. ".repeat(600),
+        ),
+    )
+    .unwrap();
     let k1 = TicketId("K-1".into());
-    let note = |text: &str| Op::AddNote { id: k1.clone(), text: text.into(), author: Some("claude".into()) };
+    let note = |text: &str| Op::AddNote {
+        id: k1.clone(),
+        text: text.into(),
+        author: Some("claude".into()),
+    };
     ops::apply(&store, None, note("claimed it, starting on the parser")).unwrap();
     ops::apply(&store, None, note("parser done, wiring the views up next")).unwrap();
-    ops::apply(&store, None, Op::MoveTicket { id: k1, to: ColumnId::Done, position: None, owner: None, branch: None }).unwrap();
+    ops::apply(
+        &store,
+        None,
+        Op::MoveTicket {
+            id: k1,
+            to: ColumnId::Done,
+            position: None,
+            owner: None,
+            branch: None,
+        },
+    )
+    .unwrap();
     ops::apply(&store, None, create("still to do", "short".into())).unwrap();
     store_dir
 }
@@ -266,7 +407,12 @@ fn kanban_board_omits_done_by_default_and_returns_it_on_request() {
     let mut mcp = McpSession::start(&store_dir);
 
     let ids = |board: &Value| -> Vec<String> {
-        board["structuredContent"]["tickets"].as_array().unwrap().iter().map(|t| t["id"].as_str().unwrap().to_string()).collect()
+        board["structuredContent"]["tickets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["id"].as_str().unwrap().to_string())
+            .collect()
     };
 
     // The default: the done ticket is gone, and a summary says so and names the way back.
@@ -274,28 +420,57 @@ fn kanban_board_omits_done_by_default_and_returns_it_on_request() {
     assert_eq!(ids(&default), ["K-2"], "the default read carries only unfinished work: {default}");
     let done = &default["structuredContent"]["done"];
     assert_eq!(done["count"], 1, "the summary accounts for the omitted ticket: {default}");
-    assert_eq!(done["landed"], json!(["K-1"]), "a plain move to done lands it, so it can unblock dependents");
+    assert_eq!(
+        done["landed"],
+        json!(["K-1"]),
+        "a plain move to done lands it, so it can unblock dependents"
+    );
     assert_eq!(done["discarded"], json!([]));
-    assert!(done["note"].as_str().unwrap().contains("include_done=true"), "the summary must name the way back: {done}");
+    assert!(
+        done["note"].as_str().unwrap().contains("include_done=true"),
+        "the summary must name the way back: {done}"
+    );
 
     // include_done=true: the whole board, spec text intact.
     let full = mcp.call_tool(3, "kanban_board", &json!({ "include_done": true }));
     let mut restored = ids(&full);
     restored.sort(); // array order is board priority, not this tool's concern
     assert_eq!(restored, ["K-1", "K-2"], "include_done restores the done ticket: {full}");
-    let landed = full["structuredContent"]["tickets"].as_array().unwrap().iter().find(|t| t["id"] == "K-1").unwrap();
-    assert!(landed["body"].as_str().unwrap().contains("Refined spec"), "and its body comes back whole");
+    let landed = full["structuredContent"]["tickets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == "K-1")
+        .unwrap();
+    assert!(
+        landed["body"].as_str().unwrap().contains("Refined spec"),
+        "and its body comes back whole"
+    );
     assert_eq!(landed["notes"].as_array().unwrap().len(), 2, "notes too");
-    assert!(full["structuredContent"].get("done").is_none(), "nothing was omitted, so there is no summary");
+    assert!(
+        full["structuredContent"].get("done").is_none(),
+        "nothing was omitted, so there is no summary"
+    );
 
     // column="done" is the other way in, unchanged by this ticket.
     let column = mcp.call_tool(4, "kanban_board", &json!({ "column": "done" }));
     assert_eq!(ids(&column), ["K-1"], "asking for the done column answers it verbatim: {column}");
-    assert!(column["structuredContent"]["tickets"][0]["body"].as_str().unwrap().contains("Refined spec"));
-    assert!(column["structuredContent"].get("done").is_none(), "one column was asked for, so no summary is bolted on");
+    assert!(
+        column["structuredContent"]["tickets"][0]["body"]
+            .as_str()
+            .unwrap()
+            .contains("Refined spec")
+    );
+    assert!(
+        column["structuredContent"].get("done").is_none(),
+        "one column was asked for, so no summary is bolted on"
+    );
 
     // The version means the board's version either way — both are valid expected_version tokens.
-    assert_eq!(default["structuredContent"]["version"], full["structuredContent"]["version"], "version is the board's, not the subset's");
+    assert_eq!(
+        default["structuredContent"]["version"], full["structuredContent"]["version"],
+        "version is the board's, not the subset's"
+    );
 }
 
 #[test]
@@ -307,7 +482,10 @@ fn the_default_board_read_is_dramatically_smaller() {
     let default = mcp.call_tool(2, "kanban_board", &json!({}));
     let full = mcp.call_tool(3, "kanban_board", &json!({ "include_done": true }));
     let (small, big) = (default.to_string().len(), full.to_string().len());
-    assert!(small * 10 < big, "the default read must be an order of magnitude smaller than the full board: {small} vs {big}");
+    assert!(
+        small * 10 < big,
+        "the default read must be an order of magnitude smaller than the full board: {small} vs {big}"
+    );
 }
 
 #[test]
@@ -322,7 +500,22 @@ fn kanban_next_lands_merged_review_work_and_the_move_records_companion_branches(
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     git(repo, &["init", "-q", "-b", "main"]).unwrap();
-    git(repo, &["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "seed"]).unwrap();
+    git(
+        repo,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "seed",
+        ],
+    )
+    .unwrap();
     git(repo, &["branch", "k-1/work"]).unwrap();
     let store_dir = repo.join(".kanban");
     let store = claude_kanban::store::Store::at(&store_dir);
@@ -332,15 +525,53 @@ fn kanban_next_lands_merged_review_work_and_the_move_records_companion_branches(
         ops::apply(
             &store,
             None,
-            Op::CreateTicket { title: title.into(), body: String::new(), epic: None, labels: vec![], depends_on: deps, status: Status::Ready, model: None, effort: None, auto_merge: false },
+            Op::CreateTicket {
+                title: title.into(),
+                body: String::new(),
+                epic: None,
+                labels: vec![],
+                depends_on: deps,
+                status: Status::Ready,
+                model: None,
+                effort: None,
+                auto_merge: false,
+            },
         )
         .unwrap();
     };
     seed("predecessor", vec![]);
     let k1 = TicketId("K-1".into());
-    ops::apply(&store, None, Op::Claim { id: k1.clone(), agent: "claude".into() }).unwrap();
-    ops::apply(&store, None, Op::StampWorktree { id: k1.clone(), branch: "k-1/work".into(), path: "/tmp/unused".into() }).unwrap();
-    ops::apply(&store, None, Op::MoveTicket { id: k1, to: ColumnId::Review, position: None, owner: None, branch: None }).unwrap();
+    ops::apply(
+        &store,
+        None,
+        Op::Claim {
+            id: k1.clone(),
+            agent: "claude".into(),
+        },
+    )
+    .unwrap();
+    ops::apply(
+        &store,
+        None,
+        Op::StampWorktree {
+            id: k1.clone(),
+            branch: "k-1/work".into(),
+            path: "/tmp/unused".into(),
+        },
+    )
+    .unwrap();
+    ops::apply(
+        &store,
+        None,
+        Op::MoveTicket {
+            id: k1,
+            to: ColumnId::Review,
+            position: None,
+            owner: None,
+            branch: None,
+        },
+    )
+    .unwrap();
     seed("dependent", vec![TicketId("K-1".into())]); // board version is now 5
 
     let mut mcp = McpSession::start(&store_dir);
@@ -351,22 +582,33 @@ fn kanban_next_lands_merged_review_work_and_the_move_records_companion_branches(
     assert_eq!(next["structuredContent"]["ticket"]["id"], "K-2", "{next}");
     assert_eq!(next["structuredContent"]["version"], 6, "the sweep's landing bumped the version");
     let board = store.read_board().unwrap();
-    assert!(matches!(board.ticket(&TicketId("K-1".into())).unwrap().column, Column::Done { discarded: false, .. }));
+    assert!(matches!(
+        board.ticket(&TicketId("K-1".into())).unwrap().column,
+        Column::Done { discarded: false, .. }
+    ));
 
     let claimed = mcp.call_tool(3, "kanban_claim", &json!({ "ticket": "K-2", "expected_version": 6 }));
     assert_eq!(claimed["structuredContent"]["owner"], "claude");
 
     // Closing out a companion: the move to review accepts a branch and records it; the claim drops on entry.
-    let moved = mcp.call_tool(4, "kanban_move", &json!({ "ticket": "K-2", "to": "review", "branch": "k-1/work", "expected_version": 7 }));
+    let moved = mcp.call_tool(
+        4,
+        "kanban_move",
+        &json!({ "ticket": "K-2", "to": "review", "branch": "k-1/work", "expected_version": 7 }),
+    );
     assert_eq!(moved["structuredContent"]["column"], "review", "{moved}");
     let board = store.read_board().unwrap();
-    assert!(matches!(&board.ticket(&TicketId("K-2".into())).unwrap().column, Column::Review { branch: Some(b) } if b == "k-1/work"));
+    assert!(matches!(&board.ticket(&TicketId("K-2".into())).unwrap().column, Column::Review { branch: Some(b), .. } if b == "k-1/work"));
     assert!(store.read_claims().unwrap().is_empty(), "entering review drops the claim");
 
     // …and the move itself observed the tip. Without this the proof would depend on another sweep running before
     // whoever merges deletes the branch — and this session's next act may well be to end.
     let tip = git(repo, &["rev-parse", "k-1/work"]).unwrap();
-    assert_eq!(store.read_land_state().unwrap().get("k-1/work"), Some(&tip), "the close-out arms the landing proof");
+    assert_eq!(
+        store.read_land_state().unwrap().get("k-1/work"),
+        Some(&tip),
+        "the close-out arms the landing proof"
+    );
 }
 
 /// `kanban_next` serializes a bare `Ticket`, which carries only the ticket's *own* `auto_merge` — an epic-level grant is
@@ -386,7 +628,22 @@ fn kanban_next_explains_a_stalled_board_differently_from_an_empty_one() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
     git(repo, &["init", "-q", "-b", "main"]).unwrap();
-    git(repo, &["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "seed"]).unwrap();
+    git(
+        repo,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "seed",
+        ],
+    )
+    .unwrap();
     let store_dir = repo.join(".kanban");
     let store = claude_kanban::store::Store::at(&store_dir);
     store.init().unwrap();
@@ -401,16 +658,54 @@ fn kanban_next_explains_a_stalled_board_differently_from_an_empty_one() {
     ops::apply(
         &store,
         None,
-        Op::CreateTicket { title: "merged elsewhere".into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![], status: Status::Ready, model: None, effort: None, auto_merge: false },
+        Op::CreateTicket {
+            title: "merged elsewhere".into(),
+            body: String::new(),
+            epic: None,
+            labels: vec![],
+            depends_on: vec![],
+            status: Status::Ready,
+            model: None,
+            effort: None,
+            auto_merge: false,
+        },
     )
     .unwrap();
-    ops::apply(&store, None, Op::Claim { id: TicketId("K-1".into()), agent: "claude".into() }).unwrap();
-    ops::apply(&store, None, Op::MoveTicket { id: TicketId("K-1".into()), to: ColumnId::Review, position: None, owner: None, branch: Some("k-1/vanished".into()) })
-        .unwrap();
     ops::apply(
         &store,
         None,
-        Op::CreateTicket { title: "waiting on it".into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![TicketId("K-1".into())], status: Status::Ready, model: None, effort: None, auto_merge: false },
+        Op::Claim {
+            id: TicketId("K-1".into()),
+            agent: "claude".into(),
+        },
+    )
+    .unwrap();
+    ops::apply(
+        &store,
+        None,
+        Op::MoveTicket {
+            id: TicketId("K-1".into()),
+            to: ColumnId::Review,
+            position: None,
+            owner: None,
+            branch: Some("k-1/vanished".into()),
+        },
+    )
+    .unwrap();
+    ops::apply(
+        &store,
+        None,
+        Op::CreateTicket {
+            title: "waiting on it".into(),
+            body: String::new(),
+            epic: None,
+            labels: vec![],
+            depends_on: vec![TicketId("K-1".into())],
+            status: Status::Ready,
+            model: None,
+            effort: None,
+            auto_merge: false,
+        },
     )
     .unwrap();
 
@@ -419,7 +714,10 @@ fn kanban_next_explains_a_stalled_board_differently_from_an_empty_one() {
     assert!(answer["ticket"].is_null(), "{answer}");
     let reason = answer["reason"].as_str().unwrap();
     assert_ne!(reason, empty_reason, "a stuck board must not answer like an empty one");
-    assert!(reason.contains("1 ticket in todo") && reason.contains("1 ticket in review"), "{reason}");
+    assert!(
+        reason.contains("1 ticket in todo") && reason.contains("1 ticket in review"),
+        "{reason}"
+    );
 
     let review = &answer["waiting"]["review"]["tickets"];
     assert_eq!(review[0]["ticket"], "K-1");
@@ -442,8 +740,18 @@ fn kanban_next_reports_auto_merge_inherited_from_the_epic() {
     store.init().unwrap();
 
     // The epic carries the flag; the ticket does not.
-    ops::apply(&store, None, Op::CreateEpic { title: "auth".into(), color: None, body: String::new(), status: Status::Ready, auto_merge: true })
-        .unwrap();
+    ops::apply(
+        &store,
+        None,
+        Op::CreateEpic {
+            title: "auth".into(),
+            color: None,
+            body: String::new(),
+            status: Status::Ready,
+            auto_merge: true,
+        },
+    )
+    .unwrap();
     ops::apply(
         &store,
         None,
@@ -465,19 +773,41 @@ fn kanban_next_reports_auto_merge_inherited_from_the_epic() {
     let next = mcp.call_tool(2, "kanban_next", &json!({}))["structuredContent"].clone();
 
     assert_eq!(next["ticket"]["id"], "K-1", "{next}");
-    assert!(next["ticket"].get("auto_merge").is_none(), "the ticket's own flag is off, so it is absent from its JSON: {next}");
-    assert_eq!(next["auto_merge"], true, "yet the tool must still report the inherited grant — reading it off the ticket would miss it");
+    assert!(
+        next["ticket"].get("auto_merge").is_none(),
+        "the ticket's own flag is off, so it is absent from its JSON: {next}"
+    );
+    assert_eq!(
+        next["auto_merge"], true,
+        "yet the tool must still report the inherited grant — reading it off the ticket would miss it"
+    );
 
     // And the board read carries the same answer under its own name, without the flattened ticket shadowing it.
     let board = mcp.call_tool(3, "kanban_board", &json!({}))["structuredContent"].clone();
     assert_eq!(board["tickets"][0]["auto_merge_effective"], true, "{board}");
-    assert!(board["tickets"][0].get("auto_merge").is_none(), "the stored flag is still absent — the derived one did not overwrite it");
+    assert!(
+        board["tickets"][0].get("auto_merge").is_none(),
+        "the stored flag is still absent — the derived one did not overwrite it"
+    );
 
     // The negative twin: clear the epic and the permission is gone from the ticket too, with nothing to un-write.
-    ops::apply(&store, None, Op::UpdateEpic { id: EpicId("EP-1".into()), patch: ops::EpicPatch { auto_merge: Some(false), ..Default::default() } })
-        .unwrap();
+    ops::apply(
+        &store,
+        None,
+        Op::UpdateEpic {
+            id: EpicId("EP-1".into()),
+            patch: ops::EpicPatch {
+                auto_merge: Some(false),
+                ..Default::default()
+            },
+        },
+    )
+    .unwrap();
     let next = mcp.call_tool(4, "kanban_next", &json!({}))["structuredContent"].clone();
-    assert_eq!(next["auto_merge"], false, "clearing the epic takes the grant back from every ticket at once: {next}");
+    assert_eq!(
+        next["auto_merge"], false,
+        "clearing the epic takes the grant back from every ticket at once: {next}"
+    );
 }
 
 /// Dependencies were write-once over MCP until `kanban_update_ticket`: creation could set them, nothing could change them.
@@ -503,51 +833,116 @@ fn kanban_update_ticket_rewires_dependencies_and_guards_drafts() {
         .find(|t| t["name"] == json!("kanban_update_ticket"))
         .expect("kanban_update_ticket must be advertised")
         .clone();
-    assert!(update["inputSchema"]["properties"]["depends_on"].is_object(), "depends_on must be editable: {update}");
+    assert!(
+        update["inputSchema"]["properties"]["depends_on"].is_object(),
+        "depends_on must be editable: {update}"
+    );
 
     ["first", "second", "third"].iter().enumerate().for_each(|(i, title)| {
-        mcp.call_tool(10 + i as u64, "kanban_create_ticket", &json!({ "title": title, "status": "ready", "expected_version": i }));
+        mcp.call_tool(
+            10 + i as u64,
+            "kanban_create_ticket",
+            &json!({ "title": title, "status": "ready", "expected_version": i }),
+        );
     });
 
     // The edge nobody knew about at creation time.
-    let updated = mcp.call_tool(20, "kanban_update_ticket", &json!({ "ticket": "K-3", "depends_on": ["K-1", "K-2"], "expected_version": 3 }));
+    let updated = mcp.call_tool(
+        20,
+        "kanban_update_ticket",
+        &json!({ "ticket": "K-3", "depends_on": ["K-1", "K-2"], "expected_version": 3 }),
+    );
     assert_eq!(updated["structuredContent"]["id"], "K-3", "{updated}");
     assert_eq!(deps("K-3"), vec![TicketId("K-1".into()), TicketId("K-2".into())]);
     let next = mcp.call_tool(21, "kanban_next", &json!({}));
-    assert_eq!(next["structuredContent"]["ticket"]["id"], "K-1", "K-3 is now blocked behind the others: {next}");
+    assert_eq!(
+        next["structuredContent"]["ticket"]["id"], "K-1",
+        "K-3 is now blocked behind the others: {next}"
+    );
 
     // Rewire: one edge turned out not to hold.
-    mcp.call_tool(22, "kanban_update_ticket", &json!({ "ticket": "K-3", "depends_on": ["K-2"], "expected_version": 4 }));
-    assert_eq!(deps("K-3"), vec![TicketId("K-2".into())], "the list is replaced wholesale, not merged");
+    mcp.call_tool(
+        22,
+        "kanban_update_ticket",
+        &json!({ "ticket": "K-3", "depends_on": ["K-2"], "expected_version": 4 }),
+    );
+    assert_eq!(
+        deps("K-3"),
+        vec![TicketId("K-2".into())],
+        "the list is replaced wholesale, not merged"
+    );
 
     // A dangling id and a cycle are both refused, and neither writes.
-    let dangling = mcp.call_tool(23, "kanban_update_ticket", &json!({ "ticket": "K-3", "depends_on": ["K-99"], "expected_version": 5 }));
+    let dangling = mcp.call_tool(
+        23,
+        "kanban_update_ticket",
+        &json!({ "ticket": "K-3", "depends_on": ["K-99"], "expected_version": 5 }),
+    );
     assert_eq!(dangling["isError"], true, "{dangling}");
-    let cyclic = mcp.call_tool(24, "kanban_update_ticket", &json!({ "ticket": "K-2", "depends_on": ["K-3"], "expected_version": 5 }));
+    let cyclic = mcp.call_tool(
+        24,
+        "kanban_update_ticket",
+        &json!({ "ticket": "K-2", "depends_on": ["K-3"], "expected_version": 5 }),
+    );
     assert_eq!(cyclic["isError"], true, "K-3 already depends on K-2: {cyclic}");
-    assert_eq!(deps("K-3"), vec![TicketId("K-2".into())], "a refused edit leaves the graph exactly as it was");
+    assert_eq!(
+        deps("K-3"),
+        vec![TicketId("K-2".into())],
+        "a refused edit leaves the graph exactly as it was"
+    );
 
     // And the whole list clears.
-    mcp.call_tool(25, "kanban_update_ticket", &json!({ "ticket": "K-3", "depends_on": [], "expected_version": 5 }));
+    mcp.call_tool(
+        25,
+        "kanban_update_ticket",
+        &json!({ "ticket": "K-3", "depends_on": [], "expected_version": 5 }),
+    );
     assert!(deps("K-3").is_empty(), "[] clears every dependency");
 
     // Drafts stay the human's, even though the ops layer and the browser both allow the edit.
-    mcp.call_tool(26, "kanban_create_ticket", &json!({ "title": "human's scratch", "status": "draft", "expected_version": 6 }));
-    let draft = mcp.call_tool(27, "kanban_update_ticket", &json!({ "ticket": "K-4", "title": "meddling", "expected_version": 7 }));
+    mcp.call_tool(
+        26,
+        "kanban_create_ticket",
+        &json!({ "title": "human's scratch", "status": "draft", "expected_version": 6 }),
+    );
+    let draft = mcp.call_tool(
+        27,
+        "kanban_update_ticket",
+        &json!({ "ticket": "K-4", "title": "meddling", "expected_version": 7 }),
+    );
     assert_eq!(draft["isError"], true, "{draft}");
-    assert!(draft["content"][0]["text"].as_str().unwrap().contains("draft"), "the refusal says why: {draft}");
+    assert!(
+        draft["content"][0]["text"].as_str().unwrap().contains("draft"),
+        "the refusal says why: {draft}"
+    );
 
     // Omitted leaves a field alone; explicit null clears it — the distinction the patch is built on.
-    mcp.call_tool(28, "kanban_create_ticket", &json!({ "title": "tuned", "status": "ready", "model": "opus", "effort": "high", "expected_version": 7 }));
-    mcp.call_tool(29, "kanban_update_ticket", &json!({ "ticket": "K-5", "title": "retitled", "expected_version": 8 }));
+    mcp.call_tool(
+        28,
+        "kanban_create_ticket",
+        &json!({ "title": "tuned", "status": "ready", "model": "opus", "effort": "high", "expected_version": 7 }),
+    );
+    mcp.call_tool(
+        29,
+        "kanban_update_ticket",
+        &json!({ "ticket": "K-5", "title": "retitled", "expected_version": 8 }),
+    );
     let tuned = store.read_board().unwrap().ticket(&TicketId("K-5".into())).unwrap().clone();
     assert_eq!(tuned.title, "retitled");
     assert_eq!(tuned.model.as_deref(), Some("opus"), "an omitted model is left alone");
     assert_eq!(tuned.effort, Some(Effort::High), "an omitted effort is left alone");
 
-    mcp.call_tool(30, "kanban_update_ticket", &json!({ "ticket": "K-5", "model": null, "expected_version": 9 }));
+    mcp.call_tool(
+        30,
+        "kanban_update_ticket",
+        &json!({ "ticket": "K-5", "model": null, "expected_version": 9 }),
+    );
     let cleared = store.read_board().unwrap().ticket(&TicketId("K-5".into())).unwrap().clone();
     assert_eq!(cleared.model, None, "an explicit null clears the model");
     assert_eq!(cleared.effort, Some(Effort::High), "and clears only what was named");
-    assert_eq!(cleared.status, Status::Ready, "status is not patchable here — promotion stays the human's call");
+    assert_eq!(
+        cleared.status,
+        Status::Ready,
+        "status is not patchable here — promotion stays the human's call"
+    );
 }

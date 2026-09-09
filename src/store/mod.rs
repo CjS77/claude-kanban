@@ -26,7 +26,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub use claims::{Claim, ClaimKind, LANDING_STALE_AFTER, find as find_claim, landing_in_flight, remove as remove_claim, remove_landing, upsert as upsert_claim};
+pub use claims::{
+    Claim, ClaimKind, LANDING_STALE_AFTER, find as find_claim, landing_in_flight, remove as remove_claim, remove_landing,
+    upsert as upsert_claim,
+};
 use model::Board;
 
 /// Write a seed file, keeping whatever is already there — `init` seeds defaults, it never overrules a choice.
@@ -34,7 +37,10 @@ fn seed_if_absent(path: &Path, contents: &str) -> Result<(), StoreError> {
     if path.exists() {
         return Ok(());
     }
-    fs::write(path, contents).map_err(|source| StoreError::Io { path: path.to_path_buf(), source })
+    fs::write(path, contents).map_err(|source| StoreError::Io {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 /// Seed the `merge.sh` land helper beside the board, executable, keeping any customized copy. Like the board it is
@@ -43,11 +49,17 @@ fn seed_merge_sh(path: &Path) -> Result<(), StoreError> {
     if path.exists() {
         return Ok(());
     }
-    fs::write(path, MERGE_SH).map_err(|source| StoreError::Io { path: path.to_path_buf(), source })?;
+    fs::write(path, MERGE_SH).map_err(|source| StoreError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).map_err(|source| StoreError::Io { path: path.to_path_buf(), source })?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).map_err(|source| StoreError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
     }
     Ok(())
 }
@@ -58,7 +70,10 @@ fn read_bytes_if_present(path: &Path) -> Result<Option<Vec<u8>>, StoreError> {
     match fs::read(path) {
         Ok(raw) => Ok(Some(raw)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(source) => Err(StoreError::Io { path: path.to_owned(), source }),
+        Err(source) => Err(StoreError::Io {
+            path: path.to_owned(),
+            source,
+        }),
     }
 }
 
@@ -98,7 +113,10 @@ const MERGE_SH: &str = include_str!("../../merge.sh");
 /// the harness driving the board, so the seed must not pin the Claude aliases. Strict JSON —
 /// [`crate::config::Config`] is serde-parsed and a malformed file is a loud error, so this cannot carry comments.
 fn seeded_config(store_dir: &Path) -> String {
-    let main = store_dir.parent().and_then(crate::git::detect_main_branch).unwrap_or_else(|| "main".to_owned());
+    let main = store_dir
+        .parent()
+        .and_then(crate::git::detect_main_branch)
+        .unwrap_or_else(|| "main".to_owned());
     format!(
         "{{\n  \"worktree_root\": {root},\n  \"copy_to_worktrees\": [],\n  \"max_workers\": 1,\n  \"idle_time\": 300,\n  \
          \"port\": null,\n  \"main_branch\": {main},\n  \"poll_interval\": 60,\n  \"minesweeper\": false,\n  \
@@ -147,7 +165,7 @@ pub struct Store {
 impl Store {
     /// Resolve where the store lives: explicit override (`--store` / `KANBAN_STORE`, merged by clap) beats the git anchor
     /// (the main working tree's `.kanban/`) beats `./.kanban` outside a repo.
-    #[must_use] 
+    #[must_use]
     pub fn resolve(flag: Option<PathBuf>) -> Store {
         let dir = flag
             .or_else(|| crate::git::main_worktree(Path::new(".")).map(|root| root.join(".kanban")))
@@ -161,13 +179,13 @@ impl Store {
     }
 
     /// The store directory itself.
-    #[must_use] 
+    #[must_use]
     pub fn dir(&self) -> &Path {
         &self.dir
     }
 
     /// Path of `board.json`.
-    #[must_use] 
+    #[must_use]
     pub fn board_path(&self) -> PathBuf {
         self.dir.join(BOARD_FILE)
     }
@@ -179,7 +197,7 @@ impl Store {
     }
 
     /// Path of the claims sidecar.
-    #[must_use] 
+    #[must_use]
     pub fn claims_path(&self) -> PathBuf {
         self.dir.join(CLAIMS_FILE)
     }
@@ -228,7 +246,10 @@ impl Store {
     /// gitignore, or merge.sh is left alone, so a hand-edited one survives. Runs under the lock so two racing `init`s
     /// can't both win.
     pub fn init(&self) -> Result<(), StoreError> {
-        fs::create_dir_all(&self.dir).map_err(|source| StoreError::Io { path: self.dir.clone(), source })?;
+        fs::create_dir_all(&self.dir).map_err(|source| StoreError::Io {
+            path: self.dir.clone(),
+            source,
+        })?;
         let _lock = lock::acquire(&self.dir)?;
         if self.board_path().exists() {
             return Err(StoreError::AlreadyExists(self.board_path()));
@@ -260,8 +281,10 @@ impl Store {
         let Some(raw) = read_bytes_if_present(&path)? else {
             return Ok(false);
         };
-        let mut board: Board =
-            serde_json::from_slice(&raw).map_err(|source| StoreError::Parse { path: path.clone(), source })?;
+        let mut board: Board = serde_json::from_slice(&raw).map_err(|source| StoreError::Parse {
+            path: path.clone(),
+            source,
+        })?;
         let from = board.schema;
         let migrated = model::migrate(&mut board).map_err(|found| StoreError::SchemaTooNew {
             path: path.clone(),
@@ -300,8 +323,7 @@ impl Store {
     /// [`Store::upgrade`]'s job at startup; migrating here too keeps every read correct for library consumers that never
     /// call it. A board written by a *newer* binary refuses to load: misreading it would be worse than stopping.
     pub fn read_board(&self) -> Result<Board, StoreError> {
-        let mut board: Board =
-            io::read_json(&self.board_path())?.ok_or_else(|| StoreError::NotInitialized(self.board_path()))?;
+        let mut board: Board = io::read_json(&self.board_path())?.ok_or_else(|| StoreError::NotInitialized(self.board_path()))?;
         model::migrate(&mut board).map_err(|found| StoreError::SchemaTooNew {
             path: self.board_path(),
             found,
@@ -348,8 +370,16 @@ impl Store {
         if let Some(expected) = expected_version
             && board.version != expected
         {
-            tracing::warn!(expected, actual = board.version, "version conflict — the caller acted on a stale board");
-            return Err(StoreError::VersionConflict { expected, actual: board.version }.into());
+            tracing::warn!(
+                expected,
+                actual = board.version,
+                "version conflict — the caller acted on a stale board"
+            );
+            return Err(StoreError::VersionConflict {
+                expected,
+                actual: board.version,
+            }
+            .into());
         }
         let mut claims = self.read_claims()?;
         let claims_before = claims.clone();
@@ -440,10 +470,19 @@ mod tests {
         let config = crate::config::Config::load(store.dir()).expect("the seeded config must parse");
         assert_eq!(config.max_workers(), 1);
         assert_eq!(config.idle_time(), 300);
-        assert!(config.port.is_none(), "port seeds as null: that is what lets serve try 4747 and then hunt");
+        assert!(
+            config.port.is_none(),
+            "port seeds as null: that is what lets serve try 4747 and then hunt"
+        );
         assert_eq!(config.poll_interval(), Some(std::time::Duration::from_secs(60)));
-        assert!(!config.minesweeper(), "delegation seeds off — turning it on is a per-project choice");
-        assert!(!config.auto_review(), "auto-review seeds off — letting the machine judge its own work is opt-in");
+        assert!(
+            !config.minesweeper(),
+            "delegation seeds off — turning it on is a per-project choice"
+        );
+        assert!(
+            !config.auto_review(),
+            "auto-review seeds off — letting the machine judge its own work is opt-in"
+        );
         assert_eq!(config.minesweeper_label(), crate::config::DEFAULT_MINESWEEPER_LABEL);
 
         // The seeded file is fully defined: every dial present, port explicitly null, main_branch pinned concretely.
@@ -465,14 +504,24 @@ mod tests {
         let missing: Vec<_> = keys.iter().filter(|key| !obj.contains_key(**key)).collect();
         assert!(missing.is_empty(), "seeded config missing {missing:?}");
         assert!(obj["port"].is_null());
-        assert_eq!(obj["main_branch"], "main", "no surrounding repo in this test: the fallback is 'main'");
+        assert_eq!(
+            obj["main_branch"], "main",
+            "no surrounding repo in this test: the fallback is 'main'"
+        );
 
         let gitignore = std::fs::read_to_string(store.dir().join(".gitignore")).unwrap();
-        assert!(gitignore.contains("land-state.json"), "the landing observations sidecar is machine-local");
+        assert!(
+            gitignore.contains("land-state.json"),
+            "the landing observations sidecar is machine-local"
+        );
 
         // merge.sh ships beside the board — the manual land flow, committed so every checkout has it on hand.
         let merge_sh = store.dir().join("merge.sh");
-        assert_eq!(std::fs::read_to_string(&merge_sh).unwrap(), MERGE_SH, "shipped merge.sh matches the embedded copy");
+        assert_eq!(
+            std::fs::read_to_string(&merge_sh).unwrap(),
+            MERGE_SH,
+            "shipped merge.sh matches the embedded copy"
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -505,7 +554,11 @@ mod tests {
 
         store.init().unwrap();
 
-        assert_eq!(std::fs::read_to_string(store.dir().join("merge.sh")).unwrap(), custom, "a hand-edited merge.sh survives init");
+        assert_eq!(
+            std::fs::read_to_string(store.dir().join("merge.sh")).unwrap(),
+            custom,
+            "a hand-edited merge.sh survives init"
+        );
     }
 
     #[test]
@@ -515,11 +568,18 @@ mod tests {
         let board = store.read_board().unwrap();
         assert_eq!(board.schema, crate::store::model::CURRENT_SCHEMA);
         assert_eq!(board.columns.len(), 4, "review arrives in memory");
-        assert_eq!(std::fs::read_to_string(store.board_path()).unwrap(), V1_BOARD, "a read never rewrites the file");
+        assert_eq!(
+            std::fs::read_to_string(store.board_path()).unwrap(),
+            V1_BOARD,
+            "a read never rewrites the file"
+        );
 
         store.mutate(None, |_, _| Ok::<_, StoreError>(())).unwrap();
         let raw = std::fs::read_to_string(store.board_path()).unwrap();
-        assert!(raw.contains("\"schema\": 2") && raw.contains("\"review\""), "the first write persists the upgrade: {raw}");
+        assert!(
+            raw.contains("\"schema\": 2") && raw.contains("\"review\""),
+            "the first write persists the upgrade: {raw}"
+        );
     }
 
     #[test]
@@ -556,7 +616,10 @@ mod tests {
     fn upgrade_leaves_a_born_v2_board_alone() {
         let (_dir, store) = scratch_store();
         assert!(!store.upgrade().unwrap());
-        assert!(!store.backup_v1_path().exists(), "nothing was migrated, so there is nothing to back up");
+        assert!(
+            !store.backup_v1_path().exists(),
+            "nothing was migrated, so there is nothing to back up"
+        );
     }
 
     #[test]
@@ -580,7 +643,11 @@ mod tests {
         let err = store.upgrade().unwrap_err();
         assert!(matches!(err, StoreError::Parse { .. }), "{err}");
         assert!(err.to_string().contains("board.json"), "the error names the file: {err}");
-        assert_eq!(std::fs::read_to_string(store.board_path()).unwrap(), "not json", "the board is untouched");
+        assert_eq!(
+            std::fs::read_to_string(store.board_path()).unwrap(),
+            "not json",
+            "the board is untouched"
+        );
         assert!(!store.backup_v1_path().exists(), "a board that cannot be read is never backed up");
     }
 
@@ -593,7 +660,11 @@ mod tests {
 
         let err = store.upgrade().unwrap_err();
         assert!(matches!(err, StoreError::SchemaTooNew { found: 9, .. }), "{err}");
-        assert_eq!(std::fs::read_to_string(store.board_path()).unwrap(), from_the_future, "the board is untouched");
+        assert_eq!(
+            std::fs::read_to_string(store.board_path()).unwrap(),
+            from_the_future,
+            "the board is untouched"
+        );
         assert!(!store.backup_v1_path().exists());
     }
 
@@ -602,15 +673,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::at(dir.path().join(".kanban"));
         assert!(!store.upgrade().unwrap(), "nothing to upgrade without a board");
-        assert!(!store.dir().exists(), "an absent store stays absent — no stray lock file, no directory");
-        assert!(matches!(store.read_board(), Err(StoreError::NotInitialized(_))), "the real error still surfaces");
+        assert!(
+            !store.dir().exists(),
+            "an absent store stays absent — no stray lock file, no directory"
+        );
+        assert!(
+            matches!(store.read_board(), Err(StoreError::NotInitialized(_))),
+            "the real error still surfaces"
+        );
     }
 
     #[test]
     fn a_board_from_a_newer_binary_refuses_to_load_with_update_advice() {
         let (_dir, store) = scratch_store();
-        let mut value: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(store.board_path()).unwrap()).unwrap();
+        let mut value: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(store.board_path()).unwrap()).unwrap();
         value["schema"] = serde_json::json!(9);
         std::fs::write(store.board_path(), value.to_string()).unwrap();
 
@@ -632,7 +708,11 @@ mod tests {
         let (_dir, store) = scratch_store();
         assert_eq!(store.read_archive().unwrap(), model::Archive::default());
         fs::write(store.archive_path(), r#"{"tickets":[]}"#).unwrap();
-        assert_eq!(store.read_archive().unwrap(), model::Archive::default(), "the epics array arrived later than the file");
+        assert_eq!(
+            store.read_archive().unwrap(),
+            model::Archive::default(),
+            "the epics array arrived later than the file"
+        );
         fs::write(store.archive_path(), "{").unwrap();
         assert!(store.read_archive().is_err(), "a torn archive is an error, not an empty column");
     }
@@ -665,7 +745,9 @@ mod tests {
         let (_dir, store) = scratch_store();
         let board_before = std::fs::read(store.board_path()).unwrap();
         // Failure via the closure…
-        let err = store.mutate(None, |_, _| Err::<(), _>(StoreError::NotInitialized(store.board_path()))).unwrap_err();
+        let err = store
+            .mutate(None, |_, _| Err::<(), _>(StoreError::NotInitialized(store.board_path())))
+            .unwrap_err();
         assert!(matches!(err, StoreError::NotInitialized(_)));
         // …and failure via validation (a dangling dependency), even though the closure "succeeded" and touched claims.
         let err = store
@@ -673,7 +755,13 @@ mod tests {
                 let mut t = some_ticket("K-1");
                 t.depends_on = vec![TicketId("K-99".into())];
                 board.tickets.push(t);
-                claims.push(Claim { ticket: TicketId("K-1".into()), agent: "x".into(), since: chrono::Utc::now(), path: None, kind: ClaimKind::Work });
+                claims.push(Claim {
+                    ticket: TicketId("K-1".into()),
+                    agent: "x".into(),
+                    since: chrono::Utc::now(),
+                    path: None,
+                    kind: ClaimKind::Work,
+                });
                 Ok::<_, StoreError>(())
             })
             .unwrap_err();
@@ -689,7 +777,13 @@ mod tests {
         assert!(!store.claims_path().exists(), "an untouched sidecar is not created");
         store
             .mutate(None, |_, claims| {
-                claims.push(Claim { ticket: TicketId("K-1".into()), agent: "claude".into(), since: chrono::Utc::now(), path: None, kind: ClaimKind::Work });
+                claims.push(Claim {
+                    ticket: TicketId("K-1".into()),
+                    agent: "claude".into(),
+                    since: chrono::Utc::now(),
+                    path: None,
+                    kind: ClaimKind::Work,
+                });
                 Ok::<_, StoreError>(())
             })
             .unwrap();
@@ -712,7 +806,11 @@ mod tests {
                 });
             });
         });
-        assert_eq!(store.read_board().unwrap().version, threads * writes_per_thread, "every write must be serialized, none lost");
+        assert_eq!(
+            store.read_board().unwrap().version,
+            threads * writes_per_thread,
+            "every write must be serialized, none lost"
+        );
     }
 
     #[test]

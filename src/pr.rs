@@ -36,7 +36,9 @@ pub struct PrReport {
 /// a user who adds a remote mid-session in order to push must not need a server restart.
 #[must_use]
 pub fn eligible(store: &Store, ticket: &Ticket) -> bool {
-    let Column::Review { branch: Some(branch) } = &ticket.column else { return false };
+    let Column::Review { branch: Some(branch), .. } = &ticket.column else {
+        return false;
+    };
     if ticket.external.is_some() {
         return false; // external tickets are worked elsewhere; their PRs are the daemon's business
     }
@@ -52,7 +54,7 @@ pub fn create_pr(store: &Store, id: &TicketId) -> anyhow::Result<PrReport> {
     let repo = worktree::repo_root(store)?;
     let board = store.read_board()?;
     let ticket = board.ticket(id).with_context(|| format!("{id} not found on the board"))?;
-    let Column::Review { branch: Some(branch) } = &ticket.column else {
+    let Column::Review { branch: Some(branch), .. } = &ticket.column else {
         bail!("{id} is not a review ticket with a branch — nothing to open a PR from");
     };
     if ticket.external.is_some() {
@@ -73,8 +75,11 @@ pub fn create_pr(store: &Store, id: &TicketId) -> anyhow::Result<PrReport> {
     git::run("git", &repo, &["push", "-u", &remote, branch], &[("GIT_TERMINAL_PROMPT", "0")])
         .with_context(|| format!("pushing {branch} to {remote}"))?;
     let title = format!("{id}: {}", ticket.title);
-    let url = gh(&repo, &["pr", "create", "--head", branch, "--title", &title, "--body", &pr_body(ticket)])
-        .with_context(|| format!("creating the PR for {branch}"))?;
+    let url = gh(
+        &repo,
+        &["pr", "create", "--head", branch, "--title", &title, "--body", &pr_body(ticket)],
+    )
+    .with_context(|| format!("creating the PR for {branch}"))?;
     tracing::info!(ticket = %id, %branch, %url, "PR created");
     if let Some(number) = trailing_pr_number(&url) {
         record_pr(store, id, number, &url);
@@ -85,8 +90,20 @@ pub fn create_pr(store: &Store, id: &TicketId) -> anyhow::Result<PrReport> {
 /// Best-effort recording of the PR onto the ticket. The PR exists on GitHub either way — a failure to write the board
 /// (or an unparseable URL) must never fail the click; the poller's by-branch discovery is the safety net.
 fn record_pr(store: &Store, id: &TicketId, number: u64, url: &str) {
-    let pr = crate::store::model::PrRef { number, url: url.to_owned(), state: crate::store::model::PrState::Open, merged_commit: None };
-    if let Err(e) = crate::ops::apply(store, None, crate::ops::Op::SetPr { id: id.clone(), pr: Some(pr) }) {
+    let pr = crate::store::model::PrRef {
+        number,
+        url: url.to_owned(),
+        state: crate::store::model::PrState::Open,
+        merged_commit: None,
+    };
+    if let Err(e) = crate::ops::apply(
+        store,
+        None,
+        crate::ops::Op::SetPr {
+            id: id.clone(),
+            pr: Some(pr),
+        },
+    ) {
         tracing::warn!(ticket = %id, error = %e, "PR created but not recorded on the board — the poller will rediscover it by branch");
     }
 }
@@ -142,7 +159,9 @@ fn pr_body(ticket: &Ticket) -> String {
         .iter()
         .map(|n| {
             let at = n.at.format("%Y-%m-%d %H:%M UTC");
-            n.author.as_deref().map_or_else(|| format!("- {at}: {}", n.text), |author| format!("- {at} — {author}: {}", n.text))
+            n.author
+                .as_deref()
+                .map_or_else(|| format!("- {at}: {}", n.text), |author| format!("- {at} — {author}: {}", n.text))
         })
         .collect();
     format!("{spec}\n\n## Progress\n\n{}", notes.join("\n"))
@@ -180,7 +199,11 @@ mod tests {
             review: vec![],
             external: None,
             pr: None,
-            column: Column::Done { branch: Some("k-7/rate-limit-login".into()), completed_at: Utc::now(), discarded: false },
+            column: Column::Done {
+                branch: Some("k-7/rate-limit-login".into()),
+                completed_at: Utc::now(),
+                discarded: false,
+            },
         }
     }
 
@@ -194,8 +217,16 @@ mod tests {
     fn pr_body_appends_the_progress_log_when_notes_exist() {
         let at = Utc.with_ymd_and_hms(2026, 7, 17, 12, 0, 0).unwrap();
         let notes = vec![
-            Note { at, author: Some("claude".into()), text: "started".into() },
-            Note { at, author: None, text: "hand-added".into() },
+            Note {
+                at,
+                author: Some("claude".into()),
+                text: "started".into(),
+            },
+            Note {
+                at,
+                author: None,
+                text: "hand-added".into(),
+            },
         ];
         let body = pr_body(&ticket("spec", notes));
         assert_eq!(
@@ -212,7 +243,11 @@ mod tests {
 
         git(repo.path(), &["remote", "add", "alpha", "https://example.invalid/alpha.git"]).unwrap();
         git(repo.path(), &["remote", "add", "zeta", "https://example.invalid/zeta.git"]).unwrap();
-        assert_eq!(pick_remote(repo.path()).unwrap(), "alpha", "no origin: the first listed remote wins");
+        assert_eq!(
+            pick_remote(repo.path()).unwrap(),
+            "alpha",
+            "no origin: the first listed remote wins"
+        );
 
         git(repo.path(), &["remote", "add", "origin", "https://example.invalid/origin.git"]).unwrap();
         assert_eq!(pick_remote(repo.path()).unwrap(), "origin");

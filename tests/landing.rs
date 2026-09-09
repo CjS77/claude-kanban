@@ -9,8 +9,7 @@ use claude_kanban::{
     land,
     ops::{self, Op, VerdictReview},
     store::{
-        Store,
-        derive,
+        Store, derive,
         model::{Column, ColumnId, Status, TicketId},
     },
     worktree::{self, StartOpts},
@@ -25,7 +24,11 @@ struct Scratch {
 
 fn sh(dir: &Path, cmd: &str, args: &[&str]) {
     let out = Command::new(cmd).current_dir(dir).args(args).output().unwrap();
-    assert!(out.status.success(), "{cmd} {args:?} failed: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{cmd} {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 /// A committed repo on `main` with a board holding K-1 (ready) and K-2 (ready, depends on K-1).
@@ -47,7 +50,17 @@ fn scratch() -> Scratch {
         ops::apply(
             &store,
             None,
-            Op::CreateTicket { title: title.into(), body: String::new(), epic: None, labels: vec![], depends_on: deps, status: Status::Ready, model: None, effort: None, auto_merge: false },
+            Op::CreateTicket {
+                title: title.into(),
+                body: String::new(),
+                epic: None,
+                labels: vec![],
+                depends_on: deps,
+                status: Status::Ready,
+                model: None,
+                effort: None,
+                auto_merge: false,
+            },
         )
         .unwrap();
     };
@@ -55,11 +68,19 @@ fn scratch() -> Scratch {
     create("Build on the foundation", vec![TicketId("K-1".into())]);
 
     let wt_root = dir.path().join("worktrees");
-    Scratch { _dir: dir, repo, wt_root, store }
+    Scratch {
+        _dir: dir,
+        repo,
+        wt_root,
+        store,
+    }
 }
 
 fn opts(s: &Scratch) -> StartOpts {
-    StartOpts { dir: Some(s.wt_root.clone()), ..StartOpts::default() }
+    StartOpts {
+        dir: Some(s.wt_root.clone()),
+        ..StartOpts::default()
+    }
 }
 
 /// Claim K-1, work it in its worktree (one real commit), and close out to review. Returns the branch.
@@ -67,12 +88,31 @@ fn opts(s: &Scratch) -> StartOpts {
 /// No `worktree::finish` here: moving to review *is* the close-out now, and the worktree deliberately survives it.
 fn work_k1_to_review(s: &Scratch) -> String {
     let id = TicketId("K-1".into());
-    ops::apply(&s.store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
+    ops::apply(
+        &s.store,
+        None,
+        Op::Claim {
+            id: id.clone(),
+            agent: "claude".into(),
+        },
+    )
+    .unwrap();
     let report = worktree::start(&s.store, &id, &opts(s)).unwrap();
     fs::write(report.path.join("foundation.txt"), "the foundation\n").unwrap();
     sh(&report.path, "git", &["add", "-A"]);
     sh(&report.path, "git", &["commit", "-qm", "feat: foundation"]);
-    ops::apply(&s.store, None, Op::MoveTicket { id, to: ColumnId::Review, position: None, owner: None, branch: None }).unwrap();
+    ops::apply(
+        &s.store,
+        None,
+        Op::MoveTicket {
+            id,
+            to: ColumnId::Review,
+            position: None,
+            owner: None,
+            branch: None,
+        },
+    )
+    .unwrap();
     report.branch
 }
 
@@ -90,9 +130,15 @@ fn a_dependent_unblocks_only_when_the_code_lands_and_then_its_worktree_contains_
 
     // Code-complete is not done: K-1 sits in review, K-2 stays blocked, the board has nothing to offer.
     let board = s.store.read_board().unwrap();
-    assert!(matches!(board.ticket(&TicketId("K-1".into())).unwrap().column, Column::Review { .. }));
+    assert!(matches!(
+        board.ticket(&TicketId("K-1".into())).unwrap().column,
+        Column::Review { .. }
+    ));
     assert!(derive::blocked(board.ticket(&TicketId("K-2".into())).unwrap(), &board));
-    assert!(derive::next_ticket(&board, &[]).is_none(), "nothing is eligible while the predecessor is unlanded");
+    assert!(
+        derive::next_ticket(&board, &[]).is_none(),
+        "nothing is eligible while the predecessor is unlanded"
+    );
     assert_eq!(land::sweep(&s.store).unwrap(), 0, "no proof yet — the sweep must not move anything");
 
     // A sweep observed the live branch tip above; now the user lands it exactly the way merge.sh does: release the
@@ -117,9 +163,20 @@ fn a_dependent_unblocks_only_when_the_code_lands_and_then_its_worktree_contains_
 
     // And the point of it all: K-2's fresh worktree, based off main, CONTAINS K-1's work.
     let id = TicketId("K-2".into());
-    ops::apply(&s.store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
+    ops::apply(
+        &s.store,
+        None,
+        Op::Claim {
+            id: id.clone(),
+            agent: "claude".into(),
+        },
+    )
+    .unwrap();
     let report = worktree::start(&s.store, &id, &opts(&s)).unwrap();
-    assert!(report.path.join("foundation.txt").exists(), "the dependent's worktree must contain the predecessor's landed code");
+    assert!(
+        report.path.join("foundation.txt").exists(),
+        "the dependent's worktree must contain the predecessor's landed code"
+    );
 }
 
 /// The auto-merge close-out of `/kanban:work`, in the order the command file insists on: rebase, fast-forward, and
@@ -143,7 +200,10 @@ fn auto_merge_lands_by_ancestry_while_the_branch_is_still_alive() {
     sh(&s.repo, "git", &["merge", "-q", "--ff-only", &branch]);
 
     // No prior sweep ever ran, so there is no observed tip to fall back on — ancestry alone carries this.
-    assert!(s.store.read_land_state().unwrap().is_empty(), "nothing observed: the landing must rest on the live ref");
+    assert!(
+        s.store.read_land_state().unwrap().is_empty(),
+        "nothing observed: the landing must rest on the live ref"
+    );
     assert_eq!(land::sweep(&s.store).unwrap(), 1);
 
     let board = s.store.read_board().unwrap();
@@ -173,10 +233,20 @@ fn auto_merge_that_deletes_the_branch_too_early_strands_the_ticket_in_review() {
     sh(&s.repo, "git", &["merge", "-q", "--ff-only", &branch]);
     sh(&s.repo, "git", &["branch", "-q", "-d", &branch]); // out of order: the sweep never got to see the ref
 
-    assert_eq!(land::sweep(&s.store).unwrap(), 0, "the code is in main, but nothing left in the repo proves it");
+    assert_eq!(
+        land::sweep(&s.store).unwrap(),
+        0,
+        "the code is in main, but nothing left in the repo proves it"
+    );
     let board = s.store.read_board().unwrap();
-    assert!(matches!(board.ticket(&TicketId("K-1".into())).unwrap().column, Column::Review { .. }));
-    assert!(derive::blocked(board.ticket(&TicketId("K-2".into())).unwrap(), &board), "the dependent stays blocked");
+    assert!(matches!(
+        board.ticket(&TicketId("K-1".into())).unwrap().column,
+        Column::Review { .. }
+    ));
+    assert!(
+        derive::blocked(board.ticket(&TicketId("K-2".into())).unwrap(), &board),
+        "the dependent stays blocked"
+    );
 }
 
 #[test]
@@ -184,10 +254,26 @@ fn a_discarded_predecessor_keeps_its_dependent_blocked_for_good() {
     let s = scratch();
     work_k1_to_review(&s);
 
-    ops::apply(&s.store, None, Op::DiscardTicket { id: TicketId("K-1".into()), reason: "superseded".into(), by: "tester".into(), review: VerdictReview::default() }).unwrap();
+    ops::apply(
+        &s.store,
+        None,
+        Op::DiscardTicket {
+            id: TicketId("K-1".into()),
+            reason: "superseded".into(),
+            by: "tester".into(),
+            review: VerdictReview::default(),
+        },
+    )
+    .unwrap();
     let board = s.store.read_board().unwrap();
-    assert!(matches!(board.ticket(&TicketId("K-1".into())).unwrap().column, Column::Done { discarded: true, .. }));
-    assert!(derive::blocked(board.ticket(&TicketId("K-2".into())).unwrap(), &board), "the promised code never landed");
+    assert!(matches!(
+        board.ticket(&TicketId("K-1".into())).unwrap().column,
+        Column::Done { discarded: true, .. }
+    ));
+    assert!(
+        derive::blocked(board.ticket(&TicketId("K-2".into())).unwrap(), &board),
+        "the promised code never landed"
+    );
     assert!(derive::next_ticket(&board, &[]).is_none());
 
     // Sweeps change nothing: the ticket is closed, and even its branch later merging would not resurrect it.
@@ -196,7 +282,15 @@ fn a_discarded_predecessor_keeps_its_dependent_blocked_for_good() {
     assert!(derive::blocked(board.ticket(&TicketId("K-2".into())).unwrap(), &board));
 
     // Claiming the blocked dependent is refused — the human has to untangle a discarded dependency deliberately.
-    let err = ops::apply(&s.store, None, Op::Claim { id: TicketId("K-2".into()), agent: "claude".into() }).unwrap_err();
+    let err = ops::apply(
+        &s.store,
+        None,
+        Op::Claim {
+            id: TicketId("K-2".into()),
+            agent: "claude".into(),
+        },
+    )
+    .unwrap_err();
     assert!(err.to_string().contains("blocked"), "{err}");
 }
 
@@ -210,12 +304,22 @@ fn an_unlanded_review_ticket_keeps_its_worktree() {
     let branch = work_k1_to_review(&s);
     let id = TicketId("K-1".into());
 
-    let path = worktree::path_for(&s.store, &id).unwrap().expect("the worktree must survive the close-out");
+    let path = worktree::path_for(&s.store, &id)
+        .unwrap()
+        .expect("the worktree must survive the close-out");
     assert!(path.exists(), "review is where a human reads the code — it has to still be there");
     assert!(path.join("foundation.txt").exists(), "and it must still hold the ticket's work");
 
     // Re-claiming for rework re-attaches to the very same checkout rather than building a second one.
-    ops::apply(&s.store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
+    ops::apply(
+        &s.store,
+        None,
+        Op::Claim {
+            id: id.clone(),
+            agent: "claude".into(),
+        },
+    )
+    .unwrap();
     let again = worktree::start(&s.store, &id, &opts(&s)).unwrap();
     assert!(again.reattached, "rework must re-attach, not re-create");
     assert_eq!(again.path, path);
@@ -238,7 +342,10 @@ fn a_landed_ticket_loses_its_worktree_and_keeps_its_branch() {
     assert!(matches!(k1.column, Column::Done { discarded: false, .. }));
     assert_eq!(k1.column.branch(), Some(branch.as_str()), "the branch is provenance and survives");
     assert!(!path.exists(), "the worktree retires with the landing");
-    assert!(worktree::path_for(&s.store, &id).unwrap().is_none(), "and git no longer registers one");
+    assert!(
+        worktree::path_for(&s.store, &id).unwrap().is_none(),
+        "and git no longer registers one"
+    );
 }
 
 /// Discard is the other terminal verdict, so it retires the worktree the same way.
@@ -249,7 +356,17 @@ fn a_discarded_ticket_loses_its_worktree_too() {
     let id = TicketId("K-1".into());
     let path = worktree::path_for(&s.store, &id).unwrap().unwrap();
 
-    ops::apply(&s.store, None, Op::DiscardTicket { id: id.clone(), reason: "superseded".into(), by: "tester".into(), review: VerdictReview::default() }).unwrap();
+    ops::apply(
+        &s.store,
+        None,
+        Op::DiscardTicket {
+            id: id.clone(),
+            reason: "superseded".into(),
+            by: "tester".into(),
+            review: VerdictReview::default(),
+        },
+    )
+    .unwrap();
     worktree::retire(&s.store, &id);
 
     assert!(!path.exists(), "a discarded ticket's checkout is finished with too");
@@ -266,17 +383,27 @@ fn a_dirty_worktree_survives_landing_and_the_card_says_so() {
     fs::write(path.join("half-finished.txt"), "not committed\n").unwrap();
 
     sh(&s.repo, "git", &["merge", "-q", "--ff-only", &branch]);
-    assert_eq!(land::sweep(&s.store).unwrap(), 1, "a stubborn worktree must never block the landing");
+    assert_eq!(
+        land::sweep(&s.store).unwrap(),
+        1,
+        "a stubborn worktree must never block the landing"
+    );
 
     let board = s.store.read_board().unwrap();
     let k1 = board.ticket(&id).unwrap();
-    assert!(matches!(k1.column, Column::Done { discarded: false, .. }), "the ticket still landed");
+    assert!(
+        matches!(k1.column, Column::Done { discarded: false, .. }),
+        "the ticket still landed"
+    );
     assert!(path.exists(), "the uncommitted work is still on disk");
     assert!(path.join("half-finished.txt").exists());
     let note = k1.notes.last().unwrap();
     assert_eq!(note.author.as_deref(), Some("kanban"));
     assert!(note.text.contains("uncommitted changes"), "{note:?}");
-    assert!(note.text.contains(&path.display().to_string()), "the note must name the path: {note:?}");
+    assert!(
+        note.text.contains(&path.display().to_string()),
+        "the note must name the path: {note:?}"
+    );
 }
 
 /// The close-out guard's engine: `kanban_move to=review` asks this, and refuses when it answers.
@@ -284,7 +411,15 @@ fn a_dirty_worktree_survives_landing_and_the_card_says_so() {
 fn a_dirty_worktree_is_reported_so_the_close_out_move_can_refuse() {
     let s = scratch();
     let id = TicketId("K-1".into());
-    ops::apply(&s.store, None, Op::Claim { id: id.clone(), agent: "claude".into() }).unwrap();
+    ops::apply(
+        &s.store,
+        None,
+        Op::Claim {
+            id: id.clone(),
+            agent: "claude".into(),
+        },
+    )
+    .unwrap();
     let report = worktree::start(&s.store, &id, &opts(&s)).unwrap();
     assert!(worktree::dirty_worktree(&s.store, &id).is_none(), "a fresh worktree is clean");
 
@@ -293,5 +428,8 @@ fn a_dirty_worktree_is_reported_so_the_close_out_move_can_refuse() {
 
     sh(&report.path, "git", &["add", "-A"]);
     sh(&report.path, "git", &["commit", "-qm", "feat: commit it"]);
-    assert!(worktree::dirty_worktree(&s.store, &id).is_none(), "committing clears the way to review");
+    assert!(
+        worktree::dirty_worktree(&s.store, &id).is_none(),
+        "committing clears the way to review"
+    );
 }

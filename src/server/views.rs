@@ -122,7 +122,11 @@ fn epic_options(board: &Board, selected: Option<&str>) -> Vec<EpicOptionCtx> {
     board
         .epics
         .iter()
-        .map(|e| EpicOptionCtx { id: e.id.to_string(), title: e.title.clone(), selected: selected == Some(e.id.0.as_str()) })
+        .map(|e| EpicOptionCtx {
+            id: e.id.to_string(),
+            title: e.title.clone(),
+            selected: selected == Some(e.id.0.as_str()),
+        })
         .collect()
 }
 
@@ -215,9 +219,18 @@ fn pr_ctx(pr: &crate::store::model::PrRef) -> PrCtx {
             "badge-warning",
             "merged on GitHub; lands in done once the merge reaches your local main branch",
         ),
-        PrState::Closed => (format!("PR #{} closed", pr.number), "badge-error", "closed without merging — rework the ticket, or discard it"),
+        PrState::Closed => (
+            format!("PR #{} closed", pr.number),
+            "badge-error",
+            "closed without merging — rework the ticket, or discard it",
+        ),
     };
-    PrCtx { url: pr.url.clone(), label, class, title }
+    PrCtx {
+        url: pr.url.clone(),
+        label,
+        class,
+        title,
+    }
 }
 
 #[derive(Debug)]
@@ -281,7 +294,12 @@ pub fn board(view: &BoardView, filters: &Filters, heads: Option<&HashSet<String>
                 .filter(|t| t.ticket.column.id() == meta.id && filters.admits_ticket(&query, t, &view.epics))
                 .map(|t| card(t, view, heads))
                 .collect(),
-            epics: view.epics.iter().filter(|e| e.column == meta.id && filters.admits_epic(&query, e)).map(epic_card).collect(),
+            epics: view
+                .epics
+                .iter()
+                .filter(|e| e.column == meta.id && filters.admits_epic(&query, e))
+                .map(epic_card)
+                .collect(),
         })
         .collect();
     BoardTpl {
@@ -326,7 +344,11 @@ fn card(t: &TicketView, view: &BoardView, heads: Option<&HashSet<String>>) -> Ca
         auto_merge_inherited: t.auto_merge_effective && !t.ticket.auto_merge,
         labels: t.ticket.labels.clone(),
         run: run_badge(&t.ticket),
-        external: t.ticket.external.as_ref().map(|e| format!("{} {}#{}", e.provider, e.kind, e.number)),
+        external: t
+            .ticket
+            .external
+            .as_ref()
+            .map(|e| format!("{} {}#{}", e.provider, e.kind, e.number)),
         external_flag: external_flag(&t.ticket),
         claim: t.claim.as_ref().map(claim_ctx),
         branch: t.ticket.column.branch().map(str::to_owned),
@@ -342,14 +364,23 @@ fn card(t: &TicketView, view: &BoardView, heads: Option<&HashSet<String>>) -> Ca
 /// (an epic follows its last ticket into the archive, so it lives in exactly one of the two files) — either way the card
 /// gets its stripe, and an epic in neither falls back to the no-epic grey. No claims, no blocking: nothing here is live.
 fn archive_view(archive: &Archive, view: &BoardView) -> BoardView {
-    let archived_epics = archive.epics.iter().map(|e| EpicView { epic: e.clone(), column: ColumnId::Done, tickets: vec![] });
+    let archived_epics = archive.epics.iter().map(|e| EpicView {
+        epic: e.clone(),
+        column: ColumnId::Done,
+        tickets: vec![],
+    });
     BoardView {
         version: view.version,
         columns: vec![],
         tickets: archive
             .tickets
             .iter()
-            .map(|t| TicketView { ticket: t.clone(), blocked: false, auto_merge_effective: false, claim: None })
+            .map(|t| TicketView {
+                ticket: t.clone(),
+                blocked: false,
+                auto_merge_effective: false,
+                claim: None,
+            })
             .collect(),
         epics: view.epics.iter().cloned().chain(archived_epics).collect(),
     }
@@ -363,7 +394,10 @@ fn archive_column(archive: &Archive, view: &BoardView, filters: &Filters, query:
             .tickets
             .iter()
             .filter(|t| filters.admits_ticket(query, t, &archived.epics))
-            .map(|t| CardCtx { archived: true, ..card(t, &archived, None) })
+            .map(|t| CardCtx {
+                archived: true,
+                ..card(t, &archived, None)
+            })
             .collect(),
         total: archive.tickets.len(),
     }
@@ -401,7 +435,15 @@ fn epic_card(e: &EpicView) -> EpicCardCtx {
         color: e.epic.color.clone(),
         status: e.epic.status,
         status_badge: status_badge(e.epic.status),
-        items: e.tickets.iter().map(|i| ItemCtx { ticket: i.ticket.to_string(), title: i.title.clone(), done: i.done }).collect(),
+        items: e
+            .tickets
+            .iter()
+            .map(|i| ItemCtx {
+                ticket: i.ticket.to_string(),
+                title: i.title.clone(),
+                done: i.done,
+            })
+            .collect(),
     }
 }
 
@@ -520,7 +562,11 @@ pub struct ReviewLogTpl {
 #[must_use]
 pub fn review_log(board: &Board, id: &crate::store::model::TicketId) -> Option<ReviewLogTpl> {
     let t = board.ticket(id)?;
-    Some(ReviewLogTpl { id: t.id.to_string(), log: review_entries(t), live: true })
+    Some(ReviewLogTpl {
+        id: t.id.to_string(),
+        log: review_entries(t),
+        live: true,
+    })
 }
 
 fn review_entries(t: &crate::store::model::Ticket) -> Vec<ReviewEntryCtx> {
@@ -583,7 +629,11 @@ fn epic_auto_merge_confirm(id: &str, title: &str, on: bool, count: usize) -> Str
         return format!("Turn off auto-merge for {id} — {title}? Its tickets keep whatever flags they set for themselves.");
     }
     let plural = if count == 1 { "ticket" } else { "tickets" };
-    let target = if count == 0 { format!("{id} — {title}") } else { format!("{id} — {title} and its {count} {plural}") };
+    let target = if count == 0 {
+        format!("{id} — {title}")
+    } else {
+        format!("{id} — {title} and its {count} {plural}")
+    };
     let subject = if count == 0 { "a ticket filed under it" } else { "any of them" };
     auto_merge_on_confirm(&target, subject)
 }
@@ -655,7 +705,15 @@ pub fn review(
                 t.id, t.title
             ),
             landing,
-            notes: t.notes.iter().map(|n| NoteCtx { at: human_time(n.at), author: n.author.clone(), text: n.text.clone() }).collect(),
+            notes: t
+                .notes
+                .iter()
+                .map(|n| NoteCtx {
+                    at: human_time(n.at),
+                    author: n.author.clone(),
+                    text: n.text.clone(),
+                })
+                .collect(),
             log: review_entries(t),
             can_diff,
         },
@@ -683,7 +741,15 @@ pub fn diff(ticket_id: String, branch: String, main: String, files: Vec<crate::d
     let files_changed = files.len();
     let added = files.iter().map(|f| f.added).sum();
     let deleted = files.iter().map(|f| f.deleted).sum();
-    DiffTpl { ticket_id, branch, main, files, files_changed, added, deleted }
+    DiffTpl {
+        ticket_id,
+        branch,
+        main,
+        files,
+        files_changed,
+        added,
+        deleted,
+    }
 }
 
 pub fn detail(board: &Board, claims: &[Claim], id: &crate::store::model::TicketId, can_pr: bool, can_diff: bool) -> Option<DetailTpl> {
@@ -708,7 +774,11 @@ pub fn detail(board: &Board, claims: &[Claim], id: &crate::store::model::TicketI
             blocked: derive::blocked(t, board),
             external: t.external.as_ref().map(|e| format!("{} {}#{}", e.provider, e.kind, e.number)),
             external_flag: external_flag(t),
-            epic: epic.map(|e| EpicRefCtx { id: e.id.to_string(), title: e.title.clone(), color: e.color.clone() }),
+            epic: epic.map(|e| EpicRefCtx {
+                id: e.id.to_string(),
+                title: e.title.clone(),
+                color: e.color.clone(),
+            }),
             labels: t.labels.clone(),
             run: run_badge(t),
             claim,
@@ -744,10 +814,19 @@ pub fn detail(board: &Board, claims: &[Claim], id: &crate::store::model::TicketI
             notes: t
                 .notes
                 .iter()
-                .map(|n| NoteCtx { at: human_time(n.at), author: n.author.clone(), text: n.text.clone() })
+                .map(|n| NoteCtx {
+                    at: human_time(n.at),
+                    author: n.author.clone(),
+                    text: n.text.clone(),
+                })
                 .collect(),
             log: review_entries(t),
-            statuses: STATUSES.map(|s| StatusOptCtx { name: s.as_str(), current: s == t.status }).into(),
+            statuses: STATUSES
+                .map(|s| StatusOptCtx {
+                    name: s.as_str(),
+                    current: s == t.status,
+                })
+                .into(),
         },
     })
 }
@@ -788,7 +867,12 @@ pub struct EffortOptCtx {
 /// The effort options, with the ticket's own level pre-selected. Mirrors `epic_options`: an empty leading option is the
 /// "inherit" case and lives in the template.
 fn effort_options(current: Option<Effort>) -> Vec<EffortOptCtx> {
-    Effort::ALL.map(|e| EffortOptCtx { name: e.as_str(), selected: Some(e) == current }).into()
+    Effort::ALL
+        .map(|e| EffortOptCtx {
+            name: e.as_str(),
+            selected: Some(e) == current,
+        })
+        .into()
 }
 
 pub fn detail_edit(board: &Board, id: &crate::store::model::TicketId, models: Vec<String>) -> Option<DetailEditTpl> {
@@ -844,7 +928,11 @@ fn epic_delete_confirm(id: &str, title: &str, items: &[ItemCtx]) -> String {
     let count = items.len();
     let plural = if count == 1 { "ticket" } else { "tickets" };
     let done = items.iter().filter(|i| i.done).count();
-    let already_done = if done == 0 { String::new() } else { format!(" ({done} already done)") };
+    let already_done = if done == 0 {
+        String::new()
+    } else {
+        format!(" ({done} already done)")
+    };
     format!(
         "Delete {id} — {title} and its {count} {plural}{already_done}? The tickets are deleted with it, other tickets' \
          dependencies on them are removed, and any worktrees or branches stay on disk. There is no undo."
@@ -859,7 +947,11 @@ pub fn epic_detail(board: &Board, id: &crate::store::model::EpicId) -> Option<Ep
         .tickets
         .iter()
         .filter(|t| t.epic.as_ref() == Some(id))
-        .map(|t| ItemCtx { ticket: t.id.to_string(), title: t.title.clone(), done: matches!(t.column, Column::Done { .. }) })
+        .map(|t| ItemCtx {
+            ticket: t.id.to_string(),
+            title: t.title.clone(),
+            done: matches!(t.column, Column::Done { .. }),
+        })
         .collect();
     Some(EpicDetailTpl {
         epic: EpicDetailCtx {
@@ -874,7 +966,12 @@ pub fn epic_detail(board: &Board, id: &crate::store::model::EpicId) -> Option<Ep
             auto_merge: e.auto_merge,
             auto_merge_confirm: epic_auto_merge_confirm(&e.id.to_string(), &e.title, e.auto_merge, items.len()),
             items,
-            statuses: STATUSES.map(|s| StatusOptCtx { name: s.as_str(), current: s == e.status }).into(),
+            statuses: STATUSES
+                .map(|s| StatusOptCtx {
+                    name: s.as_str(),
+                    current: s == e.status,
+                })
+                .into(),
         },
     })
 }
@@ -893,11 +990,16 @@ pub struct EpicEditCtx {
     pub body: String,
 }
 
-#[must_use] 
+#[must_use]
 pub fn epic_edit(board: &Board, id: &crate::store::model::EpicId) -> Option<EpicEditTpl> {
     let e = board.epic(id)?;
     Some(EpicEditTpl {
-        epic: EpicEditCtx { id: e.id.to_string(), title: e.title.clone(), color: e.color.clone(), body: e.body.clone() },
+        epic: EpicEditCtx {
+            id: e.id.to_string(),
+            title: e.title.clone(),
+            color: e.color.clone(),
+            body: e.body.clone(),
+        },
     })
 }
 
@@ -980,7 +1082,11 @@ pub fn docs(entries: Vec<crate::server::docs::DocEntry>) -> DocsTpl {
     let ctx: Vec<DocEntryCtx> = entries
         .into_iter()
         .enumerate()
-        .map(|(i, e)| DocEntryCtx { file: e.file, title: e.title, first: i == 0 })
+        .map(|(i, e)| DocEntryCtx {
+            file: e.file,
+            title: e.title,
+            first: i == 0,
+        })
         .collect();
     let first = ctx.first().cloned();
     DocsTpl { entries: ctx, first }
@@ -996,14 +1102,20 @@ pub struct ToastTpl {
 }
 
 impl ToastTpl {
-    #[must_use] 
+    #[must_use]
     pub fn error(message: String) -> ToastTpl {
-        ToastTpl { kind: "alert-error", message }
+        ToastTpl {
+            kind: "alert-error",
+            message,
+        }
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn warning(message: String) -> ToastTpl {
-        ToastTpl { kind: "alert-warning", message }
+        ToastTpl {
+            kind: "alert-warning",
+            message,
+        }
     }
 }
 

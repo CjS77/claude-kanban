@@ -46,7 +46,12 @@ fn assert_migrated(store: &std::path::Path) {
     assert_eq!(board["schema"], 2, "the upgrade is on disk, not just in memory: {raw}");
     assert_eq!(board["version"], 8, "the upgrade counts as exactly one mutation");
 
-    let columns: Vec<&str> = board["columns"].as_array().unwrap().iter().map(|c| c["id"].as_str().unwrap()).collect();
+    let columns: Vec<&str> = board["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["id"].as_str().unwrap())
+        .collect();
     assert_eq!(columns, ["todo", "doing", "review", "done"], "review slots in before done");
     assert_eq!(board["tickets"][0]["column"]["id"], "done", "a v1 done ticket stays done");
 }
@@ -75,7 +80,10 @@ fn the_mcp_face_migrates_a_v1_board_on_disk() {
     let mut line = String::new();
     BufReader::new(child.stdout.take().unwrap()).read_line(&mut line).unwrap();
     let reply: serde_json::Value = serde_json::from_str(&line).expect("the reply must be protocol JSON");
-    assert!(reply["result"]["capabilities"]["tools"].is_object(), "the server must have come up: {reply}");
+    assert!(
+        reply["result"]["capabilities"]["tools"].is_object(),
+        "the server must have come up: {reply}"
+    );
 
     assert_migrated(&store);
 
@@ -88,7 +96,11 @@ fn the_worktree_cli_migrates_a_v1_board_on_disk() {
     let (dir, store) = v1_store();
     // `worktree list` insists on a repo around the store, so give it one.
     let git = |args: &[&str]| {
-        let out = Command::new("git").args(args).current_dir(dir.path()).output().expect("git must run");
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(dir.path())
+            .output()
+            .expect("git must run");
         assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
     };
     git(&["init", "--quiet"]);
@@ -97,7 +109,11 @@ fn the_worktree_cli_migrates_a_v1_board_on_disk() {
         .args(["--store", store.to_str().unwrap(), "worktree", "list", "--json"])
         .output()
         .expect("binary must run");
-    assert!(out.status.success(), "worktree list must succeed: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "worktree list must succeed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     assert_migrated(&store);
 }
@@ -118,6 +134,10 @@ fn a_corrupt_board_is_refused_on_stderr_and_left_alone() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("board.json"), "the failure names the file, on stderr: {stderr}");
     assert!(out.stdout.is_empty(), "stdout belongs to the protocol — errors never go there");
-    assert_eq!(std::fs::read_to_string(store.join("board.json")).unwrap(), "not json", "the board is untouched");
+    assert_eq!(
+        std::fs::read_to_string(store.join("board.json")).unwrap(),
+        "not json",
+        "the board is untouched"
+    );
     assert!(!store.join("board-v1.json").exists(), "an unreadable board is never backed up");
 }

@@ -5,7 +5,10 @@ use std::{fs, path::Path, process::Command};
 
 use claude_kanban::{
     ops::{self, Op},
-    store::{Store, model::{Column, Status, TicketId}},
+    store::{
+        Store,
+        model::{Column, Status, TicketId},
+    },
     worktree::{self, StartOpts},
 };
 
@@ -18,7 +21,11 @@ struct Scratch {
 
 fn sh(dir: &Path, cmd: &str, args: &[&str]) {
     let out = Command::new(cmd).current_dir(dir).args(args).output().unwrap();
-    assert!(out.status.success(), "{cmd} {args:?} failed: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{cmd} {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 /// A committed scratch repo with an initialised board and one claimed ready ticket (K-1).
@@ -52,14 +59,30 @@ fn scratch() -> Scratch {
         },
     )
     .unwrap();
-    ops::apply(&store, None, Op::Claim { id: TicketId("K-1".into()), agent: "claude".into() }).unwrap();
+    ops::apply(
+        &store,
+        None,
+        Op::Claim {
+            id: TicketId("K-1".into()),
+            agent: "claude".into(),
+        },
+    )
+    .unwrap();
 
     let wt_root = dir.path().join("worktrees");
-    Scratch { _dir: dir, repo, wt_root, store }
+    Scratch {
+        _dir: dir,
+        repo,
+        wt_root,
+        store,
+    }
 }
 
 fn opts(s: &Scratch) -> StartOpts {
-    StartOpts { dir: Some(s.wt_root.clone()), ..StartOpts::default() }
+    StartOpts {
+        dir: Some(s.wt_root.clone()),
+        ..StartOpts::default()
+    }
 }
 
 #[test]
@@ -71,7 +94,10 @@ fn start_creates_a_sparse_worktree_without_the_board() {
     assert!(!report.reattached);
     assert!(report.sparse, "git on this machine is ≥ 2.36");
     assert!(report.path.join("README.md").exists(), "tracked files are checked out");
-    assert!(!report.path.join(".kanban").exists(), "the sparse checkout excludes .kanban/ entirely");
+    assert!(
+        !report.path.join(".kanban").exists(),
+        "the sparse checkout excludes .kanban/ entirely"
+    );
 
     // The stamps: branch on the doing column, path on the claim.
     let board = s.store.read_board().unwrap();
@@ -116,7 +142,11 @@ fn finish_refuses_dirty_then_discards_on_request_and_keeps_the_branch() {
     assert_eq!(done.branch.as_deref(), Some("k-1/rate-limit-login"));
 
     // The branch survives; the claim survives but loses its path (the ticket is in flight until moved to done).
-    let branches = Command::new("git").current_dir(&s.repo).args(["branch", "--list", "k-1/*"]).output().unwrap();
+    let branches = Command::new("git")
+        .current_dir(&s.repo)
+        .args(["branch", "--list", "k-1/*"])
+        .output()
+        .unwrap();
     assert!(String::from_utf8_lossy(&branches.stdout).contains("k-1/rate-limit-login"));
     let claims = s.store.read_claims().unwrap();
     assert_eq!(claims.len(), 1);
@@ -135,7 +165,10 @@ fn finish_with_merge_lands_the_commits_on_the_current_branch() {
 
     let done = worktree::finish(&s.store, &id, false, true).unwrap();
     assert!(done.merged);
-    assert!(s.repo.join("feature.txt").exists(), "the merge landed on the main checkout's branch");
+    assert!(
+        s.repo.join("feature.txt").exists(),
+        "the merge landed on the main checkout's branch"
+    );
 }
 
 #[test]
@@ -153,7 +186,10 @@ fn merge_refuses_when_the_main_checkout_is_not_on_the_main_branch() {
     assert!(err.to_string().contains("'elsewhere', not 'main'"), "{err}");
 
     sh(&s.repo, "git", &["checkout", "-q", "main"]);
-    assert!(worktree::finish(&s.store, &id, false, true).unwrap().merged, "back on main, the merge proceeds");
+    assert!(
+        worktree::finish(&s.store, &id, false, true).unwrap().merged,
+        "back on main, the merge proceeds"
+    );
 }
 
 #[test]
@@ -172,7 +208,17 @@ fn unclaimed_and_external_tickets_are_refused() {
     ops::apply(
         &s.store,
         None,
-        Op::CreateTicket { title: "not claimed".into(), body: String::new(), epic: None, labels: vec![], depends_on: vec![], status: Status::Ready, model: None, effort: None, auto_merge: false },
+        Op::CreateTicket {
+            title: "not claimed".into(),
+            body: String::new(),
+            epic: None,
+            labels: vec![],
+            depends_on: vec![],
+            status: Status::Ready,
+            model: None,
+            effort: None,
+            auto_merge: false,
+        },
     )
     .unwrap();
     let err = worktree::start(&s.store, &TicketId("K-2".into()), &opts(&s)).unwrap_err();
@@ -183,7 +229,10 @@ fn unclaimed_and_external_tickets_are_refused() {
         .mutate(None, |board, _| {
             let t = board.ticket_mut(&TicketId("K-2".into())).unwrap();
             t.external = Some(claude_kanban::store::model::External::github_issue(42));
-            t.column = Column::Doing { owner: "minesweeper".into(), branch: None };
+            t.column = Column::Doing {
+                owner: "minesweeper".into(),
+                branch: None,
+            };
             Ok::<_, claude_kanban::store::StoreError>(())
         })
         .unwrap();
@@ -199,7 +248,11 @@ fn copy_to_worktrees_honours_the_gitignore_gate() {
     fs::write(s.repo.join("tracked.txt"), "not ignored\n").unwrap();
     sh(&s.repo, "git", &["add", "-A"]);
     sh(&s.repo, "git", &["commit", "-qm", "add gitignore"]);
-    fs::write(s.store.dir().join("config.json"), r#"{ "copy_to_worktrees": [".env", "tracked.txt", "absent.txt"] }"#).unwrap();
+    fs::write(
+        s.store.dir().join("config.json"),
+        r#"{ "copy_to_worktrees": [".env", "tracked.txt", "absent.txt"] }"#,
+    )
+    .unwrap();
 
     let report = worktree::start(&s.store, &TicketId("K-1".into()), &opts(&s)).unwrap();
     assert!(report.path.join(".env").exists(), "authorised gitignored files are copied");
@@ -209,7 +262,12 @@ fn copy_to_worktrees_honours_the_gitignore_gate() {
         "not ignored\n",
         "tracked files come from the checkout itself, not the copy step"
     );
-    assert_eq!(report.warnings.len(), 2, "the non-ignored and the absent entries warn: {:?}", report.warnings);
+    assert_eq!(
+        report.warnings.len(),
+        2,
+        "the non-ignored and the absent entries warn: {:?}",
+        report.warnings
+    );
 }
 
 #[test]

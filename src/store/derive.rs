@@ -12,8 +12,7 @@ use serde::Serialize;
 
 use super::{
     claims::{self, Claim},
-    model::{Board, Column, ColumnId, ColumnMeta, Epic, EpicId, Ticket, TicketId},
-    model::Status,
+    model::{Board, Column, ColumnId, ColumnMeta, Epic, EpicId, Status, Ticket, TicketId},
 };
 
 /// An epic's derived column: `done` iff every one of its tickets is done (and it has at least one); `review` when every
@@ -81,7 +80,9 @@ pub fn auto_merge(ticket: &Ticket, board: &Board) -> bool {
 /// `None` when nothing is eligible either way.
 #[must_use]
 pub fn next_ticket<'a>(board: &'a Board, claims: &[Claim]) -> Option<&'a Ticket> {
-    landable_ticket(board, claims).or_else(|| rework_ticket(board, claims)).or_else(|| todo_ticket(board, claims))
+    landable_ticket(board, claims)
+        .or_else(|| rework_ticket(board, claims))
+        .or_else(|| todo_ticket(board, claims))
 }
 
 /// The highest review ticket a human has accepted and nobody is landing yet — the work loop's first duty, ahead of any
@@ -123,9 +124,12 @@ fn rework_ticket<'a>(board: &'a Board, claims: &[Claim]) -> Option<&'a Ticket> {
 /// The original contract: the highest ticket in `todo` that is unblocked, unclaimed, not `external` (external tickets are
 /// worked elsewhere), and either `ready` (implement it) or `stub` (refine it into a spec).
 fn todo_ticket<'a>(board: &'a Board, claims: &[Claim]) -> Option<&'a Ticket> {
-    board
-        .tickets_in(ColumnId::Todo)
-        .find(|t| matches!(t.status, Status::Ready | Status::Stub) && t.external.is_none() && !blocked(t, board) && claims::find(claims, &t.id).is_none())
+    board.tickets_in(ColumnId::Todo).find(|t| {
+        matches!(t.status, Status::Ready | Status::Stub)
+            && t.external.is_none()
+            && !blocked(t, board)
+            && claims::find(claims, &t.id).is_none()
+    })
 }
 
 /// The complement of [`next_ticket`]: every todo ticket that is *not* eligible, and why. For when `next_ticket` answers
@@ -133,7 +137,10 @@ fn todo_ticket<'a>(board: &'a Board, claims: &[Claim]) -> Option<&'a Ticket> {
 /// otherwise, and one of them means the board is stuck.
 #[must_use]
 pub fn ineligible(board: &Board, claims: &[Claim]) -> Vec<(TicketId, String)> {
-    board.tickets_in(ColumnId::Todo).filter_map(|t| ineligibility(t, board, claims).map(|why| (t.id.clone(), why))).collect()
+    board
+        .tickets_in(ColumnId::Todo)
+        .filter_map(|t| ineligibility(t, board, claims).map(|why| (t.id.clone(), why)))
+        .collect()
 }
 
 /// Why this todo ticket is not the next thing to work on; `None` when it is eligible. The order mirrors
@@ -161,7 +168,7 @@ fn ineligibility(ticket: &Ticket, board: &Board, claims: &[Claim]) -> Option<Str
 
 /// The full read model: the board joined with its live claims and every derived fact, ready to serialize. Built fresh on
 /// every read — nothing here is ever stored.
-#[must_use] 
+#[must_use]
 pub fn board_view(board: &Board, claims: &[Claim]) -> BoardView {
     let tickets: Vec<TicketView> = board
         .tickets
@@ -183,11 +190,20 @@ pub fn board_view(board: &Board, claims: &[Claim]) -> BoardView {
                 .tickets
                 .iter()
                 .filter(|t| t.epic.as_ref() == Some(&e.id))
-                .map(|t| ChecklistItem { ticket: t.id.clone(), title: t.title.clone(), done: matches!(t.column, Column::Done { .. }) })
+                .map(|t| ChecklistItem {
+                    ticket: t.id.clone(),
+                    title: t.title.clone(),
+                    done: matches!(t.column, Column::Done { .. }),
+                })
                 .collect(),
         })
         .collect();
-    BoardView { version: board.version, columns: board.columns.clone(), tickets, epics }
+    BoardView {
+        version: board.version,
+        columns: board.columns.clone(),
+        tickets,
+        epics,
+    }
 }
 
 /// Everything a consumer of the board sees: stored state plus derived facts. Serialized as-is by `kanban_board` and walked
@@ -293,16 +309,30 @@ mod tests {
     }
 
     fn done() -> Column {
-        Column::Done { branch: None, completed_at: Utc::now(), discarded: false }
+        Column::Done {
+            branch: None,
+            completed_at: Utc::now(),
+            discarded: false,
+        }
     }
 
     fn doing() -> Column {
-        Column::Doing { owner: "claude".into(), branch: None }
+        Column::Doing {
+            owner: "claude".into(),
+            branch: None,
+        }
     }
 
     fn board(tickets: Vec<Ticket>) -> Board {
         let mut b = Board::empty();
-        b.epics.push(Epic { id: EpicId("EP-1".into()), title: "e".into(), color: "#fff".into(), status: Status::Ready, body: String::new(), auto_merge: false });
+        b.epics.push(Epic {
+            id: EpicId("EP-1".into()),
+            title: "e".into(),
+            color: "#fff".into(),
+            status: Status::Ready,
+            body: String::new(),
+            auto_merge: false,
+        });
         b.tickets = tickets;
         b
     }
@@ -312,9 +342,19 @@ mod tests {
         let ep = EpicId("EP-1".into());
         assert_eq!(epic_column(&ep, &board(vec![])), ColumnId::Todo, "empty epic is todo");
         assert_eq!(epic_column(&ep, &board(vec![ticket("K-1", Column::Todo)])), ColumnId::Todo);
-        assert_eq!(epic_column(&ep, &board(vec![ticket("K-1", doing()), ticket("K-2", Column::Todo)])), ColumnId::Doing);
-        assert_eq!(epic_column(&ep, &board(vec![ticket("K-1", done()), ticket("K-2", Column::Todo)])), ColumnId::Doing, "one done + one todo = in progress");
-        assert_eq!(epic_column(&ep, &board(vec![ticket("K-1", done()), ticket("K-2", done())])), ColumnId::Done);
+        assert_eq!(
+            epic_column(&ep, &board(vec![ticket("K-1", doing()), ticket("K-2", Column::Todo)])),
+            ColumnId::Doing
+        );
+        assert_eq!(
+            epic_column(&ep, &board(vec![ticket("K-1", done()), ticket("K-2", Column::Todo)])),
+            ColumnId::Doing,
+            "one done + one todo = in progress"
+        );
+        assert_eq!(
+            epic_column(&ep, &board(vec![ticket("K-1", done()), ticket("K-2", done())])),
+            ColumnId::Done
+        );
     }
 
     #[test]
@@ -338,7 +378,13 @@ mod tests {
         b.tickets[0].status = Status::Draft;
         b.tickets[1].depends_on = vec![TicketId("K-1".into())];
         b.tickets[3].external = Some(crate::store::model::External::github_issue(1));
-        let claims = vec![Claim { ticket: TicketId("K-3".into()), agent: "claude".into(), since: Utc::now(), path: None, kind: claims::ClaimKind::Work }];
+        let claims = vec![Claim {
+            ticket: TicketId("K-3".into()),
+            agent: "claude".into(),
+            since: Utc::now(),
+            path: None,
+            kind: claims::ClaimKind::Work,
+        }];
         assert_eq!(next_ticket(&b, &claims).unwrap().id.0, "K-5");
     }
 
@@ -358,7 +404,13 @@ mod tests {
         b.tickets[1].depends_on = vec![TicketId("K-1".into()), TicketId("K-6".into())];
         b.tickets[3].external = Some(crate::store::model::External::github_issue(1));
         b.tickets[5].status = Status::Review;
-        let claims = vec![Claim { ticket: TicketId("K-3".into()), agent: "claude".into(), since: Utc::now(), path: None, kind: claims::ClaimKind::Work }];
+        let claims = vec![Claim {
+            ticket: TicketId("K-3".into()),
+            agent: "claude".into(),
+            since: Utc::now(),
+            path: None,
+            kind: claims::ClaimKind::Work,
+        }];
 
         let why: Vec<(String, String)> = ineligible(&b, &claims).into_iter().map(|(id, why)| (id.0, why)).collect();
         assert_eq!(why.len(), 5, "only the eligible K-5 is absent: {why:?}");
@@ -374,7 +426,11 @@ mod tests {
         b.tickets[0].status = Status::Ready;
         b.tickets[0].column = done();
         b.tickets[5].status = Status::Ready;
-        b.tickets[5].column = Column::Done { branch: None, completed_at: Utc::now(), discarded: true };
+        b.tickets[5].column = Column::Done {
+            branch: None,
+            completed_at: Utc::now(),
+            discarded: true,
+        };
         let why = ineligible(&b, &claims);
         assert_eq!(why.iter().find(|(id, _)| id.0 == "K-2").unwrap().1, "blocked by K-6");
     }
@@ -383,7 +439,11 @@ mod tests {
     fn next_ticket_offers_stubs_for_refinement() {
         let mut b = board(vec![ticket("K-1", Column::Todo), ticket("K-2", Column::Todo)]);
         b.tickets[0].status = Status::Stub;
-        assert_eq!(next_ticket(&b, &[]).unwrap().id.0, "K-1", "a stub above a ready ticket wins — position is priority");
+        assert_eq!(
+            next_ticket(&b, &[]).unwrap().id.0,
+            "K-1",
+            "a stub above a ready ticket wins — position is priority"
+        );
     }
 
     #[test]
@@ -406,7 +466,11 @@ mod tests {
                 auto_merge(&b.tickets[0], &b)
             })
             .collect();
-        assert_eq!(got, cases.iter().map(|&(_, _, want)| want).collect::<Vec<_>>(), "ticket OR epic, and nothing else");
+        assert_eq!(
+            got,
+            cases.iter().map(|&(_, _, want)| want).collect::<Vec<_>>(),
+            "ticket OR epic, and nothing else"
+        );
     }
 
     #[test]
@@ -429,10 +493,16 @@ mod tests {
 
         assert!(auto_merge(b.ticket(&id).unwrap(), &b), "the effective answer follows the epic");
         assert!(!b.ticket(&id).unwrap().auto_merge, "but the stored flag is untouched");
-        assert!(board_view(&b, &[]).tickets[0].auto_merge_effective, "and the view carries the derived value");
+        assert!(
+            board_view(&b, &[]).tickets[0].auto_merge_effective,
+            "and the view carries the derived value"
+        );
 
         b.epics[0].auto_merge = false;
-        assert!(!auto_merge(b.ticket(&id).unwrap(), &b), "so clearing the epic takes the permission back from the ticket");
+        assert!(
+            !auto_merge(b.ticket(&id).unwrap(), &b),
+            "so clearing the epic takes the permission back from the ticket"
+        );
     }
 
     /// `TicketView.ticket` is flattened, so the derived field has to be named apart from the stored one or the object
@@ -443,7 +513,10 @@ mod tests {
         b.tickets[0].auto_merge = true;
         let json = serde_json::to_value(board_view(&b, &[])).unwrap();
         assert_eq!(json["tickets"][0]["auto_merge"], true, "the stored flag flattens up as itself");
-        assert_eq!(json["tickets"][0]["auto_merge_effective"], true, "and the derived one sits beside it under its own name");
+        assert_eq!(
+            json["tickets"][0]["auto_merge_effective"], true,
+            "and the derived one sits beside it under its own name"
+        );
     }
 
     #[test]

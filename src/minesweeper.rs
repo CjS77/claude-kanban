@@ -37,7 +37,9 @@ pub fn poll(store: &crate::store::Store) -> anyhow::Result<usize> {
 fn warn_if_configured(store: &crate::store::Store) {
     static WARNED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     if crate::config::Config::load(store.dir()).is_ok_and(|c| c.minesweeper()) && WARNED.set(()).is_ok() {
-        tracing::warn!("this project enables minesweeper delegation, but this binary was built without the `minesweeper` feature — nothing will be delegated");
+        tracing::warn!(
+            "this project enables minesweeper delegation, but this binary was built without the `minesweeper` feature — nothing will be delegated"
+        );
     }
 }
 
@@ -77,8 +79,17 @@ mod active {
             Ok(None) => {}
             Err(e) => {
                 tracing::warn!(ticket = %id, error = format!("{e:#}"), "delegation failed — the ticket stays in doing, unbound");
-                let text = format!("delegating to minesweeper failed: {e:#} — fix the cause, then re-enter doing (or run /kanban:delegate)");
-                if let Err(e) = ops::apply(store, None, Op::AddNote { id: id.clone(), text, author: Some("kanban".into()) }) {
+                let text =
+                    format!("delegating to minesweeper failed: {e:#} — fix the cause, then re-enter doing (or run /kanban:delegate)");
+                if let Err(e) = ops::apply(
+                    store,
+                    None,
+                    Op::AddNote {
+                        id: id.clone(),
+                        text,
+                        author: Some("kanban".into()),
+                    },
+                ) {
                     tracing::warn!(ticket = %id, error = %e, "and the failure could not be noted on the card either");
                 }
             }
@@ -91,16 +102,37 @@ mod active {
     /// ticket in doing because its claimant was real, but here the only claimant is the daemon — nothing was
     /// delegated, so a failed handoff releases the claim and the card returns to todo wearing the explanation.
     pub fn hand_over(store: &Store, id: &TicketId) {
-        if let Err(e) = ops::apply(store, None, Op::Claim { id: id.clone(), agent: DELEGATE_AGENT.into() }) {
-            note_failure(store, id, &format!("handing to minesweeper failed: {e} — clear that, then delegate again"));
+        if let Err(e) = ops::apply(
+            store,
+            None,
+            Op::Claim {
+                id: id.clone(),
+                agent: DELEGATE_AGENT.into(),
+            },
+        ) {
+            note_failure(
+                store,
+                id,
+                &format!("handing to minesweeper failed: {e} — clear that, then delegate again"),
+            );
             return;
         }
-        let outcome = Config::load(store.dir()).map_err(anyhow::Error::from).and_then(|config| delegate_ticket(store, id, &config));
+        let outcome = Config::load(store.dir())
+            .map_err(anyhow::Error::from)
+            .and_then(|config| delegate_ticket(store, id, &config));
         match outcome {
             Ok(Some(url)) => tracing::info!(ticket = %id, %url, "handed to minesweeper"),
-            Ok(None) => release_noting(store, id, "handing to minesweeper failed: no git repository or remote to mirror the issue to"),
+            Ok(None) => release_noting(
+                store,
+                id,
+                "handing to minesweeper failed: no git repository or remote to mirror the issue to",
+            ),
             Err(e) => {
-                release_noting(store, id, &format!("handing to minesweeper failed: {e:#} — fix the cause and delegate again, or run /kanban:delegate"));
+                release_noting(
+                    store,
+                    id,
+                    &format!("handing to minesweeper failed: {e:#} — fix the cause and delegate again, or run /kanban:delegate"),
+                );
             }
         }
     }
@@ -109,7 +141,15 @@ mod active {
     /// report waiting to happen.
     fn note_failure(store: &Store, id: &TicketId, text: &str) {
         tracing::warn!(ticket = %id, "{text}");
-        if let Err(e) = ops::apply(store, None, Op::AddNote { id: id.clone(), text: text.into(), author: Some("kanban".into()) }) {
+        if let Err(e) = ops::apply(
+            store,
+            None,
+            Op::AddNote {
+                id: id.clone(),
+                text: text.into(),
+                author: Some("kanban".into()),
+            },
+        ) {
             tracing::warn!(ticket = %id, error = %e, "and the failure could not be noted on the card either");
         }
     }
@@ -140,7 +180,9 @@ mod active {
     fn delegate_ticket(store: &Store, id: &TicketId, config: &Config) -> anyhow::Result<Option<String>> {
         let board = store.read_board()?;
         let Some(ticket) = board.ticket(id) else { return Ok(None) };
-        let Column::Doing { branch, .. } = &ticket.column else { return Ok(None) };
+        let Column::Doing { branch, .. } = &ticket.column else {
+            return Ok(None);
+        };
         if branch.is_some() || ticket.status != crate::store::model::Status::Ready || ticket.external.is_some() {
             return Ok(None);
         }
@@ -155,7 +197,16 @@ mod active {
             None => create_issue(&repo, ticket, &config.minesweeper_label(), &footer)?,
         };
         let note = format!("delegated to minesweeper: issue #{number} {url}");
-        ops::apply(store, None, Op::Delegate { id: id.clone(), external: External::github_issue(number), agent: DELEGATE_AGENT.into(), note })?;
+        ops::apply(
+            store,
+            None,
+            Op::Delegate {
+                id: id.clone(),
+                external: External::github_issue(number),
+                agent: DELEGATE_AGENT.into(),
+                note,
+            },
+        )?;
         Ok(Some(url))
     }
 
@@ -168,9 +219,26 @@ mod active {
     /// lag a fresh crash by minutes — the residual risk is a rare duplicate issue, visible and human-closable.
     fn find_mirror(repo: &Path, footer: &str) -> anyhow::Result<Option<(u64, String)>> {
         let search = format!("\"{footer}\" in:body");
-        let out = pr::gh(repo, &["issue", "list", "--state", "all", "--search", &search, "--json", "number,url", "--limit", "5"])?;
-        let issues: Vec<serde_json::Value> = serde_json::from_str(&out).with_context(|| format!("unexpected `gh issue list` output: {out}"))?;
-        Ok(issues.first().and_then(|i| Some((i["number"].as_u64()?, i["url"].as_str()?.to_owned()))))
+        let out = pr::gh(
+            repo,
+            &[
+                "issue",
+                "list",
+                "--state",
+                "all",
+                "--search",
+                &search,
+                "--json",
+                "number,url",
+                "--limit",
+                "5",
+            ],
+        )?;
+        let issues: Vec<serde_json::Value> =
+            serde_json::from_str(&out).with_context(|| format!("unexpected `gh issue list` output: {out}"))?;
+        Ok(issues
+            .first()
+            .and_then(|i| Some((i["number"].as_u64()?, i["url"].as_str()?.to_owned()))))
     }
 
     /// `gh issue create` with the configured label, the ticket's spec as the body, and the footer as provenance.
@@ -266,18 +334,33 @@ mod active {
         let Some(facts) = facts.get(&ext.number) else { return Ok(false) };
         let in_doing = matches!(t.column, Column::Doing { .. });
 
-        // 1. A PR references the issue: record it, and put the card where PRs are tracked. The existing landing
-        //    machinery (rule 5) owns the journey from here.
+        // 1. A PR references the issue: record it, and put the card where PRs are tracked. The existing landing machinery (rule 5) owns the
+        //    journey from here.
         if let Some((pr, head)) = &facts.pr {
             let fresh = t.pr.as_ref() != Some(pr);
             if fresh {
-                ops::apply(store, None, Op::SetPr { id: t.id.clone(), pr: Some(pr.clone()) })?;
+                ops::apply(
+                    store,
+                    None,
+                    Op::SetPr {
+                        id: t.id.clone(),
+                        pr: Some(pr.clone()),
+                    },
+                )?;
             }
             if in_doing {
-                let op = Op::MoveTicket { id: t.id.clone(), to: ColumnId::Review, position: None, owner: None, branch: Some(head.clone()) };
+                let op = Op::MoveTicket {
+                    id: t.id.clone(),
+                    to: ColumnId::Review,
+                    position: None,
+                    owner: None,
+                    branch: Some(head.clone()),
+                };
                 match ops::apply(store, None, op) {
                     Ok(_) => {}
-                    Err(OpError::Invalid(e)) => tracing::debug!(ticket = %t.id, "review move refused (board moved underneath the poll): {e}"),
+                    Err(OpError::Invalid(e)) => {
+                        tracing::debug!(ticket = %t.id, "review move refused (board moved underneath the poll): {e}")
+                    }
                     Err(e) => return Err(e.into()),
                 }
                 return Ok(true);
@@ -285,19 +368,34 @@ mod active {
             return Ok(fresh);
         }
 
-        // 2. A refine split not yet (fully) mirrored: fetch the unmirrored sub-issues and mirror them. The op parks the
-        //    parent in review; its binding facts refresh on the next tick.
+        // 2. A refine split not yet (fully) mirrored: fetch the unmirrored sub-issues and mirror them. The op parks the parent in review;
+        //    its binding facts refresh on the next tick.
         if in_doing && facts.refine.iter().any(|n| !ext.sub_issues.contains(n)) {
-            let bound: HashSet<u64> =
-                board.tickets.iter().filter_map(|t| t.external.as_ref().filter(|e| e.is_github_issue()).map(|e| e.number)).collect();
-            let children: Vec<SubIssueSpec> =
-                facts.refine.iter().filter(|n| !bound.contains(n)).map(|&n| fetch_issue(repo, n)).collect::<anyhow::Result<_>>()?;
-            ops::apply(store, None, Op::MirrorSubIssues { parent: t.id.clone(), agent: DELEGATE_AGENT.into(), children })?;
+            let bound: HashSet<u64> = board
+                .tickets
+                .iter()
+                .filter_map(|t| t.external.as_ref().filter(|e| e.is_github_issue()).map(|e| e.number))
+                .collect();
+            let children: Vec<SubIssueSpec> = facts
+                .refine
+                .iter()
+                .filter(|n| !bound.contains(n))
+                .map(|&n| fetch_issue(repo, n))
+                .collect::<anyhow::Result<_>>()?;
+            ops::apply(
+                store,
+                None,
+                Op::MirrorSubIssues {
+                    parent: t.id.clone(),
+                    agent: DELEGATE_AGENT.into(),
+                    children,
+                },
+            )?;
             return Ok(true);
         }
 
-        // 3. Durable observations: flag labels and closure, written onto the binding only when they changed. The alarm
-        //    notes fire once, on the transition — the fresh binding is what makes the next tick a no-op.
+        // 3. Durable observations: flag labels and closure, written onto the binding only when they changed. The alarm notes fire once, on
+        //    the transition — the fresh binding is what makes the next tick a no-op.
         let fresh = External {
             closed: facts.closed,
             flag: flags.iter().find(|f| facts.labels.contains(f)).cloned(),
@@ -309,15 +407,40 @@ mod active {
         let newly_flagged = fresh.flag.is_some() && fresh.flag != ext.flag;
         let newly_abandoned = fresh.closed && !ext.closed && in_doing && fresh.sub_issues.is_empty();
         let (id, number) = (t.id.clone(), ext.number);
-        ops::apply(store, None, Op::BindExternal { id: id.clone(), external: Some(fresh.clone()) })?;
+        ops::apply(
+            store,
+            None,
+            Op::BindExternal {
+                id: id.clone(),
+                external: Some(fresh.clone()),
+            },
+        )?;
         if newly_flagged {
             let label = fresh.flag.expect("just checked");
-            let text = format!("minesweeper flagged: issue #{number} carries `{label}` — investigate on GitHub; the ticket stays in doing until you decide");
-            ops::apply(store, None, Op::AddNote { id: id.clone(), text, author: Some("kanban".into()) })?;
+            let text = format!(
+                "minesweeper flagged: issue #{number} carries `{label}` — investigate on GitHub; the ticket stays in doing until you decide"
+            );
+            ops::apply(
+                store,
+                None,
+                Op::AddNote {
+                    id: id.clone(),
+                    text,
+                    author: Some("kanban".into()),
+                },
+            )?;
         }
         if newly_abandoned {
             let text = format!("issue #{number} was closed without a PR — rework the ticket, release it, or close it out by hand");
-            ops::apply(store, None, Op::AddNote { id, text, author: Some("kanban".into()) })?;
+            ops::apply(
+                store,
+                None,
+                Op::AddNote {
+                    id,
+                    text,
+                    author: Some("kanban".into()),
+                },
+            )?;
         }
         Ok(true)
     }
@@ -338,7 +461,19 @@ mod active {
     fn batch_issue_facts(repo: &Path, numbers: &[u64]) -> anyhow::Result<HashMap<u64, IssueFacts>> {
         let (owner, name) = repo_slug(repo)?;
         let query = batch_query(numbers);
-        let out = pr::gh(repo, &["api", "graphql", "-f", &format!("query={query}"), "-f", &format!("owner={owner}"), "-f", &format!("name={name}")])?;
+        let out = pr::gh(
+            repo,
+            &[
+                "api",
+                "graphql",
+                "-f",
+                &format!("query={query}"),
+                "-f",
+                &format!("owner={owner}"),
+                "-f",
+                &format!("name={name}"),
+            ],
+        )?;
         let v: serde_json::Value = serde_json::from_str(&out).with_context(|| format!("unexpected graphql output: {out}"))?;
         let repository = &v["data"]["repository"];
         Ok(numbers
@@ -369,7 +504,10 @@ mod active {
 
     fn issue_facts(issue: &serde_json::Value) -> IssueFacts {
         let nodes = |v: &serde_json::Value| v["nodes"].as_array().cloned().unwrap_or_default();
-        let labels = nodes(&issue["labels"]).iter().filter_map(|l| l["name"].as_str().map(str::to_owned)).collect();
+        let labels = nodes(&issue["labels"])
+            .iter()
+            .filter_map(|l| l["name"].as_str().map(str::to_owned))
+            .collect();
         let refine = nodes(&issue["comments"])
             .iter()
             .filter_map(|c| c["body"].as_str())
@@ -390,7 +528,12 @@ mod active {
             };
             Some((pr, node["headRefName"].as_str().unwrap_or_default().to_owned()))
         });
-        IssueFacts { closed: issue["state"].as_str().is_some_and(|s| s.eq_ignore_ascii_case("closed")), labels, refine, pr }
+        IssueFacts {
+            closed: issue["state"].as_str().is_some_and(|s| s.eq_ignore_ascii_case("closed")),
+            labels,
+            refine,
+            pr,
+        }
     }
 
     /// Sub-issue numbers out of a refine comment: a body starting with the daemon's verbatim marker, one
@@ -424,7 +567,10 @@ mod active {
     fn repo_slug(repo: &Path) -> anyhow::Result<(String, String)> {
         let out = pr::gh(repo, &["repo", "view", "--json", "owner,name"])?;
         let v: serde_json::Value = serde_json::from_str(&out).with_context(|| format!("unexpected `gh repo view` output: {out}"))?;
-        let owner = v["owner"]["login"].as_str().context("gh repo view answered without an owner")?.to_owned();
+        let owner = v["owner"]["login"]
+            .as_str()
+            .context("gh repo view answered without an owner")?
+            .to_owned();
         let name = v["name"].as_str().context("gh repo view answered without a name")?.to_owned();
         Ok((owner, name))
     }
@@ -446,12 +592,20 @@ mod active {
         #[test]
         fn refine_comments_parse_the_daemons_exact_format_and_nothing_else() {
             // The literal shape minesweeper posts (src/child/modes/refine.ts), plus a human-ticked box.
-            let comment = "Refined into the following sub-tasks:\n\n- [ ] #12 — split the parser\n- [x] #13 — wire the flags\n- [ ] #14 — docs";
+            let comment =
+                "Refined into the following sub-tasks:\n\n- [ ] #12 — split the parser\n- [x] #13 — wire the flags\n- [ ] #14 — docs";
             assert_eq!(parse_refine_comment(comment), vec![12, 13, 14]);
 
-            assert!(parse_refine_comment("Fixed in #12").is_empty(), "an ordinary comment mentioning an issue is not a refine");
-            assert!(parse_refine_comment("- [ ] #12 — no marker line").is_empty(), "the marker prefix is required");
-            let junk = "Refined into the following sub-tasks:\n\n- [ ] no number here\n- [ ] #notanumber — x\nprose in between\n- [ ] #15 — real";
+            assert!(
+                parse_refine_comment("Fixed in #12").is_empty(),
+                "an ordinary comment mentioning an issue is not a refine"
+            );
+            assert!(
+                parse_refine_comment("- [ ] #12 — no marker line").is_empty(),
+                "the marker prefix is required"
+            );
+            let junk =
+                "Refined into the following sub-tasks:\n\n- [ ] no number here\n- [ ] #notanumber — x\nprose in between\n- [ ] #15 — real";
             assert_eq!(parse_refine_comment(junk), vec![15], "junk lines are skipped, not fatal");
         }
 
@@ -459,7 +613,11 @@ mod active {
         fn issue_urls_yield_their_trailing_number() {
             assert_eq!(trailing_issue_number("https://github.com/o/r/issues/42"), Some(42));
             assert_eq!(trailing_issue_number("https://github.com/o/r/issues/42/"), Some(42));
-            assert_eq!(trailing_issue_number("https://github.com/o/r/pull/42"), None, "a PR URL is not an issue");
+            assert_eq!(
+                trailing_issue_number("https://github.com/o/r/pull/42"),
+                None,
+                "a PR URL is not an issue"
+            );
         }
 
         #[test]
@@ -511,7 +669,11 @@ mod active {
             let board = store.read_board().unwrap();
             let t = board.ticket(&blocked).unwrap();
             assert!(matches!(t.column, Column::Todo), "{:?}", t.column);
-            assert!(t.notes.last().unwrap().text.contains("handing to minesweeper failed"), "{:?}", t.notes);
+            assert!(
+                t.notes.last().unwrap().text.contains("handing to minesweeper failed"),
+                "{:?}",
+                t.notes
+            );
             assert!(store.read_claims().unwrap().is_empty());
 
             // No repo/remote: the claim succeeds, the guards decline, and the daemon's claim is released again —
@@ -521,7 +683,11 @@ mod active {
             let t = board.ticket(&dep).unwrap();
             assert!(matches!(t.column, Column::Todo), "released back: {:?}", t.column);
             assert!(t.external.is_none());
-            assert!(t.notes.last().unwrap().text.contains("no git repository or remote"), "{:?}", t.notes);
+            assert!(
+                t.notes.last().unwrap().text.contains("no git repository or remote"),
+                "{:?}",
+                t.notes
+            );
             assert!(store.read_claims().unwrap().is_empty(), "the released claim is gone");
         }
 
@@ -549,7 +715,10 @@ mod active {
             assert_eq!(facts.labels, vec!["autofix", "minesweeperFailed"]);
             assert_eq!(facts.refine, vec![43]);
             let (pr, head) = facts.pr.expect("the closing reference is the PR");
-            assert_eq!((pr.number, pr.state, pr.merged_commit.as_deref()), (57, PrState::Merged, Some("abc123")));
+            assert_eq!(
+                (pr.number, pr.state, pr.merged_commit.as_deref()),
+                (57, PrState::Merged, Some("abc123"))
+            );
             assert_eq!(head, "myrepo-issue0042");
         }
     }
