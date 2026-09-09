@@ -109,7 +109,9 @@ export const KanbanPlugin = async ({ directory, worktree }) => {
       // ??= throughout: anything the user defined themselves — a differently-tuned kanban server, an
       // overridden command — wins over what this plugin would inject.
       config.mcp ??= {}
-      config.mcp["kanban"] ??= { type: "local", command: [launcher, "mcp"], enabled: true }
+      // --agent names this harness on the board: the server stamps it as owner/author when a tool omits `agent`,
+      // so an opencode session's claims and notes read "opencode", not the binary's Claude Code default.
+      config.mcp["kanban"] ??= { type: "local", command: [launcher, "mcp", "--agent", "opencode"], enabled: true }
 
       // Only entries with a provider/ prefix are dispatchable: an opencode model ref is provider/model,
       // so a bare alias ("opus") can get no pinned agent and falls to work.md's unconfigured-model

@@ -45,7 +45,13 @@ pub enum Command {
     },
 
     /// Run the stdio MCP server. Claude Code launches this; it is not meant to be run by hand.
-    Mcp,
+    Mcp {
+        /// The name stamped as the actor when a tool leaves `agent` unset — the board owner/author this
+        /// harness records. Each harness fills its own in (Claude Code takes the default; opencode passes
+        /// `--agent opencode`); a per-call `agent` still overrides it, as /kanban:delegate does.
+        #[arg(long, default_value = "claude")]
+        agent: String,
+    },
 
     /// The one-ticket-one-checkout lifecycle: start, finish, and list ticket worktrees.
     Worktree {
@@ -125,7 +131,7 @@ pub fn run() -> anyhow::Result<()> {
     match cli.command {
         Command::Init => init(&store),
         Command::Serve { port, no_open, assets_dir } => crate::server::serve(store, port, no_open, assets_dir),
-        Command::Mcp => crate::mcp::run(store),
+        Command::Mcp { agent } => crate::mcp::run(store, agent),
         Command::Worktree { command } => worktree(&store, command),
     }
 }

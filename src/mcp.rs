@@ -29,9 +29,6 @@ use crate::{
     },
 };
 
-/// What Claude is called on the board when a tool doesn't say otherwise.
-const DEFAULT_AGENT: &str = "claude";
-
 /// The workflow contract, shipped to the client as server instructions. Public because opencode never surfaces MCP
 /// server instructions, so `opencode/kanban-rules.md` must carry the same text — tests/manifests.rs pins the two
 /// together.
@@ -66,6 +63,9 @@ read (kanban_next also returns one — use it, its landing sweep may have advanc
 re-read and retry. \
 `auto_merge` makes `/kanban:work` rebase and land the ticket's branch into main when it reaches review, without a human \
 seeing the merge. Never set it on tickets you create unless the user explicitly asked for it. \
+kanban_claim and kanban_start_landing stamp the card's owner, and kanban_note its author, with your own agent name by \
+default — that is who the board shows did the work, so leave `agent` unset for your own actions and pass it only to act \
+as someone else, the way /kanban:delegate names the external worker it hands a ticket to. \
 kanban_board omits done tickets by default and returns a `done` summary of their ids instead — their specs and progress \
 logs are the bulk of the board and finished work is not input to your next decision; pass include_done=true, or \
 column=\"done\", when you actually need to read them.";
@@ -74,14 +74,16 @@ column=\"done\", when you actually need to read them.";
 #[derive(Debug, Clone)]
 pub struct KanbanServer {
     store: Store,
+    /// The name stamped as owner/author when a tool leaves `agent` unset — this harness's identity, set at launch.
+    agent: String,
 }
 
-/// Run the stdio MCP server until the client disconnects.
-pub fn run(store: Store) -> anyhow::Result<()> {
-    tracing::info!(store = %store.dir().display(), "MCP server on stdio");
+/// Run the stdio MCP server until the client disconnects. `agent` is the name stamped when a tool omits its own.
+pub fn run(store: Store, agent: String) -> anyhow::Result<()> {
+    tracing::info!(store = %store.dir().display(), agent = %agent, "MCP server on stdio");
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     runtime.block_on(async {
-        let service = KanbanServer { store }.serve(stdio()).await?;
+        let service = KanbanServer { store, agent }.serve(stdio()).await?;
         service.waiting().await?;
         tracing::info!("MCP client disconnected");
         Ok(())
@@ -122,7 +124,7 @@ pub struct EpicParams {
 pub struct ClaimParams {
     /// The ticket id, e.g. "K-7".
     pub ticket: String,
-    /// Who is claiming it. Defaults to "claude".
+    /// Who is claiming it. Defaults to this session's own agent name — set it only to claim for someone else.
     #[serde(default)]
     pub agent: Option<String>,
     /// The board version from your latest `kanban_board` read.
@@ -143,7 +145,7 @@ pub struct ReleaseParams {
 pub struct StartLandingParams {
     /// The accepted review ticket you are about to land, e.g. "K-7".
     pub ticket: String,
-    /// Who is landing it. Defaults to "claude".
+    /// Who is landing it. Defaults to this session's own agent name — set it only to land for someone else.
     pub agent: Option<String>,
     /// The board version from your latest `kanban_board` or `kanban_next` read.
     pub expected_version: u64,
@@ -292,7 +294,7 @@ pub struct NoteParams {
     pub ticket: String,
     /// The progress note to append (plain text or markdown).
     pub text: String,
-    /// Who is writing. Defaults to "claude".
+    /// Who is writing. Defaults to this session's own agent name — set it only to write as someone else.
     #[serde(default)]
     pub agent: Option<String>,
     /// The board version from your latest `kanban_board` read.
@@ -598,7 +600,7 @@ impl KanbanServer {
     #[tool]
     async fn kanban_claim(&self, Parameters(p): Parameters<ClaimParams>) -> Result<CallToolResult, ErrorData> {
         let id = TicketId(p.ticket);
-        let op = Op::Claim { id: id.clone(), agent: p.agent.unwrap_or_else(|| DEFAULT_AGENT.into()) };
+        let op = Op::Claim { id: id.clone(), agent: p.agent.unwrap_or_else(|| self.agent.clone()) };
         // Claiming is the MCP door into `doing` (kanban_move passes no owner, so it can't enter) — with the minesweeper
         // toggle on, a ready claim is the delegation moment.
         self.apply_then(Some(p.expected_version), op, move |store| crate::minesweeper::delegate_entering_doing(store, &id)).await
@@ -625,7 +627,7 @@ impl KanbanServer {
     /// crash costs one stalled card, not a stuck one.)
     #[tool]
     async fn kanban_start_landing(&self, Parameters(p): Parameters<StartLandingParams>) -> Result<CallToolResult, ErrorData> {
-        let op = Op::StartLanding { id: TicketId(p.ticket), agent: p.agent.unwrap_or_else(|| DEFAULT_AGENT.into()) };
+        let op = Op::StartLanding { id: TicketId(p.ticket), agent: p.agent.unwrap_or_else(|| self.agent.clone()) };
         self.apply(Some(p.expected_version), op).await
     }
 
@@ -734,7 +736,7 @@ impl KanbanServer {
     /// Append a timestamped entry to a ticket's progress log. Note progress after each meaningful chunk of work.
     #[tool]
     async fn kanban_note(&self, Parameters(p): Parameters<NoteParams>) -> Result<CallToolResult, ErrorData> {
-        let op = Op::AddNote { id: TicketId(p.ticket), text: p.text, author: Some(p.agent.unwrap_or_else(|| DEFAULT_AGENT.into())) };
+        let op = Op::AddNote { id: TicketId(p.ticket), text: p.text, author: Some(p.agent.unwrap_or_else(|| self.agent.clone())) };
         self.apply(Some(p.expected_version), op).await
     }
 

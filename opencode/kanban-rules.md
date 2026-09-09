@@ -4,7 +4,8 @@ This project has a Kanban board (in `.kanban/`, live in a browser via `/kanban:o
 agent sessions, driven over MCP by the `kanban` server this plugin registers. opencode prefixes MCP tool names with
 the server name, so the board's tools appear as `kanban_kanban_board`, `kanban_kanban_claim`, and so on — every
 `kanban_*` name below means the prefixed tool. `/kanban:work` is the work loop, and running it is the opt-in for
-claiming tickets.
+claiming tickets. This plugin launches the board's MCP server as `opencode`, so your claims, landings and notes are
+already stamped with that name — you never pass `agent` for your own actions.
 
 A local Kanban board shared with a human (who sees it live in a browser). The lifecycle of a ready ticket:
 kanban_claim → kanban_worktree_start → work in the worktree, committing as you go → kanban_note progress →
@@ -35,7 +36,10 @@ it replaces the whole list, so read the ticket first and send the set you want. 
 from your latest kanban_board read (kanban_next also returns one — use it, its landing sweep may have advanced the
 board); on a version conflict, re-read and retry. `auto_merge` makes `/kanban:work` rebase and land the ticket's
 branch into main when it reaches review, without a human seeing the merge. Never set it on tickets you create unless
-the user explicitly asked for it. kanban_board omits done tickets by default and returns a `done` summary of their
+the user explicitly asked for it. kanban_claim and kanban_start_landing stamp the card's owner, and kanban_note its
+author, with your own agent name by default — that is who the board shows did the work, so leave `agent` unset for your
+own actions and pass it only to act as someone else, the way /kanban:delegate names the external worker it hands a
+ticket to. kanban_board omits done tickets by default and returns a `done` summary of their
 ids instead — their specs and progress logs are the bulk of the board and finished work is not input to your next
 decision; pass include_done=true, or column="done", when you actually need to read them. Write code comments, notes,
 specs and review entries for a reader who never saw the previous version: explaining something by naming what it
