@@ -5,6 +5,27 @@ All notable changes to this project are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.1] - 2026-09-09
+
+### Added
+
+- **`kanban_version` MCP tool.** Reports the crate name, version and repository so a session can query which build it
+  is talking to. The version already rides the `initialize` handshake's `serverInfo`; this exposes it as a callable
+  tool.
+
+### Fixed
+
+- **The opencode MCP connection failed after the v3.8.0 bump.** The bump advanced `Cargo.toml` but not the plugin
+  manifests, so the launcher stayed pinned to the v3.7.1 binary — which predates `--agent` and rejected opencode's
+  `mcp --agent opencode` on startup. `plugin.json` and `marketplace.json` are synced so the launcher refreshes to the
+  binary that accepts the flag. Claude Code was unaffected, as it passes no flag.
+- **`request_changes` stamped the reviewer as the reworked ticket's owner.** `Column::Review` now keeps the builder's
+  name, and a rework round returns the card to whoever built it, falling back to the reviewer only when no builder was
+  recorded.
+- **The archive toggle had gone missing.** Restored to the right of the documentation icon after being dropped in the
+  v3.7 to v3.8 rebase. Its checkbox lives outside `#filters`, so the epic dropdown, search box and board load trigger
+  include `#archive-toggle` explicitly.
+
 ## [3.8.0] - 2026-09-09
 
 ### Added
