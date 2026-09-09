@@ -5,6 +5,23 @@ All notable changes to this project are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.0] - 2026-09-09
+
+### Added
+
+- **The launching harness names the board actor.** The MCP server no longer hard-codes `claude` as the owner and
+  author when a tool leaves `agent` unset. That fallback is now a launch-time value: `mcp --agent` defaults to
+  `claude` (Claude Code's `.mcp.json` passes no flag), while the opencode plugin launches with `--agent opencode`, so
+  an opencode session's claims and notes read as `opencode` rather than `claude`. A per-call `agent` still overrides
+  it, so `/kanban:delegate` keeps naming the daemon.
+
+### Changed
+
+- **The identity rule in the workflow instructions is now harness-neutral** — stamp your own agent name, and pass one
+  only to act as someone else — rather than naming a specific harness; `opencode/kanban-rules.md` carries the synced
+  copy.
+- **The reviewer skill no longer runs tests or builds the project.**
+
 ## [3.7.1] - 2026-09-08
 
 ### Changed
