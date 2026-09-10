@@ -256,13 +256,13 @@ pub struct Ticket {
     /// The reasoning effort this ticket's work deserves, honoured the same advisory way as `model`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<Effort>,
-    /// Let this ticket's branch land in main without a human looking at the merge. Advisory, like `model` and `effort`:
+    /// Let this ticket's branch land in main without a user looking at the merge. Advisory, like `model` and `effort`:
     /// this binary merges nothing — it is `/kanban:work` that reads the flag and does the rebase-and-land. The effective
     /// answer also takes in the ticket's epic (see [`crate::store::derive::auto_merge`]); this field is only the ticket's
     /// own say, never the inherited one.
     #[serde(default, skip_serializing_if = "is_false")]
     pub auto_merge: bool,
-    /// A human reviewed this ticket and sent it back for changes: the card sits unclaimed in `doing`, its feedback the
+    /// A user reviewed this ticket and sent it back for changes: the card sits unclaimed in `doing`, its feedback the
     /// newest `changes requested:` note, until a worker addresses it and moves it to `review` again.
     ///
     /// Cleared by that move, and by landing or discarding. Deliberately *kept* across [`crate::ops::Op::Release`]:
@@ -270,7 +270,7 @@ pub struct Ticket {
     /// [`crate::store::derive::next_ticket`] should still see rework waiting.
     #[serde(default, skip_serializing_if = "is_false")]
     pub changes_requested: bool,
-    /// A human reviewed this ticket and approved it: the work loop may now rebase its branch onto the main branch and
+    /// A user reviewed this ticket and approved it: the work loop may now rebase its branch onto the main branch and
     /// fast-forward main into it (`kanban_next` surfaces it as `action: "land"`). The card stays in `review` until the
     /// landing sweep proves the code actually arrived — accepting is *permission to land*, never the landing itself,
     /// which is what keeps `done` meaning landed.
@@ -282,10 +282,10 @@ pub struct Ticket {
     /// The work loop tried to land this ticket and git said no: the rebase conflicted, the worktree was dirty, the main
     /// checkout was somewhere else. The card stays in `review` wearing a danger flag and stops being offered for
     /// landing — retrying the same conflict forever helps nobody — and the newest `kanban` note says exactly what
-    /// failed. The one shape of this workflow that needs a human's hands rather than another agent's turn.
+    /// failed. The one shape of this workflow that needs a user's hands rather than another agent's turn.
     ///
     /// Cleared by any column change, by landing, by discarding, by a rework round — and by **Accept**, which is how a
-    /// human who has resolved the conflict by hand re-arms the landing without leaving the pane.
+    /// user who has resolved the conflict by hand re-arms the landing without leaving the pane.
     #[serde(default, skip_serializing_if = "is_false")]
     pub landing_blocked: bool,
     /// Until every ticket named here is `done`, this ticket is *blocked*: visible in `todo`, skipped by `kanban_next`.
@@ -295,7 +295,7 @@ pub struct Ticket {
     /// Progress log, appended to by `kanban_note`. Newest last.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<Note>,
-    /// The review log: what reviewers — human or agent — said about the code, and the verdicts they pressed. Newest
+    /// The review log: what reviewers — user or agent — said about the code, and the verdicts they pressed. Newest
     /// last, and only ever appended to: a second reviewer adds to the first rather than replacing it. Kept apart from
     /// `notes` on purpose — that is the worker's progress, this is the judgement of it. A `Verdict` entry closes a
     /// round; see [`Ticket::review_round`].
@@ -324,7 +324,7 @@ pub enum Column {
     Todo,
     /// Claimed and in progress.
     Doing {
-        /// Who is working the ticket — an agent name like `claude`, or a human.
+        /// Who is working the ticket — an agent name like `claude`, or a user.
         owner: String,
         /// The ticket's branch, filled in by `worktree start`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -353,7 +353,7 @@ pub enum Column {
         branch: Option<String>,
         completed_at: DateTime<Utc>,
         /// True when the work was retired without landing. A discarded ticket is closed but does NOT satisfy
-        /// dependencies — tickets depending on it stay blocked until a human intervenes.
+        /// dependencies — tickets depending on it stay blocked until a user intervenes.
         #[serde(default, skip_serializing_if = "is_false")]
         discarded: bool,
     },
@@ -402,7 +402,7 @@ pub enum PrState {
     #[default]
     Open,
     Merged,
-    /// Closed without merging. The ticket stays in review, flagged — retiring or reworking it is the human's call.
+    /// Closed without merging. The ticket stays in review, flagged — retiring or reworking it is the user's call.
     Closed,
 }
 
@@ -426,7 +426,7 @@ pub struct External {
     #[serde(default, skip_serializing_if = "is_false")]
     pub closed: bool,
     /// A flag label observed on the issue (e.g. `minesweeperFailed`) — the ticket stays in `doing`, wearing it, until a
-    /// human decides.
+    /// user decides.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flag: Option<String>,
     /// Sub-issue numbers minesweeper refined this issue into, recorded when their mirror tickets were created.
@@ -620,7 +620,7 @@ pub struct Epic {
     /// Markdown body. Rendered client-side; stored raw.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub body: String,
-    /// Let every ticket in this epic land without a human looking at the merge — one dial for a whole work stream.
+    /// Let every ticket in this epic land without a user looking at the merge — one dial for a whole work stream.
     /// Inheritance is a read-side derivation ([`crate::store::derive::auto_merge`]) and nothing more: the flag is never
     /// written onto the epic's tickets, so clearing it here takes the permission back from all of them at once. As on a
     /// ticket, the board itself merges nothing.

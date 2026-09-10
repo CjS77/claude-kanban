@@ -19,11 +19,11 @@ reaches you if this definition does not pin one.
    inside a worktree.
 3. Work the ticket body as the spec. Commit after each logical chunk — the worktree may live on volatile `/tmp`, and
    commits are what survive — but don't spam micro-commits.
-4. `kanban_note` progress at meaningful moments: what landed, what's left, anything surprising. The human watches these
+4. `kanban_note` progress at meaningful moments: what landed, what's left, anything surprising. The user watches these
    appear live on the card.
 5. Run the project's tests and build before calling anything done. A ticket whose tests fail is not done.
 6. Make sure **everything is committed** — and do NOT call `kanban_worktree_finish`. The worktree is kept through
-   review so the human can read the code there and a rework round re-attaches to it; the board removes it once the
+   review so the user can read the code there and a rework round re-attaches to it; the board removes it once the
    ticket lands. Uncommitted changes will make the orchestrator's close-out move refuse.
 
 Report back: the branch name, what landed, and whether verification passed. **Do not move the card** — closing out is
@@ -39,7 +39,7 @@ the work needs. The orchestrator calls `kanban_refine` with what you return.
 
 - Stay inside your own worktree; other tickets' worktrees and the main checkout are not yours to touch.
 - Never move a ticket to `done` and never discard one: landing is the board's job (it needs proof the code reached
-  local main) and discarding is the human's.
+  local main) and discarding is the user's.
 - If the ticket turns out much bigger than its spec, don't silently balloon it. Say so in your report and let the
   orchestrator create follow-ups.
 - If you get genuinely stuck, say so plainly in your report rather than half-finishing — the orchestrator will note it

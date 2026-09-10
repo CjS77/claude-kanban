@@ -7,7 +7,7 @@
 //! the configured eligibility label ([`delegate_entering_doing`], called from the same post-apply seams as the
 //! review-tip observation), and the serve poller's [`poll`] pass tracks every delegated issue back: a PR referencing
 //! the issue moves the card to review with the PR recorded; a flag label or a closure without a PR is written onto the
-//! binding and noted, with the card staying in `doing` for the human; a refine split is mirrored as child tickets, the
+//! binding and noted, with the card staying in `doing` for the user; a refine split is mirrored as child tickets, the
 //! parent parking in review until the refined-parent landing rule can finish it. The merged PR's journey to done is the
 //! ordinary landing machinery's business, not this module's.
 
@@ -216,7 +216,7 @@ mod active {
     }
 
     /// An issue an earlier attempt already created for this ticket, found by its exact footer. GitHub's search index can
-    /// lag a fresh crash by minutes — the residual risk is a rare duplicate issue, visible and human-closable.
+    /// lag a fresh crash by minutes — the residual risk is a rare duplicate issue, visible and user-closable.
     fn find_mirror(repo: &Path, footer: &str) -> anyhow::Result<Option<(u64, String)>> {
         let search = format!("\"{footer}\" in:body");
         let out = pr::gh(
@@ -537,7 +537,7 @@ mod active {
     }
 
     /// Sub-issue numbers out of a refine comment: a body starting with the daemon's verbatim marker, one
-    /// `- [ ] #<n> — <title>` line per sub-task (ticked boxes included — humans check them off as sub-issues close).
+    /// `- [ ] #<n> — <title>` line per sub-task (ticked boxes included — users check them off as sub-issues close).
     fn parse_refine_comment(body: &str) -> Vec<u64> {
         if !body.trim_start().starts_with(REFINE_PREFIX) {
             return vec![];
@@ -591,7 +591,7 @@ mod active {
 
         #[test]
         fn refine_comments_parse_the_daemons_exact_format_and_nothing_else() {
-            // The literal shape minesweeper posts (src/child/modes/refine.ts), plus a human-ticked box.
+            // The literal shape minesweeper posts (src/child/modes/refine.ts), plus a user-ticked box.
             let comment =
                 "Refined into the following sub-tasks:\n\n- [ ] #12 — split the parser\n- [x] #13 — wire the flags\n- [ ] #14 — docs";
             assert_eq!(parse_refine_comment(comment), vec![12, 13, 14]);

@@ -1,4 +1,4 @@
-//! `claude-kanban serve` — the human's face of the board: server-rendered HTML (Askama), swapped by htmx, styled by
+//! `claude-kanban serve` — the user's face of the board: server-rendered HTML (Askama), swapped by htmx, styled by
 //! Tailwind + daisyUI, live-updated over SSE. Bound to loopback, hardened in [`security`], and *thin*: reads render the
 //! read model, writes funnel through [`crate::ops`] exactly like the MCP server's do.
 

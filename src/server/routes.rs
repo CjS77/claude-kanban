@@ -422,7 +422,7 @@ pub struct MoveForm {
     position: Option<usize>,
 }
 
-/// A drag's drop. The owner for cards dragged into `doing` is the human at the browser (resolved once at startup from
+/// A drag's drop. The owner for cards dragged into `doing` is the user at the browser (resolved once at startup from
 /// `git config user.name`).
 pub async fn move_ticket(
     State(app): State<AppState>,
@@ -645,7 +645,7 @@ pub async fn save_settings(State(app): State<AppState>, Form(form): Form<Setting
 }
 
 /// The Discard button: retire a review ticket without landing it — done with `discarded: true`, dependents stay
-/// blocked. Always a human decision (the confirm dialog says exactly what it costs); the auto-lander never does this.
+/// blocked. Always a user decision (the confirm dialog says exactly what it costs); the auto-lander never does this.
 /// The review pane's form, shared by the three verdicts and Add to review. Every field defaults: the detail pane's own
 /// Discard button posts an empty body, and must keep working. `inline` is the JSON array glue.js fills from the diff's
 /// inline comments — `[{path, line, side, text}]` — which become separate review entries.
@@ -667,7 +667,7 @@ struct InlineForm {
 }
 
 /// The form's inline comments as review entries. Malformed JSON is a 422 like any other bad input — glue.js writes this
-/// field, so a human never sees the toast unless something is genuinely wrong.
+/// field, so a user never sees the toast unless something is genuinely wrong.
 fn inline_entries(raw: &str) -> Result<Vec<ReviewKind>, AppError> {
     if raw.trim().is_empty() {
         return Ok(Vec::new());
@@ -765,7 +765,7 @@ fn rendered_review(store: &Store, id: &TicketId) -> Result<Html<String>, AppErro
     Ok(Html(tpl.render()?))
 }
 
-/// Accept: the human's verdict that this work is good, which **clears it to land** rather than declaring it landed. The
+/// Accept: the user's verdict that this work is good, which **clears it to land** rather than declaring it landed. The
 /// card stays in `review`; `kanban_next` then hands it to a work loop as `action: "land"`, and the board moves it to
 /// `done` only once the landing sweep can prove the code reached the main branch.
 ///
@@ -834,7 +834,7 @@ pub async fn discard_ticket(
     blocking(&app, move |store| {
         ops::apply(store, Some(version), op)?;
         // Discarding is a terminal verdict like landing, so the worktree retires with the card — after the apply, and
-        // best-effort: it keeps a dirty worktree rather than throwing away work the human may still want.
+        // best-effort: it keeps a dirty worktree rather than throwing away work the user may still want.
         worktree::retire(store, &id);
         rendered_detail(store, &id)
     })

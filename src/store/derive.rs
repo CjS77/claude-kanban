@@ -60,7 +60,7 @@ pub fn blocked(ticket: &Ticket, board: &Board) -> bool {
         .any(|dep| !matches!(board.ticket(dep).map(|t| &t.column), Some(Column::Done { discarded: false, .. })))
 }
 
-/// Whether this ticket may land without a human seeing the merge: its own flag, or its epic's. Inheritance lives here
+/// Whether this ticket may land without a user seeing the merge: its own flag, or its epic's. Inheritance lives here
 /// rather than on the ticket so an epic's dial keeps working in both directions — nothing is copied onto the tickets, so
 /// clearing the epic's flag takes the permission back from every one of them.
 ///
@@ -73,7 +73,7 @@ pub fn auto_merge(ticket: &Ticket, board: &Board) -> bool {
 
 /// The handoff contract, in two passes: **rework first**, then the highest eligible ticket in `todo`.
 ///
-/// Rework outranks new work on purpose. A human is waiting on near-finished code, and its branch and worktree already
+/// Rework outranks new work on purpose. A user is waiting on near-finished code, and its branch and worktree already
 /// exist — so addressing the feedback is both the shorter job and the one somebody is actually blocked on. Starting a
 /// fresh ticket ahead of it would leave a reviewed card sitting there while the board grows a second half-done branch.
 ///
@@ -85,16 +85,16 @@ pub fn next_ticket<'a>(board: &'a Board, claims: &[Claim]) -> Option<&'a Ticket>
         .or_else(|| todo_ticket(board, claims))
 }
 
-/// The highest review ticket a human has accepted and nobody is landing yet — the work loop's first duty, ahead of any
+/// The highest review ticket a user has accepted and nobody is landing yet — the work loop's first duty, ahead of any
 /// implementation.
 ///
 /// It ranks first for two reasons. Landing is the only action that makes *other* work possible: it is what unblocks
 /// dependents, and `worktree start` bases a fresh branch on the main checkout's `HEAD`, so landing before starting means
 /// the next ticket's worktree already contains the accepted work instead of colliding with it later. And it is minutes
-/// of git against a human who has already pressed Accept and is waiting for the card to move.
+/// of git against a user who has already pressed Accept and is waiting for the card to move.
 ///
 /// `landing_blocked` is excluded deliberately: that flag means the last attempt needed hands the loop does not have, so
-/// re-offering it would just reproduce the same conflict forever. Only a human — accepting again, or sending it back —
+/// re-offering it would just reproduce the same conflict forever. Only a user — accepting again, or sending it back —
 /// puts it back in reach. An in-flight landing is excluded for as long as it is believable ([`claims::LANDING_STALE_AFTER`]),
 /// which is what stops two concurrent loops rebasing the same branch onto a moving main.
 fn landable_ticket<'a>(board: &'a Board, claims: &[Claim]) -> Option<&'a Ticket> {
@@ -147,7 +147,7 @@ pub fn ineligible(board: &Board, claims: &[Claim]) -> Vec<(TicketId, String)> {
 /// [`next_ticket`]'s own filter, so the reason given is the first test the ticket actually failed.
 fn ineligibility(ticket: &Ticket, board: &Board, claims: &[Claim]) -> Option<String> {
     match ticket.status {
-        Status::Draft => return Some("draft — the human's to shape, never an agent's".to_owned()),
+        Status::Draft => return Some("draft — the user's to shape, never an agent's".to_owned()),
         Status::Review => return Some("status review — waiting to be promoted to ready".to_owned()),
         Status::Ready | Status::Stub => {}
     }
@@ -245,7 +245,7 @@ pub struct ClaimView {
     /// a review ticket, which has none by construction.
     pub landing: bool,
     /// …and that landing has been in flight longer than anyone believes, so the loop may take it again. Surfaced rather
-    /// than hidden: a landing that stalled is exactly the thing a human wants to see on the board.
+    /// than hidden: a landing that stalled is exactly the thing a user wants to see on the board.
     pub landing_stale: bool,
 }
 
@@ -453,7 +453,7 @@ mod tests {
     }
 
     /// Either flag grants it, and neither is required — the full truth table, since this decides whether main moves
-    /// without a human seeing it.
+    /// without a user seeing it.
     #[test]
     fn auto_merge_is_the_ticket_flag_or_its_epics() {
         let cases = [(false, false, false), (true, false, true), (false, true, true), (true, true, true)];

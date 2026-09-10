@@ -45,7 +45,7 @@ impl ClaimKind {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Claim {
     pub ticket: TicketId,
-    /// Who is working it — an agent name like `claude`, or a human.
+    /// Who is working it — an agent name like `claude`, or a user.
     pub agent: String,
     pub since: DateTime<Utc>,
     /// The ticket's worktree on *this* machine, filled in by `worktree start`. `None` between claim and start, or after

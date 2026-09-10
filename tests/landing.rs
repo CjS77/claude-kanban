@@ -216,7 +216,7 @@ fn auto_merge_lands_by_ancestry_while_the_branch_is_still_alive() {
 
 /// The negative twin, and the whole reason step 5 deletes the branch last: delete before any sweep has ticked and the
 /// merge leaves no proof behind. Ancestry is unavailable (the ref is gone) and the observed-tip fallback was never
-/// populated, so the card sits in review wearing "branch gone" and waits for a human.
+/// populated, so the card sits in review wearing "branch gone" and waits for a user.
 #[test]
 fn auto_merge_that_deletes_the_branch_too_early_strands_the_ticket_in_review() {
     let s = scratch();
@@ -281,7 +281,7 @@ fn a_discarded_predecessor_keeps_its_dependent_blocked_for_good() {
     let board = s.store.read_board().unwrap();
     assert!(derive::blocked(board.ticket(&TicketId("K-2".into())).unwrap(), &board));
 
-    // Claiming the blocked dependent is refused — the human has to untangle a discarded dependency deliberately.
+    // Claiming the blocked dependent is refused — the user has to untangle a discarded dependency deliberately.
     let err = ops::apply(
         &s.store,
         None,
@@ -307,7 +307,7 @@ fn an_unlanded_review_ticket_keeps_its_worktree() {
     let path = worktree::path_for(&s.store, &id)
         .unwrap()
         .expect("the worktree must survive the close-out");
-    assert!(path.exists(), "review is where a human reads the code — it has to still be there");
+    assert!(path.exists(), "review is where a user reads the code — it has to still be there");
     assert!(path.join("foundation.txt").exists(), "and it must still hold the ticket's work");
 
     // Re-claiming for rework re-attaches to the very same checkout rather than building a second one.

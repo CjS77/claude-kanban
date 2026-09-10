@@ -235,7 +235,7 @@ impl Store {
     }
 
     /// Persist the observations under the store lock. Machine-local, no version counter — last write wins, and losing an
-    /// observation only ever delays a landing until the human confirms by hand.
+    /// observation only ever delays a landing until the user confirms by hand.
     pub fn write_land_state(&self, state: &std::collections::HashMap<String, String>) -> Result<(), StoreError> {
         let _lock = lock::acquire(&self.dir)?;
         io::write_json_atomic(&self.land_state_path(), state)

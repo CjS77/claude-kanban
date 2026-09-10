@@ -1,6 +1,6 @@
 //! Askama template structs and the view-model builders that feed them.
 //!
-//! Templates are dumb: every derived fact (colours, badges, human times, csv joins) is computed here from the read model in
+//! Templates are dumb: every derived fact (colours, badges, user times, csv joins) is computed here from the read model in
 //! [`crate::store::derive`], so the `.html` files stay declarative. Handlers call `render()` and wrap the result in
 //! [`axum::response::Html`] — no askama/axum integration crate, which keeps us off that version treadmill.
 
@@ -173,11 +173,11 @@ pub struct CardCtx {
     pub discarded: bool,
     /// The bound PR, rendered as a linked badge on cards still in flight (done cards drop it — the story is over).
     pub pr: Option<PrCtx>,
-    /// A review ticket whose recorded branch no longer exists locally and nothing proves it landed — the human's call.
+    /// A review ticket whose recorded branch no longer exists locally and nothing proves it landed — the user's call.
     pub branch_gone: bool,
-    /// The human has cleared this to land; the work loop has not got to it yet.
+    /// The user has cleared this to land; the work loop has not got to it yet.
     pub accepted: bool,
-    /// A landing attempt hit something only a human can resolve. The card wears a danger badge *and* a red wash: unlike
+    /// A landing attempt hit something only a user can resolve. The card wears a danger badge *and* a red wash: unlike
     /// every other flag here this one is a dead end until somebody goes to the branch, so it is meant to be seen across
     /// the board.
     pub landing_blocked: bool,
@@ -191,11 +191,11 @@ pub struct CardCtx {
     pub run: Option<String>,
     pub external: Option<String>,
     /// Minesweeper trouble observed on the bound issue: a flag label verbatim, or the closed-without-a-PR shape. The
-    /// card wears it until a human acts — the progress log carries the full story.
+    /// card wears it until a user acts — the progress log carries the full story.
     pub external_flag: Option<String>,
     pub claim: Option<ClaimCtx>,
     pub branch: Option<String>,
-    /// The `doing` owner, for cards that are owned but not live-claimed (e.g. dragged into doing by a human).
+    /// The `doing` owner, for cards that are owned but not live-claimed (e.g. dragged into doing by a user).
     pub owner: Option<String>,
     /// Off the board entirely: the card is a record, so it opens nothing and drags nowhere.
     pub archived: bool,
@@ -420,7 +420,7 @@ fn external_flag(t: &crate::store::model::Ticket) -> Option<String> {
 fn claim_ctx(c: &ClaimView) -> ClaimCtx {
     ClaimCtx {
         agent: c.agent.clone(),
-        since: human_time(c.since),
+        since: user_time(c.since),
         path: c.path.as_ref().map(|p| p.display().to_string()),
         worktree_missing: c.worktree_missing,
         landing: c.landing,
@@ -580,7 +580,7 @@ fn review_entries(t: &crate::store::model::Ticket) -> Vec<ReviewEntryCtx> {
         .iter()
         .enumerate()
         .map(|(i, e)| ReviewEntryCtx {
-            at: human_time(e.at),
+            at: user_time(e.at),
             author: e.author.clone(),
             anchor: e.kind.anchor(),
             verdict: match e.kind {
@@ -604,7 +604,7 @@ pub struct StatusOptCtx {
 fn auto_merge_on_confirm(target: &str, subject: &str) -> String {
     format!(
         "Turn on auto-merge for {target}? When {subject} reaches review, /kanban:work will rebase its branch onto main \
-         and fast-forward main into it with no human review of the merge, resolving any rebase conflicts on its own. \
+         and fast-forward main into it with no user review of the merge, resolving any rebase conflicts on its own. \
          There is no undo once main has moved."
     )
 }
@@ -638,7 +638,7 @@ fn epic_auto_merge_confirm(id: &str, title: &str, on: bool, count: usize) -> Str
     auto_merge_on_confirm(&target, subject)
 }
 
-/// The review pane (`templates/review.html`): everything a human needs to judge a review ticket, plus the three
+/// The review pane (`templates/review.html`): everything a user needs to judge a review ticket, plus the three
 /// verdicts. Swapped into `#detail` in place of the ordinary pane.
 #[derive(Debug, Template)]
 #[template(path = "review.html")]
@@ -661,7 +661,7 @@ pub struct ReviewCtx {
     pub landing: Option<String>,
     /// Already cleared to land, waiting on a work loop.
     pub accepted: bool,
-    /// A landing attempt was refused and is waiting on the human. Outranks `accepted` on the pane: it is the state
+    /// A landing attempt was refused and is waiting on the user. Outranks `accepted` on the pane: it is the state
     /// they have to act on.
     pub landing_blocked: bool,
     pub notes: Vec<NoteCtx>,
@@ -709,7 +709,7 @@ pub fn review(
                 .notes
                 .iter()
                 .map(|n| NoteCtx {
-                    at: human_time(n.at),
+                    at: user_time(n.at),
                     author: n.author.clone(),
                     text: n.text.clone(),
                 })
@@ -757,7 +757,7 @@ pub fn detail(board: &Board, claims: &[Claim], id: &crate::store::model::TicketI
     let t = board.ticket(id)?;
     let claim = crate::store::find_claim(claims, id).map(|c| claim_ctx(&ClaimView::from(c)));
     let completed_at = match &t.column {
-        Column::Done { completed_at, .. } => Some(human_time(*completed_at)),
+        Column::Done { completed_at, .. } => Some(user_time(*completed_at)),
         _ => None,
     };
     let epic = t.epic.as_ref().and_then(|eid| board.epic(eid));
@@ -815,7 +815,7 @@ pub fn detail(board: &Board, claims: &[Claim], id: &crate::store::model::TicketI
                 .notes
                 .iter()
                 .map(|n| NoteCtx {
-                    at: human_time(n.at),
+                    at: user_time(n.at),
                     author: n.author.clone(),
                     text: n.text.clone(),
                 })
@@ -912,7 +912,7 @@ pub struct EpicDetailCtx {
     pub items: Vec<ItemCtx>,
     pub statuses: Vec<StatusOptCtx>,
     /// The whole text of the delete confirmation, spelled out server-side — deletion cascades and there is no undo, so
-    /// the dialog has to name what goes with the epic before the human clicks.
+    /// the dialog has to name what goes with the epic before the user clicks.
     pub delete_confirm: String,
     /// The epic's own auto-merge grant, which every ticket under it inherits.
     pub auto_merge: bool,
@@ -1131,6 +1131,6 @@ fn status_badge(s: Status) -> &'static str {
     }
 }
 
-fn human_time(t: DateTime<Utc>) -> String {
+fn user_time(t: DateTime<Utc>) -> String {
     t.format("%Y-%m-%d %H:%M UTC").to_string()
 }

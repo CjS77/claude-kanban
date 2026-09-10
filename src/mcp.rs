@@ -3,7 +3,7 @@
 //!
 //! Every mutating tool funnels into [`crate::ops::apply`] exactly like the HTTP handlers do, and takes an
 //! `expected_version` — the optimistic-concurrency token from the last `kanban_board` read. On a conflict the tool returns
-//! a caller-visible error naming the current version, so Claude re-reads and retries instead of clobbering the human.
+//! a caller-visible error naming the current version, so Claude re-reads and retries instead of clobbering the user.
 //!
 //! The worktree tools (`kanban_worktree_start` / `kanban_worktree_finish`) are the one documented exception: no
 //! `expected_version`, because their board writes are server-derived stamps, not view-based edits — see `worktree.rs`.
@@ -32,43 +32,47 @@ use crate::{
 /// The workflow contract, shipped to the client as server instructions. Public because opencode never surfaces MCP
 /// server instructions, so `opencode/kanban-rules.md` must carry the same text — tests/manifests.rs pins the two
 /// together.
-pub const INSTRUCTIONS: &str = "A local Kanban board shared with a human (who sees it live in a browser). \
-The lifecycle of a ready ticket: kanban_claim → kanban_worktree_start → work in the worktree, committing as you go → \
-kanban_note progress → kanban_move to review. Do NOT call kanban_worktree_finish at close-out: the worktree is kept \
-through review so the human can read the code and rework re-attaches instantly, and the board removes it once the \
-ticket lands. kanban_move to review refuses while that worktree has uncommitted changes — commit them first. \
-Done is not yours to declare: the board lands review tickets in done automatically once their branch or PR is merged \
-into the local main branch — done means landed, and dependencies unblock only then (a discarded done ticket never \
-unblocks anything). A review ticket can be claimed again for rework (PR feedback); its branch and worktree are kept \
-and kanban_worktree_start re-attaches. A human can also send a review ticket back with feedback: it returns to doing \
-unclaimed, kanban_next surfaces it as action \"rework\" ahead of any todo work, and the newest \"changes requested:\" \
-note is the spec for that round — address it in the existing worktree and move it to review again. Accepting, \
-requesting changes and discarding are the human's verdicts, made in the browser; never press one for them \
-outside a /kanban:review loop the board's auto_review allows. Reviewing is not judging: a review loop writes its \
-findings with kanban_review_comment onto the ticket's review log, whatever auto_review says — never as kanban_note \
-progress, and never replacing what an earlier reviewer wrote. \
-Accepting does not close a ticket — it clears the branch to land, and kanban_next then surfaces it as action \
-\"land\" ahead of everything else. Take it with kanban_start_landing, never kanban_claim (claiming a review ticket is \
-the rework path), rebase the branch onto the main branch and fast-forward main into it, then call kanban_next and let \
-its sweep move the card. Resolve a rebase conflict only where the intent is unambiguous; anything you would have to \
-guess at goes back to the human with kanban_block_landing, after git rebase --abort. \
-Stubs are specs to write, not code to build: kanban_claim (the card sits pink in doing) → research → kanban_refine, \
-which lands it back in todo at status=review for the human — no worktree. \
-Only claim tickets kanban_next surfaces — ready (implement) or stub (refine), in todo, unblocked; never claim \
-spontaneously outside an explicit work loop. Never touch draft tickets. Tickets you create default to status=review so \
-the human vets them. kanban_update_ticket edits an existing ticket's fields — including depends_on, so a dependency \
-discovered mid-flight can be added, dropped or rewired instead of living only in a note; it replaces the whole list, so \
-read the ticket first and send the set you want. Mutating tools need expected_version from your latest kanban_board \
-read (kanban_next also returns one — use it, its landing sweep may have advanced the board); on a version conflict, \
-re-read and retry. \
-`auto_merge` makes `/kanban:work` rebase and land the ticket's branch into main when it reaches review, without a human \
-seeing the merge. Never set it on tickets you create unless the user explicitly asked for it. \
+pub const INSTRUCTIONS: &str = "A local Kanban board shared with a user who watches it live in a browser. \
+Read the whole board with kanban_board, a single card with kanban_ticket, or one epic with kanban_epic — prefer the \
+slice reads. kanban_board omits done tickets and returns a `done` summary of their ids instead; pass include_done=true, \
+or column=\"done\", only when you need finished specs and logs. Every mutating tool needs expected_version from your \
+latest read; kanban_board and kanban_next both return one, and kanban_next's landing sweep may have advanced the board, \
+so use the freshest. On a version conflict, re-read and retry.\n\n\
+Work only what kanban_next surfaces, and only inside an explicit work loop — never claim spontaneously, never touch \
+draft tickets. It ranks and names the action: \"land\" (an accepted ticket, top priority), \"rework\" (sent back with \
+feedback), \"implement\" (a ready ticket), \"refine\" (a stub). Eligibility is always unblocked, unclaimed, \
+non-external.\n\n\
+Ready ticket: kanban_claim → kanban_worktree_start → work in that worktree, committing as you go → kanban_note \
+progress → kanban_move to review. That move is the close-out: it keeps the branch, drops your claim, and refuses while \
+the worktree has uncommitted changes, so commit first. Do NOT kanban_worktree_finish at close-out — the worktree is \
+kept through review so the user can read the code and rework re-attaches instantly, and the board removes it once the \
+ticket lands. Drop a claim you cannot finish with kanban_release.\n\n\
+Stub: kanban_claim (the card sits pink in doing) → research → kanban_refine, which replaces the spec (splitting off new \
+tickets or epics when needed) and lands it back in todo at status=review for the user. No worktree.\n\n\
+Done is not yours to declare: the board lands a review ticket in done automatically once its branch or PR merges into \
+the local main branch — done means landed, and dependencies unblock only then (a discarded done ticket unblocks \
+nothing).\n\n\
+Rework: a review ticket the user sends back returns to doing unclaimed, ahead of any todo work. Claim it, \
+kanban_worktree_start re-attaches the kept branch and worktree, and the newest \"changes requested:\" note is that \
+round's spec — address it in place and kanban_move to review again.\n\n\
+Reviewing is not judging. A /kanban:review loop writes its findings with kanban_review_comment onto the ticket's review \
+log — always allowed, whatever auto_review says; never as kanban_note progress, and never replacing what an earlier \
+reviewer wrote. The verdicts — accept, request changes, discard — are the user's, made in the browser. Press one with \
+kanban_review only inside a review loop the board's auto_review permits; otherwise your kanban_review_comment is the \
+deliverable and the card stays in review for the user.\n\n\
+Landing: accepting does not close a ticket — it clears the branch to land, and kanban_next surfaces it as \"land\" \
+ahead of everything. Take it with kanban_start_landing, never kanban_claim (claiming a review ticket is the rework \
+path). Rebase the branch onto main and fast-forward main into it, then call kanban_next and let its sweep move the \
+card. Resolve a rebase conflict only where the intent is unambiguous; anything you would have to guess at goes back to \
+the user with kanban_block_landing, after git rebase --abort.\n\n\
+kanban_create_ticket and kanban_create_epic default to status=review so the user vets them. kanban_update_ticket edits \
+an existing ticket's fields, including depends_on — so a dependency discovered mid-flight is added, dropped or rewired \
+instead of living only in a note; it replaces the whole list, so read the ticket first and send the set you want. \
+`auto_merge` makes `/kanban:work` rebase and land the branch into main at review without a user seeing the merge — \
+never set it on tickets you create unless the user explicitly asked.\n\n\
 kanban_claim and kanban_start_landing stamp the card's owner, and kanban_note its author, with your own agent name by \
-default — that is who the board shows did the work, so leave `agent` unset for your own actions and pass it only to act \
-as someone else, the way /kanban:delegate names the external worker it hands a ticket to. \
-kanban_board omits done tickets by default and returns a `done` summary of their ids instead — their specs and progress \
-logs are the bulk of the board and finished work is not input to your next decision; pass include_done=true, or \
-column=\"done\", when you actually need to read them.";
+default — leave `agent` unset for your own actions and pass it only to act as someone else, the way /kanban:delegate \
+names the external worker it hands a ticket to.";
 
 /// The MCP server: a thin adapter from tools onto the shared ops layer and read model.
 #[derive(Debug, Clone)]
@@ -156,7 +160,7 @@ pub struct StartLandingParams {
 pub struct BlockLandingParams {
     /// The ticket whose landing you could not finish, e.g. "K-7".
     pub ticket: String,
-    /// What stopped it, in words the human can act on — name the conflicting paths, or the exact refusal git gave.
+    /// What stopped it, in words the user can act on — name the conflicting paths, or the exact refusal git gave.
     /// This becomes the newest note on the card and is the only thing they have to go on.
     pub reason: String,
     /// The board version from your latest `kanban_board` or `kanban_next` read.
@@ -208,7 +212,7 @@ pub struct CreateTicketParams {
     /// Ticket ids this one depends on; it stays blocked until they are all done.
     #[serde(default)]
     pub depends_on: Option<Vec<String>>,
-    /// "draft", "stub", "review", or "ready". Defaults to "review": the human promotes to ready — you never grow your own
+    /// "draft", "stub", "review", or "ready". Defaults to "review": the user promotes to ready — you never grow your own
     /// work queue unless explicitly told to create ready tickets.
     #[serde(default)]
     pub status: Option<String>,
@@ -449,10 +453,10 @@ pub struct WorktreeStartParams {
 pub struct WorktreeFinishParams {
     /// The ticket's id, e.g. "K-7".
     pub ticket: String,
-    /// Throw away uncommitted changes instead of refusing. Only with explicit human approval.
+    /// Throw away uncommitted changes instead of refusing. Only with explicit user approval.
     #[serde(default)]
     pub force_discard: Option<bool>,
-    /// Merge the branch into the main checkout's current branch too. Only with explicit human approval.
+    /// Merge the branch into the main checkout's current branch too. Only with explicit user approval.
     #[serde(default)]
     pub merge: Option<bool>,
 }
@@ -481,7 +485,7 @@ impl KanbanServer {
     /// through review to done.
     ///
     /// `auto_review: true` means a `/kanban:review` loop may press a verdict on a review ticket with `kanban_review`
-    /// (accept / request changes / discard); `false` (the default) keeps the verdict the human's and makes that tool
+    /// (accept / request changes / discard); `false` (the default) keeps the verdict the user's and makes that tool
     /// refuse.
     #[tool]
     async fn kanban_board(&self, Parameters(p): Parameters<BoardParams>) -> Result<CallToolResult, ErrorData> {
@@ -552,12 +556,12 @@ impl KanbanServer {
     /// The next thing to work on, and what it needs. Returns the full ticket plus the action, or explains that nothing
     /// is eligible:
     ///
-    /// - `"land"` — a human accepted this review ticket and cleared its branch to land. **Do not claim it** (claiming a review ticket is
+    /// - `"land"` — a user accepted this review ticket and cleared its branch to land. **Do not claim it** (claiming a review ticket is
     ///   the rework path and would drag it into doing): call `kanban_start_landing` to take the in-flight marker, then follow *Landing a
     ///   branch* in the work command — rebase the branch onto the main branch, fast-forward main into it, and let the sweep move the card.
     ///   Ranked **first**: it is minutes of work, it is what unblocks dependents, and a fresh worktree is branched off the main checkout's
     ///   HEAD, so landing first keeps the next ticket from starting on a stale main. The answer carries `branch`.
-    /// - `"rework"` — a human reviewed this ticket and sent it back. It is sitting in doing, unclaimed, with its branch and worktree
+    /// - `"rework"` — a user reviewed this ticket and sent it back. It is sitting in doing, unclaimed, with its branch and worktree
     ///   intact: claim it, `kanban_worktree_start` (which re-attaches), treat the newest `changes requested:` note as the spec for this
     ///   round, then move it to review again. Ranked above todo work. That note may carry `- path:line — comment` bullets: they were
     ///   written against the reviewed diff, so each one names the exact line it is about. A bullet marked `(old line)` numbers the file
@@ -566,7 +570,7 @@ impl KanbanServer {
     /// - `"refine"` — a stub: write its spec, don't build it.
     ///
     /// Eligibility is otherwise the same throughout: unblocked, unclaimed, non-external. A ticket whose landing is
-    /// already in flight, or whose last landing attempt was blocked and is waiting on a human, is never surfaced. First
+    /// already in flight, or whose last landing attempt was blocked and is waiting on a user, is never surfaced. First
     /// auto-lands any review tickets whose branches have provably reached the local main branch (offline git, no
     /// network), so use the `version` this tool returns for your next mutation — the sweep may have advanced it.
     ///
@@ -607,7 +611,7 @@ impl KanbanServer {
     /// status ready (to implement) or stub (to refine — the card shows pink while you write the spec). A pure board
     /// mutation — create the worktree with `kanban_worktree_start` afterwards (implementation only; refining needs none).
     /// Review tickets are claimable too: that is the rework path (PR feedback) — the branch is kept and
-    /// `kanban_worktree_start` re-attaches to it. So is a ticket a human sent back for changes: it sits in doing owned
+    /// `kanban_worktree_start` re-attaches to it. So is a ticket a user sent back for changes: it sits in doing owned
     /// by the reviewer but unclaimed, and any agent may take it — that is what `kanban_next`'s `"rework"` action hands
     /// you.
     #[tool]
@@ -637,7 +641,7 @@ impl KanbanServer {
     /// leaves it in review with no owner and simply shows "landing this" on the card.
     ///
     /// It is also the interlock between concurrent work loops: it refuses when another loop already holds the landing,
-    /// when a human has not accepted the ticket, and when the last attempt was blocked and is still waiting on them. A
+    /// when a user has not accepted the ticket, and when the last attempt was blocked and is still waiting on them. A
     /// refusal means the ticket is not yours — take the next one rather than retrying.
     ///
     /// The marker retires with the landing itself, so a successful land needs no cleanup: merge, then call
@@ -653,15 +657,15 @@ impl KanbanServer {
         self.apply(Some(p.expected_version), op).await
     }
 
-    /// Give a landing back to the human: flags the card with a danger badge, shades it red on the board, records
+    /// Give a landing back to the user: flags the card with a danger badge, shades it red on the board, records
     /// `reason` as the newest note, and drops the in-flight marker. The ticket stays in review and is **not** offered
-    /// for landing again until a human accepts it once more (having fixed whatever it was) or sends it back for
+    /// for landing again until a user accepts it once more (having fixed whatever it was) or sends it back for
     /// changes — so this ends your involvement with that ticket; move on to the next one.
     ///
     /// Use it for anything you cannot resolve with confidence: a rebase conflict whose intent is ambiguous, a worktree
     /// with uncommitted changes, a main checkout on the wrong branch or holding the user's own work, a fast-forward
     /// that main moved out from under. **Abort the rebase first** — `git rebase --abort` — and never leave a repository
-    /// mid-rebase behind you; then name the conflicting paths here so the human knows where to look.
+    /// mid-rebase behind you; then name the conflicting paths here so the user knows where to look.
     #[tool]
     async fn kanban_block_landing(&self, Parameters(p): Parameters<BlockLandingParams>) -> Result<CallToolResult, ErrorData> {
         self.apply(
@@ -695,7 +699,7 @@ impl KanbanServer {
         let store = self.store.clone();
         let result = tokio::task::spawn_blocking(move || {
             // The close-out's dirty check used to belong to `kanban_worktree_finish`, which no longer runs here — the
-            // worktree outlives review now. So the guarantee moves onto the move itself. Agents only: a human dragging
+            // worktree outlives review now. So the guarantee moves onto the move itself. Agents only: a user dragging
             // the card in the browser is the override, exactly as discard is.
             if to == ColumnId::Review
                 && let Some(path) = crate::worktree::dirty_worktree(&store, &guard_id)
@@ -718,7 +722,7 @@ impl KanbanServer {
         Ok(shape_applied(result))
     }
 
-    /// Create a ticket at the bottom of todo. Defaults to `status=review` — the human promotes it to ready.
+    /// Create a ticket at the bottom of todo. Defaults to `status=review` — the user promotes it to ready.
     #[tool]
     async fn kanban_create_ticket(&self, Parameters(p): Parameters<CreateTicketParams>) -> Result<CallToolResult, ErrorData> {
         let status = parse_status_or(p.status.as_deref(), Status::Review)?;
@@ -741,8 +745,8 @@ impl KanbanServer {
     /// optional: omit one and it is left untouched. `depends_on` and `labels` replace the whole list rather than merging,
     /// so read the ticket first and send the set you want; `[]` clears. `epic`, `model` and `effort` additionally accept
     /// `null`, which clears them. Dangling dependency ids and cycles are refused, and nothing is written when they are.
-    /// Drafts are refused — they are the human's to shape. `status` is deliberately absent: promoting work to ready stays
-    /// the human's call.
+    /// Drafts are refused — they are the user's to shape. `status` is deliberately absent: promoting work to ready stays
+    /// the user's call.
     #[tool]
     async fn kanban_update_ticket(&self, Parameters(p): Parameters<UpdateTicketParams>) -> Result<CallToolResult, ErrorData> {
         let patch = TicketPatch {
@@ -760,7 +764,7 @@ impl KanbanServer {
             .await
     }
 
-    /// Create an epic. Defaults to `status=review` — the human promotes it to ready.
+    /// Create an epic. Defaults to `status=review` — the user promotes it to ready.
     #[tool]
     async fn kanban_create_epic(&self, Parameters(p): Parameters<CreateEpicParams>) -> Result<CallToolResult, ErrorData> {
         let status = parse_status_or(p.status.as_deref(), Status::Review)?;
@@ -788,8 +792,8 @@ impl KanbanServer {
     /// Write a review onto a review ticket's `review` log — the reviewer's findings, as prose and/or line-anchored
     /// `inline` entries. **Always allowed**, whatever the board's `auto_review` says: writing a review is not pressing a
     /// verdict. This is where a `/kanban:review` loop's findings go; `kanban_note` is the worker's progress log and is
-    /// not for reviews. Entries append: a second review, or a human's own comments, sit beside earlier ones rather than
-    /// replacing them, and the human sees new entries live under their own comment box. Refuses outside `review` and on
+    /// not for reviews. Entries append: a second review, or a user's own comments, sit beside earlier ones rather than
+    /// replacing them, and the user sees new entries live under their own comment box. Refuses outside `review` and on
     /// external tickets.
     #[tool]
     async fn kanban_review_comment(&self, Parameters(p): Parameters<ReviewCommentParams>) -> Result<CallToolResult, ErrorData> {
@@ -797,9 +801,9 @@ impl KanbanServer {
         self.apply(Some(op.1), op.0).await
     }
 
-    /// Press a review verdict on a ticket — accept, request changes, or discard — the way a human would in the browser.
+    /// Press a review verdict on a ticket — accept, request changes, or discard — the way a user would in the browser.
     /// This is a **guarded** tool for a `/kanban:review` loop, not part of the work loop: it applies **only** when the
-    /// board's `auto_review` is on. With `auto_review` off (the default) it refuses, because the verdict is the human's;
+    /// board's `auto_review` is on. With `auto_review` off (the default) it refuses, because the verdict is the user's;
     /// your `kanban_review_comment` review is the deliverable then, and the card stays in review for them.
     ///
     /// - `accept` — clears the branch to land (the card stays in `review`; the sweep lands it, exactly as pressing Accept does). Not
@@ -878,11 +882,11 @@ impl KanbanServer {
 
     /// Remove the ticket's worktree deliberately (refuses if dirty), keeping the branch.
     ///
-    /// **This is not the close-out.** A worktree is kept through review — so the human can read the code on disk and a
+    /// **This is not the close-out.** A worktree is kept through review — so the user can read the code on disk and a
     /// rework round re-attaches to it — and the board removes it by itself once the ticket lands. Close out with
     /// `kanban_move` to **review** and nothing else. Reach for this tool only to remove a worktree on purpose before
     /// then: the pre-merge step of auto-merge, or abandoning a checkout early. Merging or pushing the branch is the
-    /// human's call — never do it unasked.
+    /// user's call — never do it unasked.
     #[tool]
     async fn kanban_worktree_finish(&self, Parameters(p): Parameters<WorktreeFinishParams>) -> Result<CallToolResult, ErrorData> {
         let store = self.store.clone();
@@ -903,7 +907,7 @@ impl KanbanServer {
     }
 
     /// Record a refinement of a stub: replace its spec (you did the thinking — this records it), optionally splitting off
-    /// new tickets/epics. Everything touched or created lands in `status=review` for the human's verdict. A ticket claimed
+    /// new tickets/epics. Everything touched or created lands in `status=review` for the user's verdict. A ticket claimed
     /// for refinement returns to the top of todo and its claim drops — no worktree is ever involved. Atomic.
     #[tool]
     async fn kanban_refine(&self, Parameters(p): Parameters<RefineParams>) -> Result<CallToolResult, ErrorData> {
@@ -993,9 +997,9 @@ impl KanbanServer {
     }
 }
 
-/// What the surfaced ticket needs, in precedence order. Landing wins over everything: a human has already approved it,
+/// What the surfaced ticket needs, in precedence order. Landing wins over everything: a user has already approved it,
 /// it is minutes of git, and until it lands its dependents stay blocked and the next worktree branches off a stale main.
-/// Rework comes next — a card a human sent back is already specced and already built, so the newest `changes requested:`
+/// Rework comes next — a card a user sent back is already specced and already built, so the newest `changes requested:`
 /// note is the only spec that round needs, whatever `status` says. `stub` then means the spec itself is the work.
 ///
 /// The column is what separates landing from the rest: `accepted` only ever means anything in `review`, and
@@ -1054,7 +1058,7 @@ fn nothing_eligible(todo: &[(TicketId, String)], stalled: &[(TicketId, String)])
 
 /// Shape an applied op for the wire: the op's own result, plus the board's new version and any ids it minted.
 /// The author stamped on a verdict pressed by a review loop, so a note reads "accepted by auto-review" — honest that no
-/// human made the call.
+/// user made the call.
 const REVIEW_AUTHOR: &str = "auto-review";
 
 /// Map a `kanban_review_comment` request to its op and version. Pure, like [`review_verdict_op`], and deliberately
@@ -1092,7 +1096,7 @@ fn review_comment_op(p: ReviewCommentParams) -> Result<(Op, u64), OpError> {
 fn review_verdict_op(auto_review: bool, id: TicketId, verdict: &str, comment: Option<&str>) -> Result<Op, OpError> {
     if !auto_review {
         return Err(OpError::Invalid(format!(
-            "auto_review is off for this board — the verdict on {id} is the human's to give in the browser. Record your \
+            "auto_review is off for this board — the verdict on {id} is the user's to give in the browser. Record your \
              assessment with kanban_review_comment and leave the card in review."
         )));
     }
@@ -1135,13 +1139,13 @@ fn shape_applied(result: Result<Applied, OpError>) -> CallToolResult {
     }
 }
 
-/// Drafts are the human's scratch space — the standing instruction is "never touch draft tickets" — so Claude's edit tools
+/// Drafts are the user's scratch space — the standing instruction is "never touch draft tickets" — so Claude's edit tools
 /// refuse them even though the ops layer and the browser both allow the edit.
 fn refuse_draft(board: &Board, id: &TicketId) -> Result<(), OpError> {
     match board.ticket(id) {
         None => Err(OpError::NotFound(id.to_string())),
         Some(t) if t.status == Status::Draft => Err(OpError::Invalid(format!(
-            "{id} is a draft — drafts are the human's to shape, not yours to edit"
+            "{id} is a draft — drafts are the user's to shape, not yours to edit"
         ))),
         Some(_) => Ok(()),
     }
@@ -1372,7 +1376,7 @@ mod tests {
     #[test]
     fn review_verdict_is_refused_unless_auto_review_is_on() {
         let id = TicketId("K-7".into());
-        // Off: every verdict refuses with the "human's to give" message, whatever the verdict or comment.
+        // Off: every verdict refuses with the "user's to give" message, whatever the verdict or comment.
         for verdict in ["accept", "request_changes", "discard"] {
             let err = review_verdict_op(false, id.clone(), verdict, Some("x")).unwrap_err();
             assert!(

@@ -1,7 +1,7 @@
-//! `claude-kanban` — a local-only Kanban board for a project, shared between a human in a browser and Claude over MCP.
+//! `claude-kanban` — a local-only Kanban board for a project, shared between a user in a browser and Claude over MCP.
 //!
 //! One binary, two faces, one store:
-//!   - `serve` runs the web UI and its JSON API for the human.
+//!   - `serve` runs the web UI and its JSON API for the user.
 //!   - `mcp` runs a stdio MCP server so Claude can read and move the board.
 //!
 //! Both read and write `.kanban/board.json`. The network surface is small and enumerable: the Create PR button (explicit

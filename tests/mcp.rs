@@ -182,7 +182,7 @@ fn the_mcp_face_reads_claims_and_recovers_from_conflicts() {
         "the recovery instruction names the live version: {text}"
     );
 
-    // Tickets created without an explicit status land in review — the human's gate.
+    // Tickets created without an explicit status land in review — the user's gate.
     let vetted = mcp.call_tool(
         9,
         "kanban_create_ticket",
@@ -612,7 +612,7 @@ fn kanban_next_lands_merged_review_work_and_the_move_records_companion_branches(
 }
 
 /// `kanban_next` serializes a bare `Ticket`, which carries only the ticket's *own* `auto_merge` — an epic-level grant is
-/// invisible there. `/kanban:work` reads this one field to decide whether to move main without a human seeing the merge,
+/// invisible there. `/kanban:work` reads this one field to decide whether to move main without a user seeing the merge,
 /// so the tool has to report the derived answer beside the ticket, not let the caller read it off the ticket.
 /// The failure this whole line of work started from: a board whose review column holds code that already landed by a
 /// route nothing can prove, and a todo column blocked behind it. `kanban_next` used to answer that with the same
@@ -899,11 +899,11 @@ fn kanban_update_ticket_rewires_dependencies_and_guards_drafts() {
     );
     assert!(deps("K-3").is_empty(), "[] clears every dependency");
 
-    // Drafts stay the human's, even though the ops layer and the browser both allow the edit.
+    // Drafts stay the user's, even though the ops layer and the browser both allow the edit.
     mcp.call_tool(
         26,
         "kanban_create_ticket",
-        &json!({ "title": "human's scratch", "status": "draft", "expected_version": 6 }),
+        &json!({ "title": "user's scratch", "status": "draft", "expected_version": 6 }),
     );
     let draft = mcp.call_tool(
         27,
@@ -943,6 +943,6 @@ fn kanban_update_ticket_rewires_dependencies_and_guards_drafts() {
     assert_eq!(
         cleared.status,
         Status::Ready,
-        "status is not patchable here — promotion stays the human's call"
+        "status is not patchable here — promotion stays the user's call"
     );
 }

@@ -1,5 +1,5 @@
 ---
-description: "Watch the review column: when a ticket lands there, review its code, write the findings to the card, and give a verdict — pressing it only when the board's auto_review allows, else leaving it for the human."
+description: "Watch the review column: when a ticket lands there, review its code, write the findings to the card, and give a verdict — pressing it only when the board's auto_review allows, else leaving it for the user."
 ---
 
 # /kanban:review — the review loop
@@ -22,7 +22,7 @@ Your first `kanban_board` read carries them, already resolved from `.kanban/conf
 
 - **`auto_review`** — the whole point of the loop's teeth. `true`: you may press the verdict (accept / request changes /
   discard) with `kanban_review`. `false` (the default): you review and comment exactly the same, but you **do not**
-  decide — the card stays in review wearing your recommendation, and the human presses the button. Read it from the
+  decide — the card stays in review wearing your recommendation, and the user presses the button. Read it from the
   board; never assume it.
 - **`max_workers`** and **`idle_time`** — reuse them exactly as `/kanban:work` does: up to `max_workers` reviews in
   flight at once, and `idle_time` seconds asleep when the review column is empty.
@@ -39,7 +39,7 @@ Repeat until the user stops you (a ticket-id argument or `--one` ends it after o
    that are **not** any of these:
    - **external** — its review belongs on the delegate's issue, not here (`kanban_review` refuses it anyway);
    - **`accepted: true`** — already judged and cleared to land; `/kanban:work` lands it, you don't touch it;
-   - **`landing_blocked: true`** — a landing already failed and is waiting on the human;
+   - **`landing_blocked: true`** — a landing already failed and is waiting on the user;
    - **already reviewed this round** — its `review` log has an `auto-review` entry after its newest `kind: "verdict"`
      entry (or with no verdict at all). In `auto_review` mode this never arises (your verdict moves or flags the
      card); with `auto_review` off it is how you avoid re-reviewing the same unchanged card every poll.
@@ -53,8 +53,8 @@ Repeat until the user stops you (a ticket-id argument or `--one` ends it after o
    onto the ticket's **review log** with `kanban_review_comment` (`agent: "auto-review"`) — never with `kanban_note`,
    which is the worker's progress log. Pass the reviewer's line-anchored items as `inline` entries
    (`{path, line, side, text}`, `side: "old"` for an `(old line)` reference) and the prose as `text`, opening with the
-   marker **`auto-review — verdict: <accept|request changes|discard>`**. Entries append: a human's own comments and
-   earlier rounds are never overwritten, and the human sees yours arrive live under their comment box. That one write
+   marker **`auto-review — verdict: <accept|request changes|discard>`**. Entries append: a user's own comments and
+   earlier rounds are never overwritten, and the user sees yours arrive live under their comment box. That one write
    is both the human-readable review and the marker step 1 uses to skip an already-reviewed card — and it is allowed
    whatever `auto_review` says: the flag gates the verdict, not the review.
 4. **The verdict** — then, and only then:
@@ -65,7 +65,7 @@ Repeat until the user stops you (a ticket-id argument or `--one` ends it after o
      `doing`; `discard` retires it. All three take the card out of your candidate set on the next poll.
    - **`auto_review` is off** → stop here. The card stays in review; your review **is** the deliverable, and it already
      names the recommended verdict. Do not call `kanban_review` — it will refuse, and refusing is the point: the verdict
-     is the human's. Say in your running report which cards are waiting on their button.
+     is the user's. Say in your running report which cards are waiting on their button.
    - If the reviewer returned **no verdict** (it couldn't read the code), note that plainly and leave the card alone —
      don't guess a verdict to fill the gap.
 5. **Idle and re-poll** — when no candidate remains, report briefly and sleep `idle_time` seconds (your harness's wait
@@ -76,7 +76,7 @@ Repeat until the user stops you (a ticket-id argument or `--one` ends it after o
 ## Rules
 
 - **The verdict is the board's to grant, not yours to take.** With `auto_review` off you never press accept / request
-  changes / discard, and `kanban_review` enforces it. On is a deliberate per-project choice the human made in the
+  changes / discard, and `kanban_review` enforces it. On is a deliberate per-project choice the user made in the
   settings; even then, a discard is near-irreversible for dependents (a discarded ticket never unblocks them), so reserve
   it for genuinely dead work and always say why in the note.
 - **You are the single board-writer.** Reviewer subagents read code and return text; only you call
@@ -91,5 +91,5 @@ Repeat until the user stops you (a ticket-id argument or `--one` ends it after o
   properly" and "restoring the previous behaviour" all describe code the reader cannot open, and a `request_changes`
   written that way becomes a rework spec pointing at nothing. Referring to an earlier *review* round is fine — the log
   is append-only, so those entries are still there — but never explain the code by what it was.
-- At the end, summarise: tickets reviewed, the verdict each got (or the recommendation left for the human when
+- At the end, summarise: tickets reviewed, the verdict each got (or the recommendation left for the user when
   `auto_review` is off), and anything a reviewer couldn't judge.

@@ -25,7 +25,7 @@ use super::{routes::AppError, views};
 #[folder = "docs/"]
 struct DocsEmbed;
 
-/// One entry in the TOC: the filename (used in URLs) and the human title (the file's first `# H1`, or a humanised
+/// One entry in the TOC: the filename (used in URLs) and the user title (the file's first `# H1`, or a userised
 /// fallback).
 #[derive(Debug, Clone)]
 pub struct DocEntry {
@@ -58,7 +58,7 @@ fn is_top_level_markdown(path: &str) -> bool {
             .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
 }
 
-/// The article's human title: the first `# H1` in the file, falling back to a humanised filename when the file has no
+/// The article's user title: the first `# H1` in the file, falling back to a userised filename when the file has no
 /// leading heading. Kept plain-old-bytes so the parser is testable without the embed macro.
 fn derive_title(bytes: &[u8], filename: &str) -> String {
     let text = std::str::from_utf8(bytes).unwrap_or("");
@@ -70,14 +70,14 @@ fn derive_title(bytes: &[u8], filename: &str) -> String {
         .map(str::trim);
     match heading {
         Some(h) if !h.is_empty() => h.to_owned(),
-        _ => humanise_filename(filename),
+        _ => userise_filename(filename),
     }
 }
 
 /// `getting-started.md` → `Getting started`. Dashes/underscores become spaces, the `.md` goes, and the first character
 /// is uppercased — no aggressive title-casing (`In-App` for `in-app`) because the fallback only runs on docs their
 /// author forgot to give an H1, and preserving user casing is friendlier than mangling it.
-fn humanise_filename(filename: &str) -> String {
+fn userise_filename(filename: &str) -> String {
     let stem = filename.strip_suffix(".md").unwrap_or(filename);
     let spaced: String = stem.chars().map(|c| if c == '-' || c == '_' { ' ' } else { c }).collect();
     let mut chars = spaced.chars();

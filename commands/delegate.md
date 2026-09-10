@@ -36,4 +36,4 @@ Arguments given: `$ARGUMENTS`
    there is no issue poll, so whoever notices the PR moves the card themselves —
    `kanban_move to=review branch=<the PR's head branch>` — and the branch-based PR poller takes it from there.
    External tickets are never auto-landed from local branch state — without a PR to track, retiring the card stays
-   the human's call.
+   the user's call.

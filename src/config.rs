@@ -25,7 +25,7 @@ pub const DEFAULT_POLL_INTERVAL_SECS: u64 = 60;
 /// The eligibility label a minesweeper daemon watches for, when `minesweeper_label` says nothing.
 pub const DEFAULT_MINESWEEPER_LABEL: &str = "autofix";
 
-/// Issue labels that flag a delegated ticket for a human, when `minesweeper_flag_labels` says nothing: the daemon's
+/// Issue labels that flag a delegated ticket for a user, when `minesweeper_flag_labels` says nothing: the daemon's
 /// defaults for "the child crashed" and "the screener balked".
 pub const DEFAULT_MINESWEEPER_FLAG_LABELS: [&str; 2] = ["minesweeperFailed", "possiblyDangerous"];
 
@@ -64,7 +64,7 @@ pub struct Config {
     /// The eligibility label the daemon watches for. Absent → [`DEFAULT_MINESWEEPER_LABEL`]. Must agree with the
     /// daemon's `alwaysFixLabel`/`tryFixLabel` or tickets delegate into the void.
     pub minesweeper_label: Option<String>,
-    /// Issue labels that flag a delegated ticket for a human — the ticket stays in `doing`, wearing the label.
+    /// Issue labels that flag a delegated ticket for a user — the ticket stays in `doing`, wearing the label.
     /// Empty → [`DEFAULT_MINESWEEPER_FLAG_LABELS`].
     pub minesweeper_flag_labels: Vec<String>,
     /// The model vocabulary tickets may name in their `model` field — suggested by the web UI, returned by
@@ -81,7 +81,7 @@ pub struct Config {
     pub refine_model: Option<String>,
     /// Let a `/kanban:review` loop press a verdict on a review ticket — accept, request changes, or discard — instead
     /// of only writing its assessment as a note. Absent → off: the review still runs and comments, but the verdict
-    /// stays the human's, and `kanban_review` refuses. On is a deliberate per-project choice to let the machine judge
+    /// stays the user's, and `kanban_review` refuses. On is a deliberate per-project choice to let the machine judge
     /// its own work; the review command spells the hazard out. Config-only: no flag or env var.
     pub auto_review: Option<bool>,
 }
@@ -194,7 +194,7 @@ impl Config {
     }
 
     /// Whether a review loop may press verdicts on this board: absent collapses to off, exactly like
-    /// [`Config::minesweeper`]. Off keeps the verdict the human's and makes `kanban_review` refuse.
+    /// [`Config::minesweeper`]. Off keeps the verdict the user's and makes `kanban_review` refuse.
     #[must_use]
     pub fn auto_review(&self) -> bool {
         self.auto_review.unwrap_or(false)
@@ -215,7 +215,7 @@ mod tests {
 
     #[test]
     fn auto_review_defaults_off_and_reads_the_flag() {
-        assert!(!Config::default().auto_review(), "absent means the verdict stays the human's");
+        assert!(!Config::default().auto_review(), "absent means the verdict stays the user's");
         assert!(
             !Config {
                 auto_review: Some(false),

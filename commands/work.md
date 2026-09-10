@@ -34,18 +34,18 @@ external daemon and **you write no code for ready tickets**:
 - **Stubs are unchanged.** `action: refine` works exactly as **Refining a stub** below — specs are still yours to
   write, and refining is how a stub becomes delegable in the first place.
 - **`action: implement` becomes a handoff.** The claim itself delegates: the binary mirrors the ticket to a labelled
-  GitHub issue and re-owns the card to `minesweeper`. After `kanban_claim`, re-read the ticket, confirm the external
+  GitHub issue and re-owns the card to `minesweeper`. After `kanban_claim`, re-read the ticket (`kanban_ticket`), confirm the external
   binding appeared (the owner is now `minesweeper`), report the issue URL from the card's latest note, and continue
   the loop. **No worktree, no implementation, no close-out** — steps 3–8, model/effort dispatch, `--push` and
   auto-merge never run for a delegated ticket, and it occupies no worker slot in the parallel loop.
 - **If no binding appeared**, the card carries a `kanban` note saying why delegation failed. Report it and move on —
-  the ticket stays in doing for the human to sort out, like every other minesweeper failure.
+  the ticket stays in doing for the user to sort out, like every other minesweeper failure.
 - **Hands off after the handoff.** The serve poller tracks the issue from here: a PR moves the card to review, the
   merge reaching local main lands it. Delegated review tickets are not rework candidates for you — PR feedback is the
   daemon's job, and the board enforces it: `Op::RequestChanges` refuses an external ticket outright, so a delegated
   card can never carry `changes_requested` and `action: "rework"` can never name one. When idling, do mention delegated
   tickets that have sat in `doing` across several polls with no PR and no flag: a daemon paused on API limits is
-  invisible to the board, and only the human can go look.
+  invisible to the board, and only the user can go look.
 
 ## The loop
 
@@ -53,8 +53,8 @@ Repeat until the user stops you (or you've done the one requested ticket — a t
 loop after it):
 
 1. **Pick** — call `kanban_board` (remember the `version`), then `kanban_next`. Its `action` field says what the ticket
-   needs: `land` (a review ticket a human accepted — see **Landing a branch** below, and do **not** claim it), `implement`
-   (a ready ticket — steps 2–8), `refine` (a stub — see **Refining a stub** below), or `rework` (a ticket a human sent
+   needs: `land` (a review ticket a user accepted — see **Landing a branch** below, and do **not** claim it), `implement`
+   (a ready ticket — steps 2–8), `refine` (a stub — see **Refining a stub** below), or `rework` (a ticket a user sent
    back with feedback — see **Rework** below). If nothing is
    eligible, go idle instead of ending the loop — see **Idling** below. `kanban_next` first auto-lands any review
    tickets whose branches have reached local main, so **use the `version` it returns** for the claim — the sweep may
@@ -77,11 +77,11 @@ loop after it):
    - **Deferred follow-up** (real future work): create it WITH `depends_on` this ticket and leave it in todo. It stays
      blocked until this ticket's code actually lands in main; only then does a fresh worktree off main contain what it
      needs. Don't work it now.
-5. **Note** — `kanban_note` progress at meaningful moments: what landed, what's left, anything surprising. The human
+5. **Note** — `kanban_note` progress at meaningful moments: what landed, what's left, anything surprising. The user
    watches these appear live on the card.
 6. **Verify** — run the project's tests/build before calling anything done. A ticket whose tests fail is not done:
    note the failure and either fix it or release the ticket with a note explaining the blocker.
-7. **Commit everything** — the worktree is **kept** through review: the human reads the code there, and a rework round
+7. **Commit everything** — the worktree is **kept** through review: the user reads the code there, and a rework round
    re-attaches to it instantly. So there is no `kanban_worktree_finish` at close-out — the board removes the worktree
    itself once the ticket lands. What you must do is leave nothing uncommitted: step 8's move refuses while the
    worktree is dirty, and that worktree may sit on volatile /tmp where only commits survive.
@@ -118,12 +118,12 @@ tickets in flight; a refinement counts as one worker, an implementation counts a
    `kanban_move` to `review` (with `--push`, push the branch and open the PR first; the board lands review tickets in
    done itself once the merge reaches local main); reported failure or an unusable result → `kanban_note` what
    happened and `kanban_release` the ticket. If the subagent died leaving the worktree dirty, leave the worktree for
-   the human — never `force_discard`. A ticket whose `kanban_next` payload said `auto_merge: true` gets landed here,
+   the user — never `force_discard`. A ticket whose `kanban_next` payload said `auto_merge: true` gets landed here,
    by you, once the move to `review` succeeds — see **Landing a branch** below. Subagents never merge, and neither does
    an `action: "land"` ticket get delegated: landings run in the main checkout, one at a time, in this session.
 4. **Top up** — after each close-out, pick and claim the next eligible ticket while others are still running.
    Between close-outs, while tickets are in flight and fewer than `max_workers` are running, don't only wait for a
-   completion: re-poll the board on a fixed 60-second cadence. Workers are active, so the human is likely at the
+   completion: re-poll the board on a fixed 60-second cadence. Workers are active, so the user is likely at the
    board creating tickets — new work should start promptly, and a re-poll costs one cheap `kanban_board` +
    `kanban_next` read. Wait out each interval the same way **Idling** does (your harness's wait or scheduling
    mechanism; plain Bash `sleep 60` as the fallback). `idle_time` stays the empty-board cadence: waiting with workers
@@ -186,11 +186,11 @@ just as loudly as a card that did.
 
 Landing is the rebase-and-fast-forward that puts a reviewed branch into the main branch. **One procedure, two ways in:**
 
-- **`action: "land"`** — a human pressed **Accept** on the review card, which does not close it: accepting is
+- **`action: "land"`** — a user pressed **Accept** on the review card, which does not close it: accepting is
   *permission to land*, and `kanban_next` then hands you the ticket ahead of all other work, with its `branch` beside
   the action. This is the common case.
 - **`auto_merge: true`** — standing permission, granted in advance on the ticket or its epic, to land the branch you
-  have just finished without a human looking at it. `kanban_next` returns the **effective** answer beside `action` —
+  have just finished without a user looking at it. `kanban_next` returns the **effective** answer beside `action` —
   the ticket's own flag OR its epic's. Read it there, not off the ticket: an epic-level grant is invisible on the
   card. Run it **after `kanban_move to=review` succeeds**, and only when the ticket is not `external` and has a
   recorded branch.
@@ -205,7 +205,7 @@ Everything below happens in the **main checkout** — never inside a worktree, a
 landing.
 
 0. **Take the landing** — `kanban_start_landing`. Not `kanban_claim`: claiming a review ticket is the *rework* path and
-   would drag the card into `doing`. This marks the card "landing…" for the human without giving it an owner, and it is
+   would drag the card into `doing`. This marks the card "landing…" for the user without giving it an owner, and it is
    the interlock in the parallel loop — if it refuses because another worker holds it, that ticket is not yours, so
    move on to the next one.
 1. **Remove the worktree** — `git worktree list --porcelain`. The worktree is kept through review, so the branch is
@@ -238,16 +238,16 @@ than hypothetical. It is still the weaker proof: machine-local, by patch-id, and
 never have to depend on that sidecar file when keeping the branch a few seconds longer makes rule 1 answer.
 
 **When it doesn't work.** Every failure ends the same way: **the ticket stays in `review`, `kanban_block_landing`
-names the failure on the card, and the loop moves on to the next ticket.** That tool flags the card red for the human
+names the failure on the card, and the loop moves on to the next ticket.** That tool flags the card red for the user
 and takes it out of the landing queue until they accept it again — so it is the end of your involvement with that
 ticket, not something to retry. Never discard it, never drag it to `done`, never reach for `--force` or `--no-ff` to
 make a merge go through.
 
 | Situation | What to do |
 |---|---|
-| Worktree dirty, so `kanban_worktree_finish` refuses | Stop before touching git. `kanban_block_landing` with the worktree path so the human can finish it. (A worktree merely being *present* is normal — step 1 removes it.) |
+| Worktree dirty, so `kanban_worktree_finish` refuses | Stop before touching git. `kanban_block_landing` with the worktree path so the user can finish it. (A worktree merely being *present* is normal — step 1 removes it.) |
 | Rebase conflict you cannot resolve confidently | `git rebase --abort` **first** — never leave a half-rebase behind — then `kanban_block_landing` naming which paths conflicted. |
-| `git checkout <branch>` refuses over `.kanban/board.json` | The project commits its board and main has moved it since the branch point. Don't force it: `kanban_block_landing` saying so. Committing the board on main first is the human's call. |
+| `git checkout <branch>` refuses over `.kanban/board.json` | The project commits its board and main has moved it since the branch point. Don't force it: `kanban_block_landing` saying so. Committing the board on main first is the user's call. |
 | `git merge --ff-only` refuses (main moved under you) | Retry steps 3–4 exactly once. Still refusing means main moved twice during one landing: `kanban_block_landing`. |
 | Branch is already an ancestor of main | Benign — it was merged already. Skip to step 5 and let the sweep land it by ancestry. |
 | Branch no longer exists | Leave it alone: the sweep's observed-tip path may still land it, and otherwise the existing "branch gone" flag is the right outcome. |
@@ -259,14 +259,14 @@ nothing here closes it. Say so in the end-of-loop report so the user knows a PR 
 
 ## Idling
 
-Running dry doesn't end the loop: the human keeps feeding the board, so wait and look again. When nothing is
+Running dry doesn't end the loop: the user keeps feeding the board, so wait and look again. When nothing is
 eligible (and, in the parallel loop, nothing is in flight):
 
 1. **Report, briefly** — `kanban_next`'s answer carries `waiting` when it has no ticket for you: `waiting.todo` says
    why each todo ticket doesn't qualify (draft/review status, blocked by which tickets, claimed, external) and
    `waiting.review` says why each review ticket couldn't be proven landed. **Report what it says, don't invent it** —
    and say you're idling for `idle_time` seconds. A `not_shown` count means the list was capped; say so too.
-   `waiting.review` is the one that needs the human's eye. A ticket whose branch is gone with nothing observed, or
+   `waiting.review` is the one that needs the user's eye. A ticket whose branch is gone with nothing observed, or
    whose PR was closed unmerged, will never land on its own — its dependents stay blocked until somebody deletes the
    branch, drags the card to done, or discards it. An idling loop that stays quiet about that is the failure this
    field exists to prevent, so name those tickets and what they're waiting for rather than reporting "nothing ready".
@@ -281,7 +281,7 @@ ticket-id argument or `--one` means one ticket, so finish it, report, and end.
 
 ## Rework (`action: "rework"`)
 
-A ticket in `review` is code-complete but unlanded, and the human reviewing it can press **Request changes** instead of
+A ticket in `review` is code-complete but unlanded, and the user reviewing it can press **Request changes** instead of
 accepting. That sends the card back to the top of `doing`, unclaimed, with its branch and worktree untouched — and
 `kanban_next` then hands it to you as `action: "rework"`, **ahead of any todo work**. You don't wait to be asked: the
 dispatch is the ask. Somebody is blocked on near-finished code, and its worktree already exists.
@@ -305,7 +305,7 @@ and follow steps 2-4 identically.
 
 A stub is a spec to write, not code to build. When `kanban_next` says `action: "refine"`:
 
-1. `kanban_claim` it — the card sits pink in `doing` while you write, so the human sees refinement in flight.
+1. `kanban_claim` it — the card sits pink in `doing` while you write, so the user sees refinement in flight.
 2. **No worktree.** Refinement produces a spec, not commits; stay in the main checkout and touch nothing.
 3. Research the codebase until you can write a precise, implementable spec: what to change, where, how to verify.
    **Check the effective model first** — the stub's own `model`, else the board's `refine_model`. If one resolves,
@@ -318,27 +318,27 @@ A stub is a spec to write, not code to build. When `kanban_next` says `action: "
    **The body you send replaces the stub's text outright**, so write it as a spec that stands on its own. "As the stub
    said", "unlike the original description", "the ticket previously asked for" — all point at wording this very call
    deletes, leaving the implementer chasing a sentence that no longer exists.
-5. Continue the loop. Don't implement what you just specced — the human vets `review` tickets and promotes to `ready`.
+5. Continue the loop. Don't implement what you just specced — the user vets `review` tickets and promotes to `ready`.
 
 ## Rules
 
 - Only `ready` (implement) or `stub` (refine), unblocked, unclaimed, non-external tickets. Never touch `draft`
   tickets at all.
-- A ticket's `model`/`effort`, and the board's `implement_model`/`refine_model`, are the human's instruction, not a
+- A ticket's `model`/`effort`, and the board's `implement_model`/`refine_model`, are the user's instruction, not a
   suggestion to weigh. Honour them or report that you couldn't — never substitute your own judgement about what a
   ticket deserves, and never set these fields on tickets you create unless the user asked for them.
-- `auto_merge` and **Accept** are both the human's permission to move their integration branch, and there is no undo
+- `auto_merge` and **Accept** are both the user's permission to move their integration branch, and there is no undo
   once main has moved. Never set `auto_merge` on tickets you create unless the user explicitly asked for it, and never
   land a branch that carries neither — an unaccepted, unflagged branch is reported and left in review for them.
-- Never press a review verdict for the human. Accept, Request changes and Discard are theirs, in the browser; your part
+- Never press a review verdict for the user. Accept, Request changes and Discard are theirs, in the browser; your part
   begins after they have accepted, when `kanban_next` hands you the landing.
 - Every mutating kanban tool needs `expected_version` from your latest `kanban_board` read (or the `version`
   `kanban_next` returns — its landing sweep may have advanced the board). On a version conflict, re-read the board
   and retry the operation against the new state.
 - Never move a ticket to `done` yourself, and never discard one — landing is the board's job (it needs proof the code
-  reached local main) and discarding is the human's.
+  reached local main) and discarding is the user's.
 - If a ticket turns out to be much bigger than its spec, don't silently balloon: `kanban_note` the discovery, create
-  follow-up tickets with `kanban_create_ticket` (they land in `review` for the human to vet), and finish the
+  follow-up tickets with `kanban_create_ticket` (they land in `review` for the user to vet), and finish the
   original at its honest scope.
 - If you discover a real ordering constraint mid-flight — this ticket can't land before another, or a dependency it was
   given turns out not to hold — put it on the board with `kanban_update_ticket`, not just in a note: `depends_on` is what
@@ -352,7 +352,7 @@ A stub is a spec to write, not code to build. When `kanban_next` says `action: "
   version cached this" — names something that stops existing the moment the change lands, leaving a reference nobody
   can resolve. Say what the code does and why it has to be this way; git history already records what it was. The
   exception is a constraint that is still live: a migration path, a compatibility shim, a format still in the wild.
-- **Never press a human's verdict for them.** Accept, Request changes and Discard are the reviewer's, made in the
+- **Never press a user's verdict for them.** Accept, Request changes and Discard are the reviewer's, made in the
   browser. You address feedback; you never decide that it was addressed well enough.
 - At the end of the loop, summarise: tickets completed, branches created (and PRs, with `--push`), tickets released
   or split, and what the board looks like now.

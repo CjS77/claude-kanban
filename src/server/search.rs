@@ -216,7 +216,7 @@ fn admits_epic(term: &Term, e: &EpicView) -> bool {
     }
 }
 
-/// The text a bare phrase searches: what a human wrote about *this* ticket, or would recognise on its card.
+/// The text a bare phrase searches: what a user wrote about *this* ticket, or would recognise on its card.
 ///
 /// Deliberately absent: `notes` (machine-written progress logs — near-identical on every landed ticket, so folding them
 /// in would make common words match almost everything; they get the opt-in `note:` key instead), `depends_on` (ids of
@@ -564,7 +564,7 @@ mod tests {
             auto_merge_effective: true,
             ..view(ticket("K-1", "Merges itself"))
         };
-        let plain = view(ticket("K-2", "Waits for a human"));
+        let plain = view(ticket("K-2", "Waits for a user"));
 
         let spellings = ["auto-merge:true", "automerge: YES", "auto_merge:on", "AUTO-MERGE: 1"];
         let wrong: Vec<&str> = spellings

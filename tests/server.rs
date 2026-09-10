@@ -416,7 +416,7 @@ async fn mutations_flow_create_move_status_delete() {
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
     let board = store.read_board().unwrap();
     match &board.tickets[0].column {
-        claude_kanban::store::model::Column::Doing { owner, .. } => assert_eq!(owner, "tester", "UI drags stamp the human as owner"),
+        claude_kanban::store::model::Column::Doing { owner, .. } => assert_eq!(owner, "tester", "UI drags stamp the user as owner"),
         other => panic!("expected doing, got {other:?}"),
     }
 
@@ -661,7 +661,7 @@ async fn the_auto_merge_confirm_names_the_ticket_and_says_main_moves_unreviewed(
         "the confirm must name the ticket: {html}"
     );
     assert!(
-        html.contains("fast-forward main into it with no human review of the merge"),
+        html.contains("fast-forward main into it with no user review of the merge"),
         "and what it costs: {html}"
     );
     assert!(
@@ -1740,15 +1740,15 @@ fn seed_auto_merging(store: &Store, title: &str, auto_merge: bool) {
 async fn the_auto_merge_filter_splits_the_board_both_ways() {
     let (_dir, router, store) = test_app();
     seed_auto_merging(&store, "Merges itself", true);
-    seed_auto_merging(&store, "Waits for a human", false);
+    seed_auto_merging(&store, "Waits for a user", false);
 
     let html = body_text(router.clone().oneshot(get("/ui/board?q=auto-merge:true")).await.unwrap()).await;
     assert!(html.contains("Merges itself"), "the flagged card must survive: {html}");
-    assert!(!html.contains("Waits for a human"), "an unflagged card must go: {html}");
+    assert!(!html.contains("Waits for a user"), "an unflagged card must go: {html}");
 
     let html = body_text(router.oneshot(get("/ui/board?q=auto-merge:false")).await.unwrap()).await;
     assert!(
-        html.contains("Waits for a human"),
+        html.contains("Waits for a user"),
         "false selects the rest, rather than nothing: {html}"
     );
     assert!(!html.contains("Merges itself"), "and only the rest: {html}");
@@ -2074,7 +2074,7 @@ async fn request_changes_sends_the_card_back_to_doing_with_the_comment_as_a_note
 }
 
 /// Accept is **permission to land**, not the landing. The card must stay in review, and — the assertion that inverted
-/// when this design replaced the closes-it-immediately one — its dependents must stay blocked. Unblocking on a human's
+/// when this design replaced the closes-it-immediately one — its dependents must stay blocked. Unblocking on a user's
 /// word alone was the hazard the old Accept carried; now nothing unblocks until the code is provably in main.
 #[tokio::test]
 async fn accept_arms_the_landing_and_leaves_the_card_in_review() {
@@ -2147,7 +2147,7 @@ async fn accept_arms_the_landing_and_leaves_the_card_in_review() {
 }
 
 /// The work loop's whole view of an accepted ticket: `kanban_next` hands it over as `land`, the marker is an interlock,
-/// and a blocked landing takes it back out of reach until a human acts.
+/// and a blocked landing takes it back out of reach until a user acts.
 #[tokio::test]
 async fn an_accepted_ticket_is_offered_for_landing_until_it_is_taken_or_blocked() {
     let (_dir, _router, store) = test_app();
@@ -2197,10 +2197,10 @@ async fn an_accepted_ticket_is_offered_for_landing_until_it_is_taken_or_blocked(
     let note = store.read_board().unwrap().ticket(&id).unwrap().notes.last().unwrap().text.clone();
     assert_eq!(
         note, "landing blocked: conflicts in src/a.rs",
-        "the human is told exactly where to look"
+        "the user is told exactly where to look"
     );
 
-    // Only the human puts it back — and accepting again is that act.
+    // Only the user puts it back — and accepting again is that act.
     ops::apply(
         &store,
         None,
@@ -2363,7 +2363,7 @@ async fn add_to_review_appends_without_a_verdict_and_the_log_outlives_review() {
     seed_ticket(&store, "Untouched");
     to_review_with_branch(&store, "K-1", "k-1/looked");
 
-    // An agent's review is already there; the human's addition sits beside it rather than replacing it.
+    // An agent's review is already there; the user's addition sits beside it rather than replacing it.
     ops::apply(
         &store,
         None,

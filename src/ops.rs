@@ -132,9 +132,9 @@ pub enum Op {
         text: String,
         author: Option<String>,
     },
-    /// Append to a review ticket's review log — a reviewer's findings, human or agent, as one atomic write however many
+    /// Append to a review ticket's review log — a reviewer's findings, user or agent, as one atomic write however many
     /// entries a drain of inline comments produces. Never gated on `auto_review`: writing a review is always allowed;
-    /// only pressing a verdict is the human's to grant. Refuses outside `review`, on external tickets, and with nothing
+    /// only pressing a verdict is the user's to grant. Refuses outside `review`, on external tickets, and with nothing
     /// to say.
     AddReview {
         id: TicketId,
@@ -181,7 +181,7 @@ pub enum Op {
     /// Land a review ticket in `done` because its code has provably reached the local main branch. Constructed only by
     /// the landing sweep; re-checks its evidence under the lock (still in review, branch unchanged) and refuses —
     /// harmlessly — when the board moved underneath the slow git checks. Appends `reason` as a progress note so the
-    /// human always sees why a card jumped.
+    /// user always sees why a card jumped.
     LandTicket {
         id: TicketId,
         expected_branch: Option<String>,
@@ -219,9 +219,9 @@ pub enum Op {
         id: TicketId,
         agent: String,
     },
-    /// A landing attempt hit something only a human can resolve: raise the danger flag, record `reason` on the card,
+    /// A landing attempt hit something only a user can resolve: raise the danger flag, record `reason` on the card,
     /// and drop the in-flight marker. The column is deliberately untouched — the ticket stays in `review`, in the
-    /// human's hands. One op rather than three writes so all of it lands under the same version check.
+    /// user's hands. One op rather than three writes so all of it lands under the same version check.
     BlockLanding {
         id: TicketId,
         reason: String,
@@ -300,7 +300,7 @@ pub struct NewTicketSpec {
     /// A split can mark the hard subtask: which model and effort its work deserves.
     pub model: Option<String>,
     pub effort: Option<Effort>,
-    /// Whether the split may land unattended. A proposal like any other field here — the human still vets the ticket.
+    /// Whether the split may land unattended. A proposal like any other field here — the user still vets the ticket.
     pub auto_merge: bool,
 }
 
@@ -690,7 +690,7 @@ fn move_ticket(
     }
     if to != from {
         // An approval and a failed landing both describe the ticket *as it sat in review*; any real column change
-        // leaves both behind. A reorder inside review is not a change, and must not quietly clear a flag the human
+        // leaves both behind. A reorder inside review is not a change, and must not quietly clear a flag the user
         // still has to act on, nor an approval they already gave.
         ticket.accepted = false;
         ticket.landing_blocked = false;
@@ -764,7 +764,7 @@ fn next_column_state(
 }
 
 /// The landing sweep's move: review → done, with the evidence re-checked under the lock. The sweep's git checks run
-/// *outside* the lock (they are slow), so by the time this applies, the human may have dragged the card elsewhere or a
+/// *outside* the lock (they are slow), so by the time this applies, the user may have dragged the card elsewhere or a
 /// rework may have re-stamped the branch — in either case the evidence no longer describes the ticket and the landing
 /// refuses, harmlessly: the next sweep re-derives everything from fresh state.
 fn land_ticket(
@@ -803,7 +803,7 @@ fn land_ticket(
     ))
 }
 
-/// The explicit human retirement: review → done with `discarded: true`. Dependents stay blocked — that is the point.
+/// The explicit user retirement: review → done with `discarded: true`. Dependents stay blocked — that is the point.
 fn discard_ticket(
     board: &mut Board,
     claims: &mut Vec<Claim>,
@@ -881,10 +881,10 @@ fn request_changes(board: &mut Board, id: &TicketId, by: &str, review: VerdictRe
     ))
 }
 
-/// The human's "yes": the review ticket is approved and the work loop may land its branch.
+/// The user's "yes": the review ticket is approved and the work loop may land its branch.
 ///
 /// Clearing `landing_blocked` here is the deliberate part. A ticket whose landing failed is out of the loop's reach on
-/// purpose, so *something* has to put it back — and the human who just resolved the conflict by hand, looking at the
+/// purpose, so *something* has to put it back — and the user who just resolved the conflict by hand, looking at the
 /// pane, pressing the same button they pressed the first time, is exactly the right something. Without it the flag
 /// would be a dead end reachable only by sending perfectly good work back for rework.
 fn accept_review(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, by: &str, review: VerdictReview) -> Result<OpOutput, OpError> {
@@ -914,7 +914,7 @@ fn accept_review(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, by: 
 }
 
 /// Take the in-flight landing marker, or refuse. Every refusal here is a loop being told "not yours": the ticket is not
-/// approved, it is already flagged for a human, or another loop got there first.
+/// approved, it is already flagged for a user, or another loop got there first.
 fn start_landing(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, agent: &str) -> Result<OpOutput, OpError> {
     let ticket = board.ticket(id).ok_or_else(|| OpError::NotFound(id.to_string()))?;
     let Column::Review { branch, .. } = &ticket.column else {
@@ -928,16 +928,16 @@ fn start_landing(board: &mut Board, claims: &mut Vec<Claim>, id: &TicketId, agen
     if ticket.external.is_some() {
         return Err(OpError::External(id.clone()));
     }
-    // Two ways to be cleared to land, and the interlock has to cover both: a human pressed Accept, or they granted
+    // Two ways to be cleared to land, and the interlock has to cover both: a user pressed Accept, or they granted
     // standing permission with `auto_merge` (the effective answer, so an epic-level grant counts).
     if !ticket.accepted && !crate::store::derive::auto_merge(ticket, board) {
         return Err(OpError::Invalid(format!(
-            "{id} has not been accepted — a human clears work to land, never a work loop"
+            "{id} has not been accepted — a user clears work to land, never a work loop"
         )));
     }
     if ticket.landing_blocked {
         return Err(OpError::Invalid(format!(
-            "{id}'s landing is blocked and waiting on a human — accept it again once it is resolved"
+            "{id}'s landing is blocked and waiting on a user — accept it again once it is resolved"
         )));
     }
     if landing_in_flight(claims, id, Utc::now()) {
@@ -1315,7 +1315,7 @@ fn refine(
 ) -> Result<OpOutput, OpError> {
     let inherited_epic = retitle_target(board, target, title, body)?;
 
-    // A stub claimed for refinement sat in `doing` while its spec was written — hand it back for the human's verdict:
+    // A stub claimed for refinement sat in `doing` while its spec was written — hand it back for the user's verdict:
     // the claim drops and the card returns to the top of `todo`, mirroring `release`.
     if let RefineTarget::Ticket(id) = target {
         remove_claim(claims, id);
@@ -1631,7 +1631,7 @@ mod tests {
         assert!(!read().0, "and granting the epic never writes the flag onto the ticket");
     }
 
-    /// A refine proposes the flag like any other field: it lands in review with the ticket, for the human to vet.
+    /// A refine proposes the flag like any other field: it lands in review with the ticket, for the user to vet.
     #[test]
     fn a_refine_split_can_carry_auto_merge() {
         let (_dir, store) = scratch();
@@ -1682,7 +1682,7 @@ mod tests {
         assert_eq!(
             board.ticket(&TicketId("K-3".into())).unwrap().status,
             Status::Review,
-            "and still lands in review for the human"
+            "and still lands in review for the user"
         );
     }
 
@@ -3850,7 +3850,7 @@ mod review_round_tests {
         }
     }
 
-    /// `landing_blocked`'s whole lifecycle: only a review ticket can wear it, a reorder inside review keeps it (the human
+    /// `landing_blocked`'s whole lifecycle: only a review ticket can wear it, a reorder inside review keeps it (the user
     /// still has to act), any real column change drops it, and so does a rework round.
     #[test]
     fn the_landing_blocked_flag_survives_a_reorder_and_nothing_else() {
@@ -4007,7 +4007,7 @@ mod review_round_tests {
         ));
     }
 
-    /// The dead end that must not be one: a blocked landing is out of the loop's reach until a human puts it back, and
+    /// The dead end that must not be one: a blocked landing is out of the loop's reach until a user puts it back, and
     /// pressing Accept again is that act.
     #[test]
     fn accepting_again_clears_a_blocked_landing_and_re_arms_it() {
@@ -4058,7 +4058,7 @@ mod review_round_tests {
         .unwrap_err();
         assert!(matches!(err, OpError::Invalid(ref e) if e.contains("blocked")), "{err}");
 
-        // The human resolves it by hand and presses Accept again.
+        // The user resolves it by hand and presses Accept again.
         let out = apply(
             &store,
             None,
@@ -4093,7 +4093,7 @@ mod review_round_tests {
         let (_dir, store) = scratch();
         let id = to_review(&store, "landable");
 
-        // Unaccepted work is nobody's to land: the human clears it, never a work loop.
+        // Unaccepted work is nobody's to land: the user clears it, never a work loop.
         let err = apply(
             &store,
             None,

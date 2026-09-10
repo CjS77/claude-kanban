@@ -140,7 +140,7 @@ pub fn run() -> anyhow::Result<()> {
     }
 }
 
-/// Dispatch `worktree start/finish/list`, printing a human summary or `--json`.
+/// Dispatch `worktree start/finish/list`, printing a user summary or `--json`.
 fn worktree(store: &Store, command: WorktreeCommand) -> anyhow::Result<()> {
     use crate::worktree as wt;
     match command {

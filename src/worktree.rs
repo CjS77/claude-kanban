@@ -4,13 +4,13 @@
 //! worktree under the worktree root, with a per-worktree sparse checkout that excludes `.kanban/` — so no worktree can
 //! ever even *see* a board file, let alone conflict over one.
 //!
-//! A worktree outlives review. It is created by `start` and survives the move to `review` — so the human reviewing the
+//! A worktree outlives review. It is created by `start` and survives the move to `review` — so the user reviewing the
 //! card can read the code on disk, and a rework round re-attaches to it instead of rebuilding it — until the ticket
 //! reaches `done`, where [`retire`] removes it. `finish` is no longer that close-out: it stays the *deliberate* removal,
-//! for the human's CLI, for abandoning a checkout early, and for the pre-merge step of auto-merge. Both paths keep the
+//! for the user's CLI, for abandoning a checkout early, and for the pre-merge step of auto-merge. Both paths keep the
 //! branch; integrating it is the user's explicit next step (or `finish --merge` in one motion).
 //!
-//! The two differ in who they answer to. `finish` refuses a dirty worktree (unless `--force_discard`) because a human
+//! The two differ in who they answer to. `finish` refuses a dirty worktree (unless `--force_discard`) because a user
 //! asked for the removal and deserves the refusal; [`retire`] never refuses and never fails — the ticket has already
 //! landed — so a dirty worktree is simply kept, with a note on the card saying where it is.
 //!
@@ -55,7 +55,7 @@ const STOPWORDS: [&str; 18] = [
 pub struct StartOpts {
     /// Base ref for a fresh branch. Defaults to the main checkout's current `HEAD`.
     pub base: Option<String>,
-    /// Branch slug override, for when a human (or a fast model) can condense the title better.
+    /// Branch slug override, for when a user (or a fast model) can condense the title better.
     pub slug: Option<String>,
     /// Worktree root override (`--dir` / `KANBAN_WORKTREE_DIR`); beats config, which beats `/tmp/claude-kanban`.
     pub dir: Option<PathBuf>,

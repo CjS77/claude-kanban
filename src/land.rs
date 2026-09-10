@@ -15,11 +15,11 @@
 //! 1. **Auto-landing requires positive proof.** A branch tip (or PR merge commit) that is an ancestor of local main; a last-observed tip
 //!    that proves patch-equivalent (`git cherry` — rebase-then-fast-forward keeps patch-ids); or one whose content main already contains
 //!    outright (`git merge-tree`, which is the only rule a squash cannot hide from). No proof → the ticket stays in review, flagged for the
-//!    human.
-//! 2. **Discard is always a human action.** The sweep never marks work discarded; ambiguity never silently unblocks — or blocks — anything.
+//!    user.
+//! 2. **Discard is always a user action.** The sweep never marks work discarded; ambiguity never silently unblocks — or blocks — anything.
 //! 3. **External tickets never land from local branch state.** Their `branch` is whatever the delegate created on the far side and was
 //!    never a local ref, so its absence proves nothing; only the PR route (rule 5) applies to them.
-//! 4. **Worktree retirement is a consequence of landing, never a cause of it.** A ticket's worktree now survives review — the human reads
+//! 4. **Worktree retirement is a consequence of landing, never a cause of it.** A ticket's worktree now survives review — the user reads
 //!    the code on disk, and rework re-attaches to it — so landing is what finally removes it, via [`crate::worktree::retire`] in
 //!    [`land_and_retire`]. It runs after the board write, cannot fail the landing, and keeps a dirty worktree rather than touching
 //!    uncommitted work. Nothing here ever *asks* about a worktree before deciding: the proof rules above are unchanged, and a missing or
@@ -31,7 +31,7 @@
 //! The **observations sidecar** (`.kanban/land-state.json`, gitignored, machine-local like claims) records each live
 //! review branch's tip. It is what makes the `merge.sh` flow land automatically: rebase onto main, fast-forward, delete
 //! the branch — afterwards nothing named the branch exists, but the observed pre-rebase tip still proves the landing by
-//! patch-id. No observation (another machine, gc'd objects) degrades to the human's call.
+//! patch-id. No observation (another machine, gc'd objects) degrades to the user's call.
 //!
 //! Which is why [`observe`] exists beside the sweep. Taking the observation only *per sweep* made the proof depend on
 //! timing nobody controls: the sidecar held what some earlier sweep happened to see, and both triggers can be absent —
@@ -82,7 +82,7 @@ pub fn sweep(store: &Store) -> anyhow::Result<usize> {
 pub struct Sweep {
     /// How many tickets moved to done this pass.
     pub landed: usize,
-    /// Every review ticket still in review, and the missing proof, in words a human can act on.
+    /// Every review ticket still in review, and the missing proof, in words a user can act on.
     pub stalled: Vec<(TicketId, String)>,
 }
 
@@ -144,7 +144,7 @@ pub fn observe_entering_review(store: &Store, to: ColumnId) {
         return;
     }
     if let Err(e) = observe(store) {
-        tracing::warn!(error = %e, "could not observe the branch tip entering review — landing it may need a human");
+        tracing::warn!(error = %e, "could not observe the branch tip entering review — landing it may need a user");
     }
 }
 
@@ -211,7 +211,7 @@ fn branch_proof(t: &Ticket, repo: &Path, main: &str, heads: &HashSet<String>, ob
             if git::contained_in(repo, main, tip) == Some(true) {
                 return Some(format!("branch {branch} squashed or rewritten into {main} and deleted"));
             }
-            // Observed but unproven: stays in review wearing the "branch gone" flag — the human decides.
+            // Observed but unproven: stays in review wearing the "branch gone" flag — the user decides.
         }
     }
     None
@@ -232,7 +232,7 @@ fn pr_proof(t: &Ticket, repo: &Path, main: &str) -> Option<String> {
 }
 
 /// Rule 6: a refined delegated parent. External tickets normally land only via a merged PR (rule 5) — but a parent that
-/// minesweeper split into sub-issues never gets one. It lands when its issue was observed closed — always a human act,
+/// minesweeper split into sub-issues never gets one. It lands when its issue was observed closed — always a user act,
 /// the daemon never closes refined parents — and every mirrored sub-issue has landed as done-and-kept. Both halves are
 /// durable board facts, so the proof needs neither git nor the network; a *discarded* child keeps the parent in review
 /// forever, exactly as a discarded dependency keeps its dependents blocked.
@@ -261,7 +261,7 @@ fn sub_issue_landed(board: &Board, n: u64) -> bool {
 /// What this ticket is waiting for, once every rule has declined. Pure bookkeeping over facts already gathered — it asks
 /// git nothing, because git has just been asked and answered no.
 fn waiting_on(t: &Ticket, board: &Board, main: &str, heads: &HashSet<String>, observations: &HashMap<String, String>) -> String {
-    // A PR outranks the branch: it is the thing whose state the human is actually steering.
+    // A PR outranks the branch: it is the thing whose state the user is actually steering.
     if let Some(PrRef { number, state, .. }) = &t.pr {
         return match state {
             PrState::Merged => format!("PR #{number} is merged but its commit has not reached local {main} — pull {main}"),
@@ -805,13 +805,13 @@ mod tests {
         let stalled = sweep_reporting(&s.store).unwrap().stalled;
         assert!(stalled[0].1.contains("last observed tip is neither"), "{stalled:?}");
 
-        // Never observed at all — the one shape only a human can resolve, so it says which hand to use.
+        // Never observed at all — the one shape only a user can resolve, so it says which hand to use.
         let fresh = scratch();
         git(&fresh.repo, &["branch", "-q", "-D", "k-1/work"]).unwrap();
         let stalled = sweep_reporting(&fresh.store).unwrap().stalled;
         assert!(stalled[0].1.contains("no tip was ever observed"), "{stalled:?}");
 
-        // A PR outranks the branch: it is the thing whose state the human is steering.
+        // A PR outranks the branch: it is the thing whose state the user is steering.
         let pr = PrRef {
             number: 12,
             url: "https://example.invalid/pull/12".into(),
@@ -841,7 +841,7 @@ mod tests {
 
     #[test]
     fn a_vanished_branch_without_proof_stays_in_review() {
-        // Deleted before any sweep observed it: no proof of landing, no auto-discard — the human decides.
+        // Deleted before any sweep observed it: no proof of landing, no auto-discard — the user decides.
         let s = scratch();
         git(&s.repo, &["branch", "-q", "-D", "k-1/work"]).unwrap();
         assert_eq!(sweep(&s.store).unwrap(), 0);
@@ -934,7 +934,7 @@ mod tests {
         assert!(stalled("K-2").contains("close issue #42"), "{}", stalled("K-2"));
         assert!(
             matches!(column_of(&s.store, "K-2"), Column::Review { .. }),
-            "children landed, but no human closed the issue yet"
+            "children landed, but no user closed the issue yet"
         );
 
         // The poll records the closure as a durable board fact; the ordinary offline sweep then does the landing.

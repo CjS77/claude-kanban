@@ -251,7 +251,7 @@ fn the_delegation_lifecycle_mirrors_tracks_flags_refines_and_lands() {
     let t2 = board.ticket(&k2).unwrap();
     assert!(
         matches!(t2.column, Column::Doing { .. }),
-        "flagged tickets stay in doing — the human decides"
+        "flagged tickets stay in doing — the user decides"
     );
     assert_eq!(t2.external.as_ref().unwrap().flag.as_deref(), Some("minesweeperFailed"));
     assert_eq!(flagged_notes(t2), 1, "{:?}", t2.notes);
@@ -316,7 +316,7 @@ fn the_delegation_lifecycle_mirrors_tracks_flags_refines_and_lands() {
             .all(|c| matches!(&c.column, Column::Doing { owner, .. } if owner == "minesweeper"))
     );
 
-    // The children land (their PRs merged and pulled, compressed here to direct moves), the human closes issue #44 —
+    // The children land (their PRs merged and pulled, compressed here to direct moves), the user closes issue #44 —
     // and the sweep finishes the parent without any PR of its own.
     for child in t3.depends_on.clone() {
         ops::apply(
