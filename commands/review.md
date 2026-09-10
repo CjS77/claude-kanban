@@ -37,8 +37,9 @@ Repeat until the user stops you (a ticket-id argument or `--one` ends it after o
    - **external** — its review belongs on the delegate's issue, not here (`kanban_review` refuses it anyway);
    - **`accepted: true`** — already judged and cleared to land; `/kanban:work` lands it, you don't touch it;
    - **`landing_blocked: true`** — a landing already failed and is waiting on the user;
-   - **already reviewed this round** — its `review` log has an `auto-review` entry after its newest `kind: "verdict"`
-     entry (or with no verdict at all). In `auto_review` mode this never arises (your verdict moves or flags the
+   - **already reviewed this round** — its `review` log has an entry whose author begins with `auto-review` (the
+     machine marker, followed by the harness name) after its newest `kind: "verdict"` entry (or with no verdict at
+     all). In `auto_review` mode this never arises (your verdict moves or flags the
      card); with `auto_review` off it is how you avoid re-reviewing the same unchanged card every poll.
 2. **Dispatch a reviewer per candidate** — launch the `kanban-reviewer` subagent via the Agent tool
    (`subagent_type: "kanban-reviewer"`), passing the ticket **id**, its full **body** as the spec, the **branch** (from
@@ -46,7 +47,8 @@ Repeat until the user stops you (a ticket-id argument or `--one` ends it after o
    message so they run concurrently, up to `max_workers`. The subagent reads the diff and returns findings plus a
    verdict; it makes no board writes.
 3. **Record the findings** — when a reviewer returns, re-read `kanban_board` for a fresh `version`, then write them
-   onto the ticket's **review log** with `kanban_review_comment` (`agent: "auto-review"`) — never with `kanban_note`,
+   onto the ticket's **review log** with `kanban_review_comment` (leave `agent` unset — it stamps `auto-review
+   (<your harness>)` by itself) — never with `kanban_note`,
    which is the worker's progress log. Pass the reviewer's line-anchored items as `inline` entries
    (`{path, line, side, text}`, `side: "old"` for an `(old line)` reference) and the prose as `text`, opening with the
    marker **`auto-review — verdict: <accept|request changes|discard>`**. Entries append: a user's own comments and

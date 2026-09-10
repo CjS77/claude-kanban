@@ -331,7 +331,9 @@ pub struct ReviewCommentParams {
     /// `text`: the board renders and re-reads them structurally.
     #[serde(default)]
     pub inline: Option<Vec<InlineParam>>,
-    /// Who is reviewing. Defaults to "auto-review".
+    /// Who is reviewing. Leave unset for your own review: it defaults to "auto-review (<this harness>)", e.g.
+    /// "auto-review (opencode)" — the machine marker plus the harness that ran the loop. Set it only to review as
+    /// someone else.
     #[serde(default)]
     pub agent: Option<String>,
     /// The board version from your latest `kanban_board` read.
@@ -556,16 +558,16 @@ impl KanbanServer {
     /// The next thing to work on, and what it needs. Returns the full ticket plus the action, or explains that nothing
     /// is eligible:
     ///
-    /// - `"land"` — a user accepted this review ticket and cleared its branch to land. **Do not claim it** (claiming a review ticket is
-    ///   the rework path and would drag it into doing): call `kanban_start_landing` to take the in-flight marker, then follow *Landing a
+    /// - `"land"` — a user accepted this review ticket and cleared its branch to land. **Do not claim it** (claiming a review ticket is the
+    ///   rework path and would drag it into doing): call `kanban_start_landing` to take the in-flight marker, then follow *Landing a
     ///   branch* in the work command — rebase the branch onto the main branch, fast-forward main into it, and let the sweep move the card.
     ///   Ranked **first**: it is minutes of work, it is what unblocks dependents, and a fresh worktree is branched off the main checkout's
     ///   HEAD, so landing first keeps the next ticket from starting on a stale main. The answer carries `branch`.
-    /// - `"rework"` — a user reviewed this ticket and sent it back. It is sitting in doing, unclaimed, with its branch and worktree
-    ///   intact: claim it, `kanban_worktree_start` (which re-attaches), treat the newest `changes requested:` note as the spec for this
-    ///   round, then move it to review again. Ranked above todo work. That note may carry `- path:line — comment` bullets: they were
-    ///   written against the reviewed diff, so each one names the exact line it is about. A bullet marked `(old line)` numbers the file
-    ///   *before* the branch's changes.
+    /// - `"rework"` — a user reviewed this ticket and sent it back. It is sitting in doing, unclaimed, with its branch and worktree intact:
+    ///   claim it, `kanban_worktree_start` (which re-attaches), treat the newest `changes requested:` note as the spec for this round, then
+    ///   move it to review again. Ranked above todo work. That note may carry `- path:line — comment` bullets: they were written against
+    ///   the reviewed diff, so each one names the exact line it is about. A bullet marked `(old line)` numbers the file *before* the
+    ///   branch's changes.
     /// - `"implement"` — a ready ticket in todo: build it.
     /// - `"refine"` — a stub: write its spec, don't build it.
     ///
@@ -797,7 +799,7 @@ impl KanbanServer {
     /// external tickets.
     #[tool]
     async fn kanban_review_comment(&self, Parameters(p): Parameters<ReviewCommentParams>) -> Result<CallToolResult, ErrorData> {
-        let op = review_comment_op(p).map_err(|e| ErrorData::invalid_params(e.to_string(), None))?;
+        let op = review_comment_op(p, &self.agent).map_err(|e| ErrorData::invalid_params(e.to_string(), None))?;
         self.apply(Some(op.1), op.0).await
     }
 
@@ -817,9 +819,10 @@ impl KanbanServer {
     #[tool]
     async fn kanban_review(&self, Parameters(p): Parameters<ReviewParams>) -> Result<CallToolResult, ErrorData> {
         let store = self.store.clone();
+        let harness = self.agent.clone();
         let result = tokio::task::spawn_blocking(move || {
             let config = Config::load(store.dir())?;
-            let op = review_verdict_op(config.auto_review(), TicketId(p.ticket), &p.verdict, p.comment.as_deref())?;
+            let op = review_verdict_op(config.auto_review(), TicketId(p.ticket), &p.verdict, p.comment.as_deref(), &harness)?;
             ops::apply(&store, Some(p.expected_version), op)
         })
         .await
@@ -1057,14 +1060,21 @@ fn nothing_eligible(todo: &[(TicketId, String)], stalled: &[(TicketId, String)])
 }
 
 /// Shape an applied op for the wire: the op's own result, plus the board's new version and any ids it minted.
-/// The author stamped on a verdict pressed by a review loop, so a note reads "accepted by auto-review" — honest that no
-/// user made the call.
+/// The machine marker on a review written or a verdict pressed by a review loop — honest that no user made the call.
+/// It never stands alone on the board: [`review_author`] pairs it with the harness that ran the loop.
 const REVIEW_AUTHOR: &str = "auto-review";
+
+/// Who a review finding or machine verdict is stamped as when the caller names no `agent`: the "auto-review" marker
+/// alongside the harness that ran the loop (e.g. `"auto-review (opencode)"`), so a board reviewed by both claude and
+/// opencode shows which did each one while still reading as a machine call. An explicit `agent` overrides it outright.
+fn review_author(harness: &str) -> String {
+    format!("{REVIEW_AUTHOR} ({harness})")
+}
 
 /// Map a `kanban_review_comment` request to its op and version. Pure, like [`review_verdict_op`], and deliberately
 /// without an `auto_review` argument: the flag gates verdicts, never reviews. Anchors with a bad `side` are refused
 /// here rather than silently read as the new side.
-fn review_comment_op(p: ReviewCommentParams) -> Result<(Op, u64), OpError> {
+fn review_comment_op(p: ReviewCommentParams, harness: &str) -> Result<(Op, u64), OpError> {
     let inline = p.inline.unwrap_or_default().into_iter().map(|i| {
         let side = i.side.as_deref().unwrap_or("new").parse::<Side>().map_err(OpError::Invalid)?;
         Ok(ReviewKind::Inline {
@@ -1080,7 +1090,7 @@ fn review_comment_op(p: ReviewCommentParams) -> Result<(Op, u64), OpError> {
         .filter(|t| !t.is_empty())
         .map(|text| Ok(ReviewKind::Comment { text }));
     let entries = inline.chain(text).collect::<Result<Vec<_>, OpError>>()?;
-    let author = p.agent.unwrap_or_else(|| REVIEW_AUTHOR.into());
+    let author = p.agent.unwrap_or_else(|| review_author(harness));
     Ok((
         Op::AddReview {
             id: TicketId(p.ticket),
@@ -1093,7 +1103,7 @@ fn review_comment_op(p: ReviewCommentParams) -> Result<(Op, u64), OpError> {
 
 /// Map a `kanban_review` request to the verdict op, gated on the board's `auto_review`. Pure so the gate and the
 /// verdict routing are unit-testable without a store: the tool loads the flag and applies whatever this returns.
-fn review_verdict_op(auto_review: bool, id: TicketId, verdict: &str, comment: Option<&str>) -> Result<Op, OpError> {
+fn review_verdict_op(auto_review: bool, id: TicketId, verdict: &str, comment: Option<&str>, harness: &str) -> Result<Op, OpError> {
     if !auto_review {
         return Err(OpError::Invalid(format!(
             "auto_review is off for this board — the verdict on {id} is the user's to give in the browser. Record your \
@@ -1102,7 +1112,7 @@ fn review_verdict_op(auto_review: bool, id: TicketId, verdict: &str, comment: Op
     }
     let comment = comment.map(str::trim).filter(|c| !c.is_empty());
     let review = VerdictReview::text(comment.unwrap_or_default());
-    let by = REVIEW_AUTHOR.to_owned();
+    let by = review_author(harness);
     match verdict.parse::<Verdict>().map_err(OpError::Invalid)? {
         Verdict::Accept => Ok(Op::AcceptReview { id, by, review }),
         Verdict::RequestChanges => match comment {
@@ -1112,8 +1122,8 @@ fn review_verdict_op(auto_review: bool, id: TicketId, verdict: &str, comment: Op
             )),
         },
         Verdict::Discard => Ok(Op::DiscardTicket {
+            reason: comment.map_or_else(|| format!("discarded by {by}"), str::to_owned),
             id,
-            reason: comment.unwrap_or("discarded by auto-review").to_owned(),
             by,
             review,
         }),
@@ -1378,7 +1388,7 @@ mod tests {
         let id = TicketId("K-7".into());
         // Off: every verdict refuses with the "user's to give" message, whatever the verdict or comment.
         for verdict in ["accept", "request_changes", "discard"] {
-            let err = review_verdict_op(false, id.clone(), verdict, Some("x")).unwrap_err();
+            let err = review_verdict_op(false, id.clone(), verdict, Some("x"), "opencode").unwrap_err();
             assert!(
                 matches!(&err, OpError::Invalid(m) if m.contains("auto_review is off")),
                 "{verdict}: {err}"
@@ -1402,22 +1412,25 @@ mod tests {
             text: text.into(),
         };
 
-        // Inline entries lead, the prose follows, and the author defaults to the review loop's name.
-        let (op, version) = review_comment_op(params(
-            Some("  looks right overall  "),
-            Some(vec![
-                anchor("src/a.rs", 7, None, "nit"),
-                anchor("src/a.rs", 3, Some("old"), "why gone?"),
-            ]),
-            None,
-        ))
+        // Inline entries lead, the prose follows, and the unset author defaults to the marker plus this harness.
+        let (op, version) = review_comment_op(
+            params(
+                Some("  looks right overall  "),
+                Some(vec![
+                    anchor("src/a.rs", 7, None, "nit"),
+                    anchor("src/a.rs", 3, Some("old"), "why gone?"),
+                ]),
+                None,
+            ),
+            "opencode",
+        )
         .unwrap();
         assert_eq!(version, 9);
         let Op::AddReview { id, author, entries } = op else {
             panic!("not an AddReview: {op:?}")
         };
         assert_eq!(id, TicketId("K-7".into()));
-        assert_eq!(author, REVIEW_AUTHOR);
+        assert_eq!(author, "auto-review (opencode)");
         assert_eq!(
             entries,
             vec![
@@ -1439,11 +1452,11 @@ mod tests {
             ]
         );
 
-        // Blank prose is not an entry; a named agent is the author; a bad side is refused up front.
-        let (op, _) = review_comment_op(params(Some("   "), Some(vec![anchor("x", 1, None, "y")]), Some("sam"))).unwrap();
+        // Blank prose is not an entry; an explicit agent overrides the default outright; a bad side is refused up front.
+        let (op, _) = review_comment_op(params(Some("   "), Some(vec![anchor("x", 1, None, "y")]), Some("sam")), "opencode").unwrap();
         assert!(matches!(op, Op::AddReview { author, entries, .. } if author == "sam" && entries.len() == 1));
         assert!(matches!(
-            review_comment_op(params(Some("t"), Some(vec![anchor("x", 1, Some("left"), "y")]), None)),
+            review_comment_op(params(Some("t"), Some(vec![anchor("x", 1, Some("left"), "y")]), None), "opencode"),
             Err(OpError::Invalid(_))
         ));
     }
@@ -1452,32 +1465,35 @@ mod tests {
     fn review_verdict_maps_each_verdict_to_its_op_when_on() {
         let id = TicketId("K-7".into());
         assert!(matches!(
-            review_verdict_op(true, id.clone(), "accept", None).unwrap(),
-            Op::AcceptReview { by, .. } if by == REVIEW_AUTHOR
+            review_verdict_op(true, id.clone(), "accept", None, "opencode").unwrap(),
+            Op::AcceptReview { by, .. } if by == "auto-review (opencode)"
         ));
         assert!(matches!(
-            review_verdict_op(true, id.clone(), "request_changes", Some("  tighten naming  ")).unwrap(),
-            Op::RequestChanges { review, by, .. } if review.text == "tighten naming" && by == REVIEW_AUTHOR
+            review_verdict_op(true, id.clone(), "request_changes", Some("  tighten naming  "), "opencode").unwrap(),
+            Op::RequestChanges { review, by, .. } if review.text == "tighten naming" && by == "auto-review (opencode)"
         ));
         assert!(matches!(
-            review_verdict_op(true, id.clone(), "discard", Some("dead end")).unwrap(),
+            review_verdict_op(true, id.clone(), "discard", Some("dead end"), "opencode").unwrap(),
             Op::DiscardTicket { reason, .. } if reason == "dead end"
         ));
         // request_changes with no usable comment is refused — the note is the rework spec, so it cannot be empty.
         assert!(matches!(
-            review_verdict_op(true, id.clone(), "request_changes", Some("   ")),
+            review_verdict_op(true, id.clone(), "request_changes", Some("   "), "opencode"),
             Err(OpError::Invalid(_))
         ));
         assert!(matches!(
-            review_verdict_op(true, id.clone(), "request_changes", None),
+            review_verdict_op(true, id.clone(), "request_changes", None, "opencode"),
             Err(OpError::Invalid(_))
         ));
-        // discard falls back to a default reason; an unknown verdict is refused.
+        // discard with no comment falls back to a reason naming the harness; an unknown verdict is refused.
         assert!(matches!(
-            review_verdict_op(true, id.clone(), "discard", None).unwrap(),
-            Op::DiscardTicket { .. }
+            review_verdict_op(true, id.clone(), "discard", None, "opencode").unwrap(),
+            Op::DiscardTicket { reason, .. } if reason == "discarded by auto-review (opencode)"
         ));
-        assert!(matches!(review_verdict_op(true, id, "approve", None), Err(OpError::Invalid(_))));
+        assert!(matches!(
+            review_verdict_op(true, id, "approve", None, "opencode"),
+            Err(OpError::Invalid(_))
+        ));
     }
 
     #[test]
