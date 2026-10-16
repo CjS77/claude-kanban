@@ -5,6 +5,16 @@ All notable changes to this project are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`KANBAN_GH_TOKEN` for PAT-only repos.** Create PR used to fail when the only credential was a GitHub personal
+  access token: `gh` asked for `gh auth login` and the push had no credential to offer. With `KANBAN_GH_TOKEN` set in
+  the environment `serve` runs in, every `gh` call (Create PR and the polls) gets the token as `GH_TOKEN`, and the push
+  gets a one-shot credential helper that reads it from the environment, so the token never appears in an argument
+  list. A missing-credential failure now names the variable.
+
 ## [3.8.2] - 2026-09-10
 
 ### Fixed

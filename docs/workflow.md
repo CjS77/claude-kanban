@@ -50,6 +50,10 @@ at all.
    `review`, so `merge.sh` (and the loop's auto-merge) removes it as their first step — and refuses if you have
    uncommitted work in there. The cost is disk: worktrees now live for the whole review period rather than seconds,
    under `/tmp/claude-kanban` by default.
+   Create PR uses whatever credentials `gh` and git already have. If your only credential is a personal access token,
+   export it as `KANBAN_GH_TOKEN` in the environment that runs `kanban serve`: `gh` receives it as `GH_TOKEN`, and the
+   push answers git's HTTPS credential prompt with it (any configured credential helper is bypassed for that push).
+   The token needs push access and permission to open pull requests on the repo.
 4. **Done happens by itself.** Done means *landed in your local main branch*: the board watches review tickets
    and moves each to `done` the moment its branch — or its PR's merge commit, once you pull — reaches local main,
    with a note saying why. A PR merged only on GitHub shows "PR merged — pull main" until the merge arrives

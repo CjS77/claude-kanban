@@ -9,6 +9,10 @@
 //!
 //! Everything here shells out through [`crate::git::run`] with prompts suppressed (`GIT_TERMINAL_PROMPT=0`,
 //! `GH_PROMPT_DISABLED=1`), so a missing credential fails fast with stderr instead of hanging the handler.
+//!
+//! A repo whose only credential is a GitHub PAT sets [`TOKEN_ENV`] in the environment `serve` runs in: `gh` receives it
+//! as `GH_TOKEN`, and `git push` gets a one-shot credential helper that answers with it. The token never touches an
+//! argument vector — the helper reads it from the inherited environment.
 
 use std::path::Path;
 
@@ -22,6 +26,14 @@ use crate::{
     },
     worktree,
 };
+
+/// The environment variable holding a GitHub personal access token, for repos without `gh auth login` or a git
+/// credential helper. Read on every call, so it applies to the Create PR click and the gh polls alike.
+pub const TOKEN_ENV: &str = "KANBAN_GH_TOKEN";
+
+/// A git credential helper answering `get` requests from [`TOKEN_ENV`]. GitHub accepts any username alongside a PAT;
+/// `x-access-token` is the conventional one. `store` and `erase` fall through silently, so nothing is persisted.
+const CREDENTIAL_HELPER: &str = r#"!f() { test "$1" = get && printf 'username=x-access-token\npassword=%s\n' "$KANBAN_GH_TOKEN"; }; f"#;
 
 /// What [`create_pr`] did: the PR's URL, and whether this click created it (`false` = an open PR already existed).
 #[derive(Debug)]
@@ -72,8 +84,7 @@ pub fn create_pr(store: &Store, id: &TicketId) -> anyhow::Result<PrReport> {
         return Ok(PrReport { url, created: false });
     }
 
-    git::run("git", &repo, &["push", "-u", &remote, branch], &[("GIT_TERMINAL_PROMPT", "0")])
-        .with_context(|| format!("pushing {branch} to {remote}"))?;
+    push(&repo, &remote, branch)?;
     let title = format!("{id}: {}", ticket.title);
     let url = gh(
         &repo,
@@ -108,6 +119,33 @@ fn record_pr(store: &Store, id: &TicketId, number: u64, url: &str) {
     }
 }
 
+/// `git push -u <remote> <branch>`, authenticated by [`TOKEN_ENV`] when it is set. The empty `credential.helper` resets
+/// any configured helpers first, so a stale keychain entry can't shadow the token the user just supplied.
+fn push(repo: &Path, remote: &str, branch: &str) -> anyhow::Result<()> {
+    let helper = format!("credential.helper={CREDENTIAL_HELPER}");
+    let auth = if token().is_some() { vec!["-c", "credential.helper=", "-c", &helper] } else { vec![] };
+    let args: Vec<&str> = auth.into_iter().chain(["push", "-u", remote, branch]).collect();
+    git::run("git", repo, &args, &[("GIT_TERMINAL_PROMPT", "0")])
+        .map_err(|e| with_auth_hint(e, "could not read Username"))
+        .with_context(|| format!("pushing {branch} to {remote}"))?;
+    Ok(())
+}
+
+/// The PAT from [`TOKEN_ENV`], when set and non-blank.
+fn token() -> Option<String> {
+    std::env::var(TOKEN_ENV).ok().filter(|t| !t.trim().is_empty())
+}
+
+/// Point a credential failure (recognised by `marker` in stderr) at [`TOKEN_ENV`]; any other error passes through.
+fn with_auth_hint(e: GitError, marker: &str) -> anyhow::Error {
+    let missing_auth = matches!(&e, GitError::Failed { stderr, .. } if stderr.contains(marker));
+    let hint = format!("no GitHub credentials — run `gh auth login`, or set {TOKEN_ENV} to a personal access token where `serve` runs");
+    match (missing_auth, token()) {
+        (true, None) => anyhow::Error::new(e).context(hint),
+        _ => e.into(),
+    }
+}
+
 /// The `<n>` of a `…/pull/<n>` URL, as `gh pr create` prints it.
 fn trailing_pr_number(url: &str) -> Option<u64> {
     url.rsplit_once("/pull/").and_then(|(_, n)| n.trim_end_matches('/').parse().ok())
@@ -137,14 +175,21 @@ fn open_pr_for(repo: &Path, branch: &str) -> anyhow::Result<Option<(u64, String)
         .and_then(|pr| Some((pr["number"].as_u64()?, pr["url"].as_str()?.to_owned()))))
 }
 
-/// Run `gh` in the repo with every prompt suppressed (title and body are always supplied, so it never opens an editor).
-/// A missing binary becomes install advice rather than a bare spawn error.
+/// Run `gh` in the repo with every prompt suppressed (title and body are always supplied, so it never opens an editor),
+/// passing [`TOKEN_ENV`] through as `GH_TOKEN` when set. A missing binary becomes install advice rather than a bare
+/// spawn error, and a missing login names the token variable.
 pub(crate) fn gh(repo: &Path, args: &[&str]) -> anyhow::Result<String> {
-    match git::run("gh", repo, args, &[("GH_PROMPT_DISABLED", "1"), ("GH_NO_UPDATE_NOTIFIER", "1")]) {
+    let token = token();
+    let envs: Vec<(&str, &str)> = [("GH_PROMPT_DISABLED", "1"), ("GH_NO_UPDATE_NOTIFIER", "1")]
+        .into_iter()
+        .chain(token.as_deref().map(|t| ("GH_TOKEN", t)))
+        .collect();
+    match git::run("gh", repo, args, &envs) {
         Err(GitError::Spawn(e)) if e.kind() == std::io::ErrorKind::NotFound => {
             bail!("GitHub CLI (gh) not found — install it, or push the branch manually")
         }
-        other => Ok(other?),
+        Err(e) => Err(with_auth_hint(e, "gh auth login")),
+        Ok(out) => Ok(out),
     }
 }
 
@@ -251,6 +296,42 @@ mod tests {
 
         git(repo.path(), &["remote", "add", "origin", "https://example.invalid/origin.git"]).unwrap();
         assert_eq!(pick_remote(repo.path()).unwrap(), "origin");
+    }
+
+    /// Drive `git credential <action>` through the same helper config [`push`] installs, with `token` in the environment.
+    fn credential(action: &str, token: &str) -> String {
+        use std::io::Write;
+        let helper = format!("credential.helper={CREDENTIAL_HELPER}");
+        let mut child = std::process::Command::new("git")
+            .args(["-c", "credential.helper=", "-c", &helper, "credential", action])
+            .env(TOKEN_ENV, token)
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(b"protocol=https\nhost=github.com\n\n").unwrap();
+        String::from_utf8(child.wait_with_output().unwrap().stdout).unwrap()
+    }
+
+    #[test]
+    fn credential_helper_answers_get_with_the_token_from_the_environment() {
+        let out = credential("fill", "ghp_example");
+        assert!(out.contains("username=x-access-token\n"), "{out}");
+        assert!(out.contains("password=ghp_example\n"), "{out}");
+        assert_eq!(credential("approve", "ghp_example"), "", "store must persist nothing");
+    }
+
+    #[test]
+    fn auth_hint_names_the_token_variable_only_for_credential_failures() {
+        let failed = |stderr: &str| GitError::Failed {
+            args: "gh pr list".into(),
+            stderr: stderr.into(),
+        };
+        let hinted = format!("{:#}", with_auth_hint(failed("To get started with GitHub CLI, please run:  gh auth login"), "gh auth login"));
+        assert!(hinted.contains(TOKEN_ENV), "{hinted}");
+        let plain = format!("{:#}", with_auth_hint(failed("no pull requests match"), "gh auth login"));
+        assert!(!plain.contains(TOKEN_ENV), "{plain}");
     }
 
     #[test]

@@ -15,12 +15,14 @@ use claude_kanban::{
 };
 
 const PR_URL: &str = "https://github.com/example/repo/pull/7";
+const PAT: &str = "ghp_test_pat";
 
 /// Run [`pr::create_pr`] in a child process whose PATH is `path`, reporting the outcome as one line of text.
 fn create_pr_with_path(path: &str, store_dir: &Path, out: &Path) -> String {
     let status = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "pr_gh_inner", "--ignored"])
         .env("PATH", path)
+        .env(pr::TOKEN_ENV, PAT)
         .env("PR_GH_STORE", store_dir)
         .env("PR_GH_OUT", out)
         .status()
@@ -123,14 +125,14 @@ fn create_pr_pushes_once_dedupes_and_names_a_missing_gh() {
     )
     .unwrap();
 
-    // The gh shim: logs argv, answers `pr list` from a swappable file and `pr create` with the canned URL.
+    // The gh shim: logs argv and the GH_TOKEN it was handed, answers `pr list` from a swappable file and `pr create` with the canned URL.
     let shims = scratch.path().join("shims");
     std::fs::create_dir_all(&shims).unwrap();
     let log = scratch.path().join("gh.log");
     let list_file = scratch.path().join("pr-list.json");
     std::fs::write(&list_file, "[]").unwrap();
     let script = format!(
-        "#!/bin/sh\necho \"$@\" >> {log}\ncase \"$1 $2\" in\n\
+        "#!/bin/sh\necho \"$@\" >> {log}\necho \"token=$GH_TOKEN\" >> {log}\ncase \"$1 $2\" in\n\
          \"pr list\") cat {list} ;;\n\
          \"pr create\") echo {PR_URL} ;;\n\
          *) echo \"unexpected: $*\" >&2; exit 1 ;;\nesac\n",
@@ -160,6 +162,10 @@ fn create_pr_pushes_once_dedupes_and_names_a_missing_gh() {
     let outcome = create_pr_with_path(&shim_path, &store_dir, &out);
     assert_eq!(outcome, format!("ok created=false url={PR_URL}"));
     let gh_log = std::fs::read_to_string(&log).unwrap();
+    assert!(
+        gh_log.lines().filter(|l| l.starts_with("token=")).all(|l| l == format!("token={PAT}")),
+        "every gh call must receive KANBAN_GH_TOKEN as GH_TOKEN: {gh_log}"
+    );
     assert_eq!(
         gh_log.matches("pr create").count(),
         1,
