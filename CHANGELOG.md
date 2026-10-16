@@ -7,6 +7,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [3.9.0] - 2026-10-16
+
 ### Added
 
 - **`KANBAN_GH_TOKEN` for PAT-only repos.** Create PR used to fail when the only credential was a GitHub personal
@@ -14,6 +16,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   the environment `serve` runs in, every `gh` call (Create PR and the polls) gets the token as `GH_TOKEN`, and the push
   gets a one-shot credential helper that reads it from the environment, so the token never appears in an argument
   list. A missing-credential failure now names the variable.
+
+### Changed
+
+- **Reviewer agent instructions trimmed.** The `kanban-reviewer` agent now starts by reading the ticket through the
+  `kanban_ticket` MCP tool, and the surrounding prose is shorter. The read-only rules are unchanged.
 
 ## [3.8.2] - 2026-09-10
 
