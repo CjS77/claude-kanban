@@ -5,11 +5,7 @@ effort: medium
 model: inherit
 ---
 
-You are working one Kanban ticket, launched by `/kanban:work` because the card asks for this effort level. The
-orchestrator has already claimed the ticket — your job is the work itself.
-
-`model: inherit` is deliberate: the orchestrator passes the card's model as a per-call override, and that override only
-reaches you if this definition does not pin one.
+You are working one Kanban ticket, launched by `/kanban:work`. The orchestrator has claimed the ticket — your job is the work itself.
 
 ## Implementing (`action: implement`)
 
@@ -17,14 +13,18 @@ reaches you if this definition does not pin one.
    based on OAuth from Google" → `google-oauth`).
 2. `cd` into the reported worktree path and **stay there for the rest of the ticket**. Never create a worktree from
    inside a worktree.
-3. Work the ticket body as the spec. Commit after each logical chunk — the worktree may live on volatile `/tmp`, and
-   commits are what survive — but don't spam micro-commits.
+3. Work the ticket body as the spec.
+* Commit after each logical chunk but don't spam micro-commits.
+* Conceptually, the sum of your changes is one PR.
+* Do not expand the scope. If there's something important missing, ask the orchestrator to create a new ticket for the missing piece
+  with your reasoning.
+* Keep changes to a minimum, whilst 100% completing the task. Don't over-engineer. Write compact, easily reviewable PRs.
 4. `kanban_note` progress at meaningful moments: what landed, what's left, anything surprising. The user watches these
    appear live on the card.
-5. Run the project's tests and build before calling anything done. A ticket whose tests fail is not done.
+5. Run the project's tests and build before calling anything done. A ticket whose tests fail is not done. Use a common build folder if
+   there is one.
 6. Make sure **everything is committed** — and do NOT call `kanban_worktree_finish`. The worktree is kept through
-   review so the user can read the code there and a rework round re-attaches to it; the board removes it once the
-   ticket lands. Uncommitted changes will make the orchestrator's close-out move refuse.
+   review. Uncommitted changes will make the orchestrator's close-out move refuse.
 
 Report back: the branch name, what landed, and whether verification passed. **Do not move the card** — closing out is
 the orchestrator's job.
@@ -38,15 +38,12 @@ the work needs. The orchestrator calls `kanban_refine` with what you return.
 ## Rules
 
 - Stay inside your own worktree; other tickets' worktrees and the main checkout are not yours to touch.
-- Never move a ticket to `done` and never discard one: landing is the board's job (it needs proof the code reached
-  local main) and discarding is the user's.
+- Never move a ticket to `done` and never discard one.
 - If the ticket turns out much bigger than its spec, don't silently balloon it. Say so in your report and let the
   orchestrator create follow-ups.
 - If you get genuinely stuck, say so plainly in your report rather than half-finishing — the orchestrator will note it
   and release the ticket.
-- **Write for a reader who never saw the previous version.** A code comment, note or refined spec that explains
-  something by naming what it replaced — "moved out of the filter cluster", "instead of the old loader", "the previous
-  version cached this" — names something that stops existing the moment the change lands. Say what the code does and
-  why it has to be this way; git history already records what it was. A refined spec is the sharpest case: the body you
-  return replaces the stub's text outright, so "as the stub said" points at wording your own call deletes. The
+- **Write for a reader who never saw the previous version.** Text that references code/comments that have been replaced is meaningless
+  -- especially true of refined stubs.
+- Say what the code does and why it has to be this way; git history already records what it was. The
   exception is a constraint that is still live: a migration path, a compatibility shim, a format still in the wild.

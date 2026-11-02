@@ -5,36 +5,22 @@ argument-hint: ""
 
 # /kanban:init — set this project up with a board
 
-Seed `.kanban/` in this project and put the board on screen. This is the first thing a user runs after installing the
-plugin, so it ends with a working board every time — including when there already was one.
-
-## Steps
-
-1. **Seed the store.** Run, in the foreground (it's fast and terminates):
+1. **Seed the store** (foreground):
 
    ```bash
    "${CLAUDE_PLUGIN_ROOT}/bin/kanban-mcp" init
    ```
 
-   Use the launcher, not a bare `claude-kanban`: the binary isn't on `PATH` and may not exist yet on a fresh install.
-   The launcher materialises it and forwards the subcommand.
+   Use the launcher, not a bare `claude-kanban` — the binary isn't on `PATH` and may not exist on a fresh install.
 
-2. **Read the result.**
-   - Success prints `Initialised an empty board at …` — it created `.kanban/board.json`, `.kanban/config.json`, a
-     store-local `.gitignore`, and `.kanban/merge.sh` (the manual land helper). The config is fully defined: every dial
-     explicit at its default, `main_branch` pinned from the repo (origin/HEAD, else main, else master), `port`
-     deliberately `null` so `serve` can hunt.
-   - **`already exists` on stderr is not a failure to report.** The project already has a board and `init` refused to
-     clobber it — exactly right. Say the board already exists and carry on to step 3.
-   - Any other non-zero exit is a real failure: report stderr and stop.
+2. **Read the result.** Success prints `Initialised an empty board at …`: it created `.kanban/board.json`,
+   `.kanban/config.json`, a store-local `.gitignore`, and `.kanban/merge.sh` (manual land helper); config fully defined,
+   `port` `null` so `serve` can hunt. **`already exists` on stderr is not a failure** — say so and carry on. Any other
+   non-zero exit is a real failure: report stderr and stop.
 
-3. **Open the board.** Do exactly what `/kanban:open` does — see `commands/open.md` for the full behaviour; don't
-   reimplement it from memory here. The one thing worth repeating because it bites hardest: **run `serve` in the
-   background**, since it blocks until stopped and a foreground call wedges the session.
+3. **Open the board** — exactly what `/kanban:open` does (see `commands/open.md`); **run `serve` in the background**,
+   since it blocks until stopped.
 
-4. **Tell the user to commit** `.kanban/board.json`, `.kanban/config.json`, and `.kanban/merge.sh` — the last is a
-   deprecated fallback for landing a branch by hand (`.kanban/merge.sh <branch>` rebases onto main, fast-forwards, and
-   deletes it) when no `/kanban:work` loop is running; normally they press **Accept** on the review card instead, which
-   clears the branch to land and the loop does the rest. Mention
-   the ⚙ gear in the board's header edits the config later. The rest of `.kanban/` (claims, locks, pid files, landing
-   observations) is machine-local and the seeded `.gitignore` already covers it.
+4. **Tell the user to commit** `.kanban/board.json`, `.kanban/config.json`, `.kanban/merge.sh`. `merge.sh` is a
+   deprecated fallback for landing a branch by hand (`.kanban/merge.sh <branch>`) when no loop runs; normally they press
+   **Accept** instead. The ⚙ gear edits config later; the rest of `.kanban/` is machine-local and gitignored.

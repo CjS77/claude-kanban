@@ -5,21 +5,14 @@ argument-hint: "<ticket-num>"
 
 # /kanban:ticket — read one card, not the whole board
 
-The board is a single, ever-growing `.kanban/board.json`. Loading it to find one card burns tokens on every unrelated
-ticket. This pulls out just the one you asked for.
-
-If the `kanban_dev` MCP server is connected, call its `kanban_ticket` tool directly instead of running the helper below
-— same data, no shell-out. This command remains the way in for a harness (or a session) without that MCP connection.
-
-Run the helper, passing the number the user gave (`48`, `K-48` and `k-48` all mean ticket **K-48**):
+If the `kanban_dev` MCP server is connected, call `kanban_ticket` directly instead of the helper below — same data, no
+shell-out.
 
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/commands/scripts/kanban-ticket.sh" $ARGUMENTS
 ```
 
-It prints the whole ticket object — id, title, status, body, labels, effort, notes, column — and finds the live board
-in the main checkout even when you're standing in a worktree. Relay what the user needs from it.
+It prints the whole ticket object — id, title, status, body, labels, effort, notes, column — even from a worktree.
 
-Non-zero exit codes: **1** the id isn't on the board (say so; suggest a near miss rather than guessing its contents),
-**2** this project has no `.kanban/` yet (tell the user to run `/kanban:init` — don't create one yourself), **3** no
-ticket number was given.
+Exit codes: **1** id not on the board (say so; suggest a near miss), **2** no `.kanban/` (run `/kanban:init`), **3** no
+ticket number given.

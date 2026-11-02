@@ -5,34 +5,16 @@ argument-hint: "[<age>]  e.g. 30d, 6m, 1y (default 30d)"
 
 # /kanban:archive — retire old done tickets off the live board
 
-The board is one ever-growing `.kanban/board.json`: every landed ticket stays in it forever, so reads get more
-expensive the longer the project runs. This moves tickets that finished long ago into `.kanban/archive.json`, shrinking
-the board without losing the history.
-
-Age asked for: `$ARGUMENTS` — how old is "old". `{n}d`, `{n}m`, `{n}y` (days, months, years); **defaults to `30d`**.
-
-Run the helper, passing whatever age the user gave (or nothing, for the 30-day default):
+`$ARGUMENTS` is how old "old" is: `{n}d`, `{n}m`, `{n}y`; **defaults to `30d`**.
 
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/commands/scripts/kanban-archive.sh" $ARGUMENTS
 ```
 
-What it does, and the guarantees you can rely on when you report back:
+Guarantees: **only landed work moves** (only `done` tickets have an age); **done epics move with their tickets** while
+no remaining ticket names them; **dependencies stay intact** (held back while a remaining ticket depends on them, so a
+run leaving a few old tickets behind is normal); **append-only**; and the **version is bumped** with atomic writes, so
+the live board reloads smaller. The 🗄️ toggle shows the archive as a read-only fifth column.
 
-- **Only landed work moves.** A ticket has an age only once it's in `done` (it carries `completed_at`); anything still
-  in flight has no age and is never touched.
-- **Done epics move with their tickets.** An epic is archived too when it's *done* — it has tickets and every one of
-  them is in `done` — held back while any ticket that *remains* on the board still names it, so `ticket.epic` never
-  dangles. An epic with unfinished (or no) tickets stays.
-- **Dependencies stay intact.** An old ticket is held back while any ticket that *remains* on the board still depends on
-  it, so the board never ends up with a dangling `depends_on`. A later run archives it once its dependents are gone —
-  so it's normal for a run to leave a few old tickets behind.
-- **The archive is append-only.** Tickets already in `archive.json` are never removed, overwritten, or duplicated.
-- **The board version is bumped** and the files are written atomically, so a board being served live in the browser
-  reloads to the smaller board on its own.
-- **Nothing is out of sight.** The 🗄️ toggle in the board's toolbar shows the archive as a read-only fifth column, read
-  from `archive.json` on every render, so a run's result is visible in the browser straight away.
-
-It prints how many tickets it moved (and their ids/titles), or `nothing … to archive` when none are old enough. Relay
-that. Exit codes: **2** no `.kanban/` yet (tell the user to run `/kanban:init`), **3** the age wasn't `{n}d`/`{n}m`/`{n}y`,
-**4** the system `date` couldn't compute the cutoff.
+It prints how many tickets moved (ids/titles), or `nothing … to archive`. Exit codes: **2** no `.kanban/` (run
+`/kanban:init`), **3** bad age, **4** `date` couldn't compute the cutoff.
