@@ -7,6 +7,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- **Refused-PAT diagnostics for Create PR.** When GitHub refuses a personal access token during the dedupe lookup, the
+  push or `gh pr create`, the toast now says so and names the fix in short, and the server log prints the full
+  checklist: the permissions a fine-grained or classic PAT needs, that its repository access must cover the repo, and
+  `gh repo set-default <owner>/<repo>` for a fork that gh would otherwise target upstream. A refusal is recognised when
+  GitHub names the token type, or when `KANBAN_GH_TOKEN`, `GH_TOKEN` or `GITHUB_TOKEN` is set and the failure is a
+  401/403-style rejection.
+
 ## [3.9.0] - 2026-10-16
 
 ### Added

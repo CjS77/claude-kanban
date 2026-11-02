@@ -16,6 +16,7 @@ use claude_kanban::{
 
 const PR_URL: &str = "https://github.com/example/repo/pull/7";
 const PAT: &str = "ghp_test_pat";
+const REFUSAL: &str = "GraphQL: Resource not accessible by personal access token (createPullRequest)";
 
 /// Run [`pr::create_pr`] in a child process whose PATH is `path`, reporting the outcome as one line of text.
 fn create_pr_with_path(path: &str, store_dir: &Path, out: &Path) -> String {
@@ -131,13 +132,15 @@ fn create_pr_pushes_once_dedupes_and_names_a_missing_gh() {
     let log = scratch.path().join("gh.log");
     let list_file = scratch.path().join("pr-list.json");
     std::fs::write(&list_file, "[]").unwrap();
+    let refuse_flag = scratch.path().join("refuse-create");
     let script = format!(
         "#!/bin/sh\necho \"$@\" >> {log}\necho \"token=$GH_TOKEN\" >> {log}\ncase \"$1 $2\" in\n\
          \"pr list\") cat {list} ;;\n\
-         \"pr create\") echo {PR_URL} ;;\n\
+         \"pr create\") [ -f {refuse} ] && {{ echo '{REFUSAL}' >&2; exit 1; }}; echo {PR_URL} ;;\n\
          *) echo \"unexpected: $*\" >&2; exit 1 ;;\nesac\n",
         log = log.display(),
-        list = list_file.display()
+        list = list_file.display(),
+        refuse = refuse_flag.display()
     );
     std::fs::write(shims.join("gh"), script).unwrap();
     std::fs::set_permissions(shims.join("gh"), std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -170,6 +173,15 @@ fn create_pr_pushes_once_dedupes_and_names_a_missing_gh() {
         gh_log.matches("pr create").count(),
         1,
         "dedupe must prevent a second create: {gh_log}"
+    );
+
+    // GitHub refuses the PAT at create time: the toast carries the checklist's short form alongside gh's own error.
+    std::fs::write(&list_file, "[]").unwrap();
+    std::fs::write(&refuse_flag, "").unwrap();
+    let outcome = create_pr_with_path(&shim_path, &store_dir, &out);
+    assert!(
+        outcome.starts_with("err GitHub refused the personal access token") && outcome.contains(REFUSAL),
+        "{outcome}"
     );
 
     // gh absent (PATH holds git alone): install advice, not a bare spawn error.

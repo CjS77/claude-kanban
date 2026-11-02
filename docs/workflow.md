@@ -53,7 +53,11 @@ at all.
    Create PR uses whatever credentials `gh` and git already have. If your only credential is a personal access token,
    export it as `KANBAN_GH_TOKEN` in the environment that runs `kanban serve`: `gh` receives it as `GH_TOKEN`, and the
    push answers git's HTTPS credential prompt with it (any configured credential helper is bypassed for that push).
-   The token needs push access and permission to open pull requests on the repo.
+   The token needs push access and permission to open pull requests on the repo: a fine-grained PAT needs Contents
+   and Pull requests at read & write (plus Workflows if the branch touches `.github/workflows`), with the repo under
+   its "Repository access"; a classic PAT needs the `repo` scope. If GitHub refuses the token, the toast says so and
+   the server log prints the full checklist. Working from a fork? Make it gh's default repo for PRs with
+   `gh repo set-default <owner>/<fork>`, or gh opens the PR against the upstream repo, which the token may not reach.
 4. **Done happens by itself.** Done means *landed in your local main branch*: the board watches review tickets
    and moves each to `done` the moment its branch — or its PR's merge commit, once you pull — reaches local main,
    with a note saying why. A PR merged only on GitHub shows "PR merged — pull main" until the merge arrives

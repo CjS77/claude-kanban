@@ -35,6 +35,22 @@ pub const TOKEN_ENV: &str = "KANBAN_GH_TOKEN";
 /// `x-access-token` is the conventional one. `store` and `erase` fall through silently, so nothing is persisted.
 const CREDENTIAL_HELPER: &str = r#"!f() { test "$1" = get && printf 'username=x-access-token\npassword=%s\n' "$KANBAN_GH_TOKEN"; }; f"#;
 
+/// Lower-cased stderr fragments with which GitHub, `gh` or git report a credential that was presented but refused: too
+/// few permissions, a repo outside the token's reach (GitHub answers "not found" rather than leak a private repo), or a
+/// revoked token.
+const REFUSALS: &[&str] = &[
+    "resource not accessible",
+    "bad credentials",
+    "could not resolve to a repository",
+    "permission to",
+    "write access to repository not granted",
+    "authentication failed",
+    "invalid username or password",
+    "returned error: 403",
+    "http 401",
+    "http 403",
+];
+
 /// What [`create_pr`] did: the PR's URL, and whether this click created it (`false` = an open PR already existed).
 #[derive(Debug)]
 pub struct PrReport {
@@ -77,20 +93,23 @@ pub fn create_pr(store: &Store, id: &TicketId) -> anyhow::Result<PrReport> {
     }
     let remote = pick_remote(&repo)?;
 
+    let explain = |e: anyhow::Error| explain_pat_refusal(&repo, &remote, e);
+
     // Dedupe before pushing: never surprise-update an open PR.
-    if let Some((number, url)) = open_pr_for(&repo, branch)? {
+    if let Some((number, url)) = open_pr_for(&repo, branch).map_err(explain)? {
         tracing::info!(ticket = %id, %branch, %url, "PR already open — not pushing");
         record_pr(store, id, number, &url);
         return Ok(PrReport { url, created: false });
     }
 
-    push(&repo, &remote, branch)?;
+    push(&repo, &remote, branch).map_err(explain)?;
     let title = format!("{id}: {}", ticket.title);
     let url = gh(
         &repo,
         &["pr", "create", "--head", branch, "--title", &title, "--body", &pr_body(ticket)],
     )
-    .with_context(|| format!("creating the PR for {branch}"))?;
+    .with_context(|| format!("creating the PR for {branch}"))
+    .map_err(explain)?;
     tracing::info!(ticket = %id, %branch, %url, "PR created");
     if let Some(number) = trailing_pr_number(&url) {
         record_pr(store, id, number, &url);
@@ -144,6 +163,68 @@ fn with_auth_hint(e: GitError, marker: &str) -> anyhow::Error {
         (true, None) => anyhow::Error::new(e).context(hint),
         _ => e.into(),
     }
+}
+
+/// Whether a personal access token is in play: [`TOKEN_ENV`], or a `GH_TOKEN`/`GITHUB_TOKEN` the user exported for `gh`.
+fn pat_in_use() -> bool {
+    token().is_some() || ["GH_TOKEN", "GITHUB_TOKEN"].iter().any(|v| std::env::var(v).is_ok_and(|t| !t.trim().is_empty()))
+}
+
+/// Whether `stderr` says GitHub refused a personal access token: GitHub names the token type outright, or a PAT is in
+/// play and the failure is one of the [`REFUSALS`].
+fn pat_refused(stderr: &str, pat_in_use: bool) -> bool {
+    let stderr = stderr.to_lowercase();
+    stderr.contains("personal access token") || (pat_in_use && REFUSALS.iter().any(|r| stderr.contains(r)))
+}
+
+/// When a Create PR step failed because GitHub refused a PAT, log what the token needs and put the short version on the
+/// error, which the browser shows as a toast. Any other error passes through untouched.
+fn explain_pat_refusal(repo: &Path, remote: &str, e: anyhow::Error) -> anyhow::Error {
+    let refused = e.chain().filter_map(|c| c.downcast_ref::<GitError>()).any(|g| {
+        matches!(g, GitError::Failed { stderr, .. } if pat_refused(stderr, pat_in_use()))
+    });
+    if !refused {
+        return e;
+    }
+    let slug = github_slug(repo, remote).unwrap_or_else(|| "<owner>/<repo>".into());
+    tracing::warn!(error = format!("{e:#}"), "{}", pat_checklist(&slug));
+    e.context(format!(
+        "GitHub refused the personal access token — check it has Contents and Pull requests read & write (classic: `repo` \
+         scope), that its repository access covers {slug}, and, if {slug} is a fork, that it is gh's default repo \
+         (`gh repo set-default {slug}`); the server log has the full checklist"
+    ))
+}
+
+/// The full checklist logged on a PAT refusal, for the repo `slug` the push went to.
+fn pat_checklist(slug: &str) -> String {
+    format!(
+        "GitHub refused the personal access token used for Create PR. Check:\n\
+         \x20 1. Permissions. A fine-grained PAT needs Contents: read & write (push), Pull requests: read & write (open \
+         and list PRs) and Metadata: read-only. A classic PAT needs the `repo` scope (`public_repo` is enough for a public \
+         repo). If the branch changes .github/workflows, add Workflows: read & write (classic: the `workflow` scope).\n\
+         \x20 2. Repository access. A fine-grained PAT must list {slug} under \"Repository access\" (or use \"All \
+         repositories\"), and be owned by the account or org that owns {slug}. An org may also need to approve the \
+         token, or a classic token may need SSO authorisation.\n\
+         \x20 3. Forks. If {slug} is your fork, gh may be opening the PR against the upstream repo, which the token \
+         cannot reach. Make the fork the default repo for PRs: `gh repo set-default {slug}`"
+    )
+}
+
+/// The `owner/repo` of a GitHub remote's URL (`https://github.com/o/r.git`, `git@github.com:o/r.git`, …), or `None` when
+/// the remote is not on GitHub.
+fn github_slug(repo: &Path, remote: &str) -> Option<String> {
+    let url = git(repo, &["remote", "get-url", remote]).ok()?;
+    slug_of(&url)
+}
+
+fn slug_of(url: &str) -> Option<String> {
+    if !url.contains("github") {
+        return None;
+    }
+    let mut parts = url.trim_end_matches('/').trim_end_matches(".git").rsplit(['/', ':']);
+    let name = parts.next().filter(|n| !n.is_empty())?;
+    let owner = parts.next().filter(|o| !o.is_empty())?;
+    Some(format!("{owner}/{name}"))
 }
 
 /// The `<n>` of a `…/pull/<n>` URL, as `gh pr create` prints it.
@@ -332,6 +413,46 @@ mod tests {
         assert!(hinted.contains(TOKEN_ENV), "{hinted}");
         let plain = format!("{:#}", with_auth_hint(failed("no pull requests match"), "gh auth login"));
         assert!(!plain.contains(TOKEN_ENV), "{plain}");
+    }
+
+    #[test]
+    fn pat_refusals_are_recognised_only_when_a_pat_is_in_play_or_named() {
+        let named = "GraphQL: Resource not accessible by personal access token (createPullRequest)";
+        assert!(pat_refused(named, false), "GitHub naming the token type is enough");
+        let push = "remote: Permission to me/repo.git denied to me.\nfatal: unable to access '…': The requested URL returned error: 403";
+        assert!(pat_refused(push, true));
+        assert!(!pat_refused(push, false), "without a PAT, a 403 is someone else's credential");
+        assert!(!pat_refused("no pull requests match your search", true));
+    }
+
+    #[test]
+    fn pat_refusal_on_the_error_chain_gains_the_hint_and_others_pass_through() {
+        let repo = scratch_repo();
+        git(repo.path(), &["remote", "add", "origin", "git@github.com:me/fork.git"]).unwrap();
+        let failed = |stderr: &str| -> anyhow::Error {
+            anyhow::Error::new(GitError::Failed {
+                args: "gh pr create".into(),
+                stderr: stderr.into(),
+            })
+            .context("creating the PR for k-7/x")
+        };
+        let refused = format!(
+            "{:#}",
+            explain_pat_refusal(repo.path(), "origin", failed("HTTP 403: Resource not accessible by personal access token"))
+        );
+        assert!(refused.contains("gh repo set-default me/fork"), "{refused}");
+        assert!(refused.contains("creating the PR for k-7/x"), "the original error must survive: {refused}");
+        let other = format!("{:#}", explain_pat_refusal(repo.path(), "origin", failed("a pull request already exists")));
+        assert!(!other.contains("set-default"), "{other}");
+    }
+
+    #[test]
+    fn slug_of_reads_github_urls_and_ignores_others() {
+        assert_eq!(slug_of("https://github.com/me/repo.git").as_deref(), Some("me/repo"));
+        assert_eq!(slug_of("https://x-access-token@github.com/me/repo/").as_deref(), Some("me/repo"));
+        assert_eq!(slug_of("git@github.com:me/repo.git").as_deref(), Some("me/repo"));
+        assert_eq!(slug_of("ssh://git@github.com/me/repo").as_deref(), Some("me/repo"));
+        assert_eq!(slug_of("/srv/git/origin.git"), None);
     }
 
     #[test]
