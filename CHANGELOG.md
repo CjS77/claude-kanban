@@ -5,7 +5,7 @@ All notable changes to this project are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.10.0] - 2026-11-02
 
 ### Added
 
@@ -15,6 +15,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   `gh repo set-default <owner>/<repo>` for a fork that gh would otherwise target upstream. A refusal is recognised when
   GitHub names the token type, or when `KANBAN_GH_TOKEN`, `GH_TOKEN` or `GITHUB_TOKEN` is set and the failure is a
   401/403-style rejection.
+
+### Changed
+
+- **Command prompts streamlined.** The `/kanban:*` command prompts are roughly half their former size; the
+  load-bearing instructions — the work loop, parallel dispatch, model/effort resolution, the landing procedure, the
+  review loop and the exit-code contracts — survive verbatim.
+- **Ticket-worker and reviewer prompts tightened.** The `kanban-effort-*` agents now keep PRs small and on-spec, and
+  defer out-of-scope work to new tickets; the reviewer brief adds an explicit no-scope-creep criterion and
+  `request_changes` guidance.
 
 ## [3.9.0] - 2026-10-16
 
