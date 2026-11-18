@@ -2612,3 +2612,22 @@ async fn a_corrupt_archive_is_reported_not_swallowed() {
     let html = body_text(res).await;
     assert!(html.contains("archive.json"), "the toast names the file: {html}");
 }
+
+#[tokio::test]
+async fn columns_stretch_so_each_list_fills_down_to_the_column_edge() {
+    let (_dir, router, store) = test_app();
+    seed_ticket(&store, "Only card");
+
+    let html = body_text(router.oneshot(get("/ui/board")).await.unwrap()).await;
+    let root = html
+        .split(r#"id="board-root""#)
+        .nth(1)
+        .and_then(|s| s.split('>').next())
+        .expect("board root renders");
+    assert!(!root.contains("items-start"), "grid items must stretch: {root}");
+    let lists = html.matches(r#"class="ticket-list "#).count();
+    assert!(
+        lists > 0 && html.matches("ticket-list flex flex-col gap-2 grow").count() == lists,
+        "every list grows: {html}"
+    );
+}

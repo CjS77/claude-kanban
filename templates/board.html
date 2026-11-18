@@ -5,7 +5,7 @@
   meaningless against the full column. `data-archive` widens the grid to five tracks (a rule in page.html — the committed
   Tailwind build has no grid-cols-5) while the toolbar's archive toggle adds the fifth column after done.
 -#}
-<div id="board-root" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 items-start"
+<div id="board-root" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4"
      data-version="{{ version }}"
      data-draggable="{{ draggable }}"
      data-archive="{{ archive.is_some() }}">
