@@ -168,10 +168,13 @@ fn the_mcp_face_reads_claims_and_recovers_from_conflicts() {
     // kanban_next nominates it; claim it; next then reports nothing eligible.
     let next = mcp.call_tool(5, "kanban_next", &json!({}));
     assert_eq!(next["structuredContent"]["ticket"]["id"], "K-1");
+    assert_eq!(next["structuredContent"]["tickets"][0]["ticket"]["id"], "K-1", "{next}");
+    assert_eq!(next["structuredContent"]["tickets"][0]["action"], "implement", "{next}");
     let claimed = mcp.call_tool(6, "kanban_claim", &json!({ "ticket": "K-1", "expected_version": 1 }));
     assert_eq!(claimed["structuredContent"]["owner"], "claude");
     let next = mcp.call_tool(7, "kanban_next", &json!({}));
     assert!(next["structuredContent"]["ticket"].is_null(), "{next}");
+    assert_eq!(next["structuredContent"]["tickets"], json!([]), "{next}");
 
     // A stale expected_version is a TOOL error (Claude reads it), naming the current version.
     let conflicted = mcp.call_tool(8, "kanban_move", &json!({ "ticket": "K-1", "to": "done", "expected_version": 0 }));

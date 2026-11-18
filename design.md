@@ -577,8 +577,8 @@ The implementation checklist, kept as the record of scope.
 ### Claude's side (`mcp`)
 
 - [x] `kanban_board` — read the board, optionally one column
-- [x] `kanban_next` — the top unclaimed `ready` (action: implement) or `stub` (action: refine) ticket in `todo` whose dependencies are all
-  `done`
+- [x] `kanban_next` — every eligible ticket (`tickets`: land, rework, then unclaimed `ready`/`stub` todo whose dependencies are all
+  `done`, board order within each); the first is also flattened onto the top level
 - [x] `kanban_claim` / `kanban_release` — take and give back a ticket
 - [x] `kanban_move` — move a ticket to a column, at a position
 - [x] `kanban_create_ticket` / `kanban_create_epic`

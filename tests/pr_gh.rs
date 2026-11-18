@@ -166,7 +166,10 @@ fn create_pr_pushes_once_dedupes_and_names_a_missing_gh() {
     assert_eq!(outcome, format!("ok created=false url={PR_URL}"));
     let gh_log = std::fs::read_to_string(&log).unwrap();
     assert!(
-        gh_log.lines().filter(|l| l.starts_with("token=")).all(|l| l == format!("token={PAT}")),
+        gh_log
+            .lines()
+            .filter(|l| l.starts_with("token="))
+            .all(|l| l == format!("token={PAT}")),
         "every gh call must receive KANBAN_GH_TOKEN as GH_TOKEN: {gh_log}"
     );
     assert_eq!(

@@ -142,7 +142,11 @@ fn record_pr(store: &Store, id: &TicketId, number: u64, url: &str) {
 /// any configured helpers first, so a stale keychain entry can't shadow the token the user just supplied.
 fn push(repo: &Path, remote: &str, branch: &str) -> anyhow::Result<()> {
     let helper = format!("credential.helper={CREDENTIAL_HELPER}");
-    let auth = if token().is_some() { vec!["-c", "credential.helper=", "-c", &helper] } else { vec![] };
+    let auth = if token().is_some() {
+        vec!["-c", "credential.helper=", "-c", &helper]
+    } else {
+        vec![]
+    };
     let args: Vec<&str> = auth.into_iter().chain(["push", "-u", remote, branch]).collect();
     git::run("git", repo, &args, &[("GIT_TERMINAL_PROMPT", "0")])
         .map_err(|e| with_auth_hint(e, "could not read Username"))
@@ -167,7 +171,10 @@ fn with_auth_hint(e: GitError, marker: &str) -> anyhow::Error {
 
 /// Whether a personal access token is in play: [`TOKEN_ENV`], or a `GH_TOKEN`/`GITHUB_TOKEN` the user exported for `gh`.
 fn pat_in_use() -> bool {
-    token().is_some() || ["GH_TOKEN", "GITHUB_TOKEN"].iter().any(|v| std::env::var(v).is_ok_and(|t| !t.trim().is_empty()))
+    token().is_some()
+        || ["GH_TOKEN", "GITHUB_TOKEN"]
+            .iter()
+            .any(|v| std::env::var(v).is_ok_and(|t| !t.trim().is_empty()))
 }
 
 /// Whether `stderr` says GitHub refused a personal access token: GitHub names the token type outright, or a PAT is in
@@ -180,9 +187,10 @@ fn pat_refused(stderr: &str, pat_in_use: bool) -> bool {
 /// When a Create PR step failed because GitHub refused a PAT, log what the token needs and put the short version on the
 /// error, which the browser shows as a toast. Any other error passes through untouched.
 fn explain_pat_refusal(repo: &Path, remote: &str, e: anyhow::Error) -> anyhow::Error {
-    let refused = e.chain().filter_map(|c| c.downcast_ref::<GitError>()).any(|g| {
-        matches!(g, GitError::Failed { stderr, .. } if pat_refused(stderr, pat_in_use()))
-    });
+    let refused = e
+        .chain()
+        .filter_map(|c| c.downcast_ref::<GitError>())
+        .any(|g| matches!(g, GitError::Failed { stderr, .. } if pat_refused(stderr, pat_in_use())));
     if !refused {
         return e;
     }
@@ -391,7 +399,12 @@ mod tests {
             .stdout(std::process::Stdio::piped())
             .spawn()
             .unwrap();
-        child.stdin.take().unwrap().write_all(b"protocol=https\nhost=github.com\n\n").unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"protocol=https\nhost=github.com\n\n")
+            .unwrap();
         String::from_utf8(child.wait_with_output().unwrap().stdout).unwrap()
     }
 
@@ -409,7 +422,13 @@ mod tests {
             args: "gh pr list".into(),
             stderr: stderr.into(),
         };
-        let hinted = format!("{:#}", with_auth_hint(failed("To get started with GitHub CLI, please run:  gh auth login"), "gh auth login"));
+        let hinted = format!(
+            "{:#}",
+            with_auth_hint(
+                failed("To get started with GitHub CLI, please run:  gh auth login"),
+                "gh auth login"
+            )
+        );
         assert!(hinted.contains(TOKEN_ENV), "{hinted}");
         let plain = format!("{:#}", with_auth_hint(failed("no pull requests match"), "gh auth login"));
         assert!(!plain.contains(TOKEN_ENV), "{plain}");
@@ -438,11 +457,21 @@ mod tests {
         };
         let refused = format!(
             "{:#}",
-            explain_pat_refusal(repo.path(), "origin", failed("HTTP 403: Resource not accessible by personal access token"))
+            explain_pat_refusal(
+                repo.path(),
+                "origin",
+                failed("HTTP 403: Resource not accessible by personal access token")
+            )
         );
         assert!(refused.contains("gh repo set-default me/fork"), "{refused}");
-        assert!(refused.contains("creating the PR for k-7/x"), "the original error must survive: {refused}");
-        let other = format!("{:#}", explain_pat_refusal(repo.path(), "origin", failed("a pull request already exists")));
+        assert!(
+            refused.contains("creating the PR for k-7/x"),
+            "the original error must survive: {refused}"
+        );
+        let other = format!(
+            "{:#}",
+            explain_pat_refusal(repo.path(), "origin", failed("a pull request already exists"))
+        );
         assert!(!other.contains("set-default"), "{other}");
     }
 

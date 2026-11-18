@@ -71,24 +71,31 @@ pub fn auto_merge(ticket: &Ticket, board: &Board) -> bool {
     ticket.auto_merge || ticket.epic.as_ref().and_then(|id| board.epic(id)).is_some_and(|e| e.auto_merge)
 }
 
-/// The handoff contract, in two passes: **rework first**, then the highest eligible ticket in `todo`.
+/// The top of [`eligible_tickets`]: the single ticket a lone worker should take. `None` when nothing is eligible.
+#[must_use]
+pub fn next_ticket<'a>(board: &'a Board, claims: &'a [Claim]) -> Option<&'a Ticket> {
+    eligible_tickets(board, claims).into_iter().next()
+}
+
+/// Every ticket that could be worked right now, in handoff order: **landings first**, then **rework**, then eligible
+/// `todo` work, each group in board order. A concurrent work loop reads the whole list to fill its workers; a lone worker
+/// takes the head.
 ///
 /// Rework outranks new work on purpose. A user is waiting on near-finished code, and its branch and worktree already
 /// exist — so addressing the feedback is both the shorter job and the one somebody is actually blocked on. Starting a
 /// fresh ticket ahead of it would leave a reviewed card sitting there while the board grows a second half-done branch.
-///
-/// `None` when nothing is eligible either way.
 #[must_use]
-pub fn next_ticket<'a>(board: &'a Board, claims: &[Claim]) -> Option<&'a Ticket> {
-    landable_ticket(board, claims)
-        .or_else(|| rework_ticket(board, claims))
-        .or_else(|| todo_ticket(board, claims))
+pub fn eligible_tickets<'a>(board: &'a Board, claims: &'a [Claim]) -> Vec<&'a Ticket> {
+    landable_tickets(board, claims)
+        .chain(rework_tickets(board, claims))
+        .chain(todo_tickets(board, claims))
+        .collect()
 }
 
-/// The highest review ticket a user has accepted and nobody is landing yet — the work loop's first duty, ahead of any
+/// The review tickets a user has accepted and nobody is landing yet — the work loop's first duty, ahead of any
 /// implementation.
 ///
-/// It ranks first for two reasons. Landing is the only action that makes *other* work possible: it is what unblocks
+/// They rank first for two reasons. Landing is the only action that makes *other* work possible: it is what unblocks
 /// dependents, and `worktree start` bases a fresh branch on the main checkout's `HEAD`, so landing before starting means
 /// the next ticket's worktree already contains the accepted work instead of colliding with it later. And it is minutes
 /// of git against a user who has already pressed Accept and is waiting for the card to move.
@@ -97,9 +104,9 @@ pub fn next_ticket<'a>(board: &'a Board, claims: &[Claim]) -> Option<&'a Ticket>
 /// re-offering it would just reproduce the same conflict forever. Only a user — accepting again, or sending it back —
 /// puts it back in reach. An in-flight landing is excluded for as long as it is believable ([`claims::LANDING_STALE_AFTER`]),
 /// which is what stops two concurrent loops rebasing the same branch onto a moving main.
-fn landable_ticket<'a>(board: &'a Board, claims: &[Claim]) -> Option<&'a Ticket> {
+fn landable_tickets<'a>(board: &'a Board, claims: &'a [Claim]) -> impl Iterator<Item = &'a Ticket> {
     let now = Utc::now();
-    board.tickets_in(ColumnId::Review).find(|t| {
+    board.tickets_in(ColumnId::Review).filter(move |t| {
         t.accepted
             && !t.landing_blocked
             && t.external.is_none()
@@ -108,11 +115,11 @@ fn landable_ticket<'a>(board: &'a Board, claims: &[Claim]) -> Option<&'a Ticket>
     })
 }
 
-/// The highest ticket a reviewer sent back for changes and nobody has picked up yet: in `doing`, `changes_requested`,
+/// The tickets a reviewer sent back for changes and nobody has picked up yet: in `doing`, `changes_requested`,
 /// unclaimed, and subject to every rule todo work obeys — ready, unblocked, and never `external` (a delegated ticket's
 /// review feedback belongs on its issue, which is what keeps minesweeper's tickets out of this pass by construction).
-fn rework_ticket<'a>(board: &'a Board, claims: &[Claim]) -> Option<&'a Ticket> {
-    board.tickets_in(ColumnId::Doing).find(|t| {
+fn rework_tickets<'a>(board: &'a Board, claims: &'a [Claim]) -> impl Iterator<Item = &'a Ticket> {
+    board.tickets_in(ColumnId::Doing).filter(move |t| {
         t.changes_requested
             && t.status == Status::Ready
             && t.external.is_none()
@@ -121,10 +128,10 @@ fn rework_ticket<'a>(board: &'a Board, claims: &[Claim]) -> Option<&'a Ticket> {
     })
 }
 
-/// The original contract: the highest ticket in `todo` that is unblocked, unclaimed, not `external` (external tickets are
-/// worked elsewhere), and either `ready` (implement it) or `stub` (refine it into a spec).
-fn todo_ticket<'a>(board: &'a Board, claims: &[Claim]) -> Option<&'a Ticket> {
-    board.tickets_in(ColumnId::Todo).find(|t| {
+/// The tickets in `todo` that are unblocked, unclaimed, not `external` (external tickets are worked elsewhere), and
+/// either `ready` (implement it) or `stub` (refine it into a spec).
+fn todo_tickets<'a>(board: &'a Board, claims: &'a [Claim]) -> impl Iterator<Item = &'a Ticket> {
+    board.tickets_in(ColumnId::Todo).filter(move |t| {
         matches!(t.status, Status::Ready | Status::Stub)
             && t.external.is_none()
             && !blocked(t, board)
@@ -444,6 +451,30 @@ mod tests {
             "K-1",
             "a stub above a ready ticket wins — position is priority"
         );
+    }
+
+    #[test]
+    fn eligible_tickets_lists_every_workable_ticket_in_board_order() {
+        let mut b = board(vec![
+            ticket("K-9", Column::Todo),
+            ticket("K-3", Column::Todo),
+            ticket("K-4", Column::Todo),
+            ticket("K-5", Column::Todo),
+        ]);
+        b.tickets[1].depends_on = vec![TicketId("K-1".into())];
+        b.tickets[3].status = Status::Stub;
+        let ids: Vec<_> = eligible_tickets(&b, &[]).iter().map(|t| t.id.0.clone()).collect();
+        assert_eq!(ids, ["K-9", "K-4", "K-5"], "the blocked K-3 is skipped; the rest keep board order");
+
+        let claims = vec![Claim {
+            ticket: TicketId("K-4".into()),
+            agent: "claude".into(),
+            since: Utc::now(),
+            path: None,
+            kind: claims::ClaimKind::Work,
+        }];
+        let ids: Vec<_> = eligible_tickets(&b, &claims).iter().map(|t| t.id.0.clone()).collect();
+        assert_eq!(ids, ["K-9", "K-5"], "a claimed ticket is not offered");
     }
 
     #[test]

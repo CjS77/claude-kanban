@@ -43,7 +43,8 @@ Repeat until the user stops you (a ticket id or `--one` ends it):
 1. **Pick** — `kanban_board` (note the `version`), then `kanban_next`. Its `action` names what the ticket needs: `land`
    (accepted review ticket — **Landing a branch**, and don't claim it), `implement` (steps 2–8), `refine` (**Refining a
    stub**), `rework` (**Rework**). Nothing eligible → idle (**Idling**). `kanban_next`'s sweep may have landed tickets, so
-   **use the `version` it returns** for the claim.
+   **use the `version` it returns** for the claim. It also lists every eligible ticket in `tickets` (same
+   shape, ranked land, rework, todo; board order within each) — the top-level fields are `tickets[0]`.
 2. **Claim** — `kanban_claim`; a pure board mutation. **Then resolve model and effort** — the ticket's own `model`, else
    the board's `implement_model` (for `implement`/`rework`), else nothing. If one resolves, hand the ticket to a subagent
    (see **Model and effort**) and close out at step 8; only when neither resolves do you carry on and work it yourself.

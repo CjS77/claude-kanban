@@ -61,7 +61,8 @@ loop after it):
    back with feedback — see **Rework** below). If nothing is
    eligible, go idle instead of ending the loop — see **Idling** below. `kanban_next` first auto-lands any review
    tickets whose branches have reached local main, so **use the `version` it returns** for the claim — the sweep may
-   have advanced the board.
+   have advanced the board. `tickets` lists every eligible ticket (land, rework, todo; board order within each); the
+   top-level fields mirror `tickets[0]`.
 2. **Claim** — `kanban_claim` the ticket. A pure board mutation; git is untouched.
    **Then resolve the model and effort.** The effective model is the ticket's own `model`, else the board's
    `implement_model` (this is `implement`/`rework` work), else nothing. If that resolves to a model, or the ticket

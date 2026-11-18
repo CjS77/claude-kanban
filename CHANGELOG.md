@@ -5,6 +5,15 @@ All notable changes to this project are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **`kanban_next` lists every eligible ticket.** The answer gains `tickets`: all workable tickets as
+  `{ticket, action, branch, auto_merge}`, landings first, then rework, then todo, each in board order (`[]` when
+  nothing is eligible). The first entry is still flattened onto `ticket`, `action`, `branch` and `auto_merge`, so
+  single-worker loops are unchanged.
+
 ## [3.10.0] - 2026-11-02
 
 ### Added

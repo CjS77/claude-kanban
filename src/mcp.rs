@@ -555,8 +555,10 @@ impl KanbanServer {
         })))
     }
 
-    /// The next thing to work on, and what it needs. Returns the full ticket plus the action, or explains that nothing
-    /// is eligible:
+    /// Everything that can be worked right now, in handoff order: accepted landings, then rework, then eligible todo
+    /// tickets, each group in board order. `tickets` lists them all, each as `{ticket, action, branch, auto_merge}`;
+    /// the first entry is also flattened onto the top level (`ticket`, `action`, `branch`, `auto_merge`) for a lone
+    /// worker that only wants the best one. `tickets` is `[]` when nothing is eligible; the actions are:
     ///
     /// - `"land"` — a user accepted this review ticket and cleared its branch to land. **Do not claim it** (claiming a review ticket is the
     ///   rework path and would drag it into doing): call `kanban_start_landing` to take the in-flight marker, then follow *Landing a
@@ -596,13 +598,14 @@ impl KanbanServer {
             };
             let board = store.read_board()?;
             let claims = store.read_claims()?;
-            Ok(if let Some(t) = derive::next_ticket(&board, &claims) {
-                let action = action_for(t);
-                serde_json::json!({ "version": board.version, "ticket": t, "action": action,
-                    "branch": t.column.branch(), "auto_merge": derive::auto_merge(t, &board) })
+            let eligible = derive::eligible_tickets(&board, &claims);
+            let tickets: Vec<serde_json::Value> = eligible.iter().map(|t| handoff(t, &board)).collect();
+            Ok(if let Some(first) = tickets.first() {
+                serde_json::json!({ "version": board.version, "ticket": first["ticket"], "action": first["action"],
+                    "branch": first["branch"], "auto_merge": first["auto_merge"], "tickets": tickets })
             } else {
                 let todo = derive::ineligible(&board, &claims);
-                serde_json::json!({ "version": board.version, "ticket": null, "reason": nothing_eligible(&todo, &stalled),
+                serde_json::json!({ "version": board.version, "ticket": null, "tickets": tickets, "reason": nothing_eligible(&todo, &stalled),
                     "waiting": { "todo": waiting_list(&todo), "review": waiting_list(&stalled) } })
             })
         })
@@ -998,6 +1001,11 @@ impl KanbanServer {
         .map_err(|e| ErrorData::internal_error(format!("task failed: {e}"), None))?;
         Ok(shape_applied(result))
     }
+}
+
+/// One entry of `kanban_next`'s `tickets` list: the ticket plus the action it needs, its branch and its effective `auto_merge`.
+fn handoff(t: &crate::store::model::Ticket, board: &crate::store::model::Board) -> serde_json::Value {
+    serde_json::json!({ "ticket": t, "action": action_for(t), "branch": t.column.branch(), "auto_merge": derive::auto_merge(t, board) })
 }
 
 /// What the surfaced ticket needs, in precedence order. Landing wins over everything: a user has already approved it,
