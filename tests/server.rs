@@ -558,10 +558,9 @@ async fn epic_ticket_lines_show_a_status_icon() {
 
     let board = body_text(router.clone().oneshot(get("/ui/board")).await.unwrap()).await;
     let detail = body_text(router.oneshot(get("/ui/epic/EP-1")).await.unwrap()).await;
-    [board, detail].iter().for_each(|html| {
-        assert!(html.contains("👍</span>"), "ready icon: {html}");
-        assert!(html.contains("🪵</span>"), "stub icon: {html}");
-    });
+    let has_icons = |html: &String| html.contains("👍</span>") && html.contains("🪵</span>");
+    assert!(has_icons(&board), "board card: {board}");
+    assert!(has_icons(&detail), "detail pane: {detail}");
 }
 
 #[tokio::test]
