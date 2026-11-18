@@ -42,7 +42,7 @@ pub struct Config {
     /// Gitignored files (relative to the repo root) to copy into each new worktree — `.env`, local certs. Only files git
     /// actually ignores are copied; anything else is skipped with a warning, so the config can't smuggle tracked files.
     pub copy_to_worktrees: Vec<String>,
-    /// How many tickets `/kanban:work` may drive concurrently. Absent or `0` means `1` (the sequential loop). Config-only:
+    /// How many tickets `/kanban:work` may drive concurrently. Absent means `2` — enough for one orchestrator plus a couple of worker agents. `0` resets to that default; only explicit positive values override.. Config-only:
     /// no flag or env var.
     pub max_workers: Option<usize>,
     /// How many **seconds** `/kanban:work` sleeps when nothing is eligible before polling the board again. Absent or `0`
@@ -103,7 +103,7 @@ impl Config {
     /// The effective worker count for `/kanban:work`: absent or `0` collapses to `1`.
     #[must_use]
     pub fn max_workers(&self) -> usize {
-        self.max_workers.filter(|&n| n > 0).unwrap_or(1)
+        self.max_workers.filter(|&n| n > 0).unwrap_or(2)
     }
 
     /// The effective idle sleep for `/kanban:work`, in seconds: absent or `0` collapses to [`DEFAULT_IDLE_TIME_SECS`].
@@ -264,15 +264,15 @@ mod tests {
     }
 
     #[test]
-    fn max_workers_absent_and_zero_collapse_to_one() {
-        assert_eq!(Config::default().max_workers(), 1);
+    fn max_workers_absent_and_zero_collapse_to_two() {
+        assert_eq!(Config::default().max_workers(), 2);
         assert_eq!(
             Config {
                 max_workers: Some(0),
                 ..Config::default()
             }
             .max_workers(),
-            1
+            2
         );
         assert_eq!(
             Config {
