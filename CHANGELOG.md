@@ -7,12 +7,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [3.11.0] - 2026-11-18
+
+### Added
+
+- **Status icons in epic lists.** Each ticket in an epic's card and detail view now shows an icon for its status
+  before its title.
+
 ### Changed
 
 - **`kanban_next` lists every eligible ticket.** The answer gains `tickets`: all workable tickets as
   `{ticket, action, branch, auto_merge}`, landings first, then rework, then todo, each in board order (`[]` when
   nothing is eligible). The first entry is still flattened onto `ticket`, `action`, `branch` and `auto_merge`, so
   single-worker loops are unchanged.
+
+### Fixed
+
+- **Drops on empty column space.** Board columns now stretch to the full height of the board, so a ticket dropped on
+  the empty part of a column lands in it.
 
 ## [3.10.0] - 2026-11-02
 
