@@ -200,6 +200,7 @@ pub fn board_view(board: &Board, claims: &[Claim]) -> BoardView {
                 .map(|t| ChecklistItem {
                     ticket: t.id.clone(),
                     title: t.title.clone(),
+                    status: t.status,
                     done: matches!(t.column, Column::Done { .. }),
                 })
                 .collect(),
@@ -285,6 +286,7 @@ pub struct EpicView {
 pub struct ChecklistItem {
     pub ticket: TicketId,
     pub title: String,
+    pub status: Status,
     pub done: bool,
 }
 

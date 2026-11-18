@@ -260,6 +260,8 @@ pub struct EpicCardCtx {
 pub struct ItemCtx {
     pub ticket: String,
     pub title: String,
+    /// Emoji for the ticket's status, shown before its title.
+    pub icon: &'static str,
     pub done: bool,
 }
 
@@ -441,6 +443,7 @@ fn epic_card(e: &EpicView) -> EpicCardCtx {
             .map(|i| ItemCtx {
                 ticket: i.ticket.to_string(),
                 title: i.title.clone(),
+                icon: status_icon(i.status),
                 done: i.done,
             })
             .collect(),
@@ -950,6 +953,7 @@ pub fn epic_detail(board: &Board, id: &crate::store::model::EpicId) -> Option<Ep
         .map(|t| ItemCtx {
             ticket: t.id.to_string(),
             title: t.title.clone(),
+            icon: status_icon(t.status),
             done: matches!(t.column, Column::Done { .. }),
         })
         .collect();
@@ -1128,6 +1132,15 @@ fn status_badge(s: Status) -> &'static str {
         Status::Stub => "badge-warning",
         Status::Review => "badge-info",
         Status::Ready => "badge-success",
+    }
+}
+
+fn status_icon(s: Status) -> &'static str {
+    match s {
+        Status::Draft => "📝",
+        Status::Stub => "🪵",
+        Status::Review => "📋",
+        Status::Ready => "👍",
     }
 }
 

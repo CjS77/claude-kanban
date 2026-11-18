@@ -545,6 +545,25 @@ fn seed_epic(store: &Store, title: &str, titles: &[&str]) -> EpicId {
     epic
 }
 
+/// Each ticket line in an epic carries its status icon before the title, on both the board card and the detail pane.
+#[tokio::test]
+async fn epic_ticket_lines_show_a_status_icon() {
+    let (_dir, router, store) = test_app();
+    seed_epic(&store, "Auth", &["Ready one", "Stubby"]);
+    let stub = Op::SetTicketStatus {
+        id: TicketId("K-2".into()),
+        status: Status::Stub,
+    };
+    ops::apply(&store, None, stub).unwrap();
+
+    let board = body_text(router.clone().oneshot(get("/ui/board")).await.unwrap()).await;
+    let detail = body_text(router.oneshot(get("/ui/epic/EP-1")).await.unwrap()).await;
+    [board, detail].iter().for_each(|html| {
+        assert!(html.contains("👍</span>"), "ready icon: {html}");
+        assert!(html.contains("🪵</span>"), "stub icon: {html}");
+    });
+}
+
 #[tokio::test]
 async fn deleting_an_epic_from_the_board_takes_its_tickets() {
     let (_dir, router, store) = test_app();
