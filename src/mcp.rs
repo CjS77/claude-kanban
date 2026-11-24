@@ -21,7 +21,7 @@ use serde::Deserialize;
 
 use crate::{
     config::Config,
-    ops::{self, Applied, NewEpicSpec, NewTicketSpec, Op, OpError, RefineTarget, TicketPatch, VerdictReview},
+    ops::{self, Applied, EpicPatch, NewEpicSpec, NewTicketSpec, Op, OpError, RefineTarget, TicketPatch, VerdictReview},
     store::{
         Store, derive,
         derive::BoardView,
@@ -68,6 +68,7 @@ the user with kanban_block_landing, after git rebase --abort.\n\n\
 kanban_create_ticket and kanban_create_epic default to status=review so the user vets them. kanban_update_ticket edits \
 an existing ticket's fields, including depends_on — so a dependency discovered mid-flight is added, dropped or rewired \
 instead of living only in a note; it replaces the whole list, so read the ticket first and send the set you want. \
+kanban_update_epic does the same for an epic's title, body and colour. \
 `auto_merge` makes `/kanban:work` rebase and land the branch into main at review without a user seeing the merge — \
 never set it on tickets you create unless the user explicitly asked.\n\n\
 kanban_claim and kanban_start_landing stamp the card's owner, and kanban_note its author, with your own agent name by \
@@ -285,6 +286,28 @@ pub struct CreateEpicParams {
     pub status: Option<String>,
     /// Let every ticket in this epic land in main unattended — one dial for the whole work stream. Defaults to false,
     /// and you never set it unless the user explicitly asked for it.
+    #[serde(default)]
+    pub auto_merge: Option<bool>,
+    /// The board version from your latest `kanban_board` read.
+    pub expected_version: u64,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+pub struct UpdateEpicParams {
+    /// The epic id, e.g. "EP-2".
+    pub epic: String,
+    /// A new title. Omit to leave it alone.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// A new markdown body, replacing the epic's description wholesale. Omit to leave it alone.
+    #[serde(default)]
+    pub body: Option<String>,
+    /// CSS hex colour for the epic's cards, e.g. "#7c9cf5". Omit to leave it alone.
+    #[serde(default)]
+    pub color: Option<String>,
+    /// Whether every ticket in this epic may land in main unattended. Omit to leave it alone. Only ever set it to true at
+    /// the user's explicit request.
     #[serde(default)]
     pub auto_merge: Option<bool>,
     /// The board version from your latest `kanban_board` read.
@@ -783,6 +806,28 @@ impl KanbanServer {
         self.apply(Some(p.expected_version), op).await
     }
 
+    /// Edit an existing epic's descriptive fields: title, body, colour and `auto_merge`. Every field is optional: omit one
+    /// and it is left untouched; `body` replaces the description wholesale. Draft epics are refused — they are the user's
+    /// to shape. `status` is deliberately absent: promoting an epic to ready stays the user's call, and refining a stub
+    /// epic is `kanban_refine`'s job.
+    #[tool]
+    async fn kanban_update_epic(&self, Parameters(p): Parameters<UpdateEpicParams>) -> Result<CallToolResult, ErrorData> {
+        let patch = EpicPatch {
+            title: p.title,
+            color: p.color,
+            body: p.body,
+            auto_merge: p.auto_merge,
+        };
+        let id = EpicId(p.epic);
+        let guard_id = id.clone();
+        self.apply_guarded(
+            p.expected_version,
+            move |board| refuse_draft_epic(board, &guard_id),
+            Op::UpdateEpic { id, patch },
+        )
+        .await
+    }
+
     /// Append a timestamped entry to a ticket's progress log. Note progress after each meaningful chunk of work.
     #[tool]
     async fn kanban_note(&self, Parameters(p): Parameters<NoteParams>) -> Result<CallToolResult, ErrorData> {
@@ -992,9 +1037,18 @@ impl KanbanServer {
     /// lock separately, but `expected_version` closes the gap — anything landing in between bumps the board version, and
     /// the apply is then rejected as a conflict rather than acting on the status this read saw.
     async fn apply_unless_draft(&self, expected_version: u64, id: TicketId, op: Op) -> Result<CallToolResult, ErrorData> {
+        self.apply_guarded(expected_version, move |board| refuse_draft(board, &id), op)
+            .await
+    }
+
+    /// Apply `op` only once `guard` has passed against the current board — the shared shape of the draft refusals.
+    async fn apply_guarded<G>(&self, expected_version: u64, guard: G, op: Op) -> Result<CallToolResult, ErrorData>
+    where
+        G: FnOnce(&Board) -> Result<(), OpError> + Send + 'static,
+    {
         let store = self.store.clone();
         let result = tokio::task::spawn_blocking(move || {
-            refuse_draft(&store.read_board()?, &id)?;
+            guard(&store.read_board()?)?;
             ops::apply(&store, Some(expected_version), op)
         })
         .await
@@ -1163,6 +1217,17 @@ fn refuse_draft(board: &Board, id: &TicketId) -> Result<(), OpError> {
     match board.ticket(id) {
         None => Err(OpError::NotFound(id.to_string())),
         Some(t) if t.status == Status::Draft => Err(OpError::Invalid(format!(
+            "{id} is a draft — drafts are the user's to shape, not yours to edit"
+        ))),
+        Some(_) => Ok(()),
+    }
+}
+
+/// [`refuse_draft`] for epics: a draft epic is the user's to shape, exactly as a draft ticket is.
+fn refuse_draft_epic(board: &Board, id: &EpicId) -> Result<(), OpError> {
+    match board.epic(id) {
+        None => Err(OpError::NotFound(id.to_string())),
+        Some(e) if e.status == Status::Draft => Err(OpError::Invalid(format!(
             "{id} is a draft — drafts are the user's to shape, not yours to edit"
         ))),
         Some(_) => Ok(()),

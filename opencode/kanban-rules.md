@@ -50,6 +50,7 @@ user with kanban_block_landing, after git rebase --abort.
 kanban_create_ticket and kanban_create_epic default to status=review so the user vets them. kanban_update_ticket edits
 an existing ticket's fields, including depends_on — so a dependency discovered mid-flight is added, dropped or rewired
 instead of living only in a note; it replaces the whole list, so read the ticket first and send the set you want.
+kanban_update_epic does the same for an epic's title, body and colour.
 `auto_merge` makes `/kanban:work` rebase and land the branch into main at review without a user seeing the merge —
 never set it on tickets you create unless the user explicitly asked.
 

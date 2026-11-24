@@ -588,6 +588,8 @@ The implementation checklist, kept as the record of scope.
   they are nested options on `TicketPatch` and get a `present_or_null` deserializer on the wire. Two things are deliberately
   out of reach: `status`, so Claude still cannot promote its own work to ready, and `draft` tickets, refused outright — the
   browser and the ops layer both allow that edit, but the MCP face keeps the standing "never touch draft tickets" rule
+- [x] `kanban_update_epic` — edit an existing epic's title, body, colour and `auto_merge`, with the same omit-to-leave-alone
+  patch shape and the same two exclusions as `kanban_update_ticket`: no `status`, and draft epics refused
 - [x] `kanban_note` — append to a ticket's progress log
 - [x] `kanban_bind_external` — record (or clear) a ticket's binding to an external work item; used by `/kanban:delegate`
 - [x] `kanban_refine` — flesh out a `stub` ticket or epic into a detailed spec, splitting into subtasks or sub-epics when it's too big;

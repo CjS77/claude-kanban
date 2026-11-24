@@ -7,6 +7,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- **`kanban_update_epic`.** MCP can now edit an existing epic's title, body, colour and `auto_merge`. Omitted fields are
+  left alone; `status` is not editable, and draft epics are refused, as with `kanban_update_ticket`.
+
 ## [3.11.0] - 2026-11-18
 
 ### Added

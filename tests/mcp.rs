@@ -109,6 +109,7 @@ fn the_mcp_face_reads_claims_and_recovers_from_conflicts() {
         "kanban_move",
         "kanban_create_ticket",
         "kanban_create_epic",
+        "kanban_update_epic",
         "kanban_note",
         "kanban_review_comment",
         "kanban_review",
@@ -948,4 +949,83 @@ fn kanban_update_ticket_rewires_dependencies_and_guards_drafts() {
         Status::Ready,
         "status is not patchable here — promotion stays the user's call"
     );
+}
+
+/// Epics were write-once over MCP: `kanban_create_epic` could set the title, body and colour, nothing could change them.
+/// This drives `kanban_update_epic` over the wire — partial edits, an unknown id, and the draft guard.
+#[test]
+fn kanban_update_epic_edits_fields_and_guards_drafts() {
+    use claude_kanban::store::model::{EpicId, Status};
+
+    let dir = tempfile::tempdir().unwrap();
+    let store_dir = dir.path().join(".kanban");
+    let store = claude_kanban::store::Store::at(&store_dir);
+    store.init().unwrap();
+    let mut mcp = McpSession::start(&store_dir);
+    let epic = |id: &str| store.read_board().unwrap().epic(&EpicId(id.into())).unwrap().clone();
+
+    mcp.call_tool(
+        1,
+        "kanban_create_epic",
+        &json!({ "title": "auth", "body": "the old plan", "color": "#111111", "expected_version": 0 }),
+    );
+
+    let updated = mcp.call_tool(
+        2,
+        "kanban_update_epic",
+        &json!({ "epic": "EP-1", "title": "auth rework", "body": "the new plan", "expected_version": 1 }),
+    );
+    assert_eq!(updated["structuredContent"]["id"], "EP-1", "{updated}");
+    let edited = epic("EP-1");
+    assert_eq!(edited.title, "auth rework");
+    assert_eq!(edited.body, "the new plan");
+    assert_eq!(edited.color, "#111111", "an omitted colour is left alone");
+    assert_eq!(
+        edited.status,
+        Status::Review,
+        "status is not patchable here — promotion stays the user's call"
+    );
+    assert!(!edited.auto_merge, "an omitted auto_merge is left alone");
+
+    mcp.call_tool(
+        3,
+        "kanban_update_epic",
+        &json!({ "epic": "EP-1", "color": "#222222", "expected_version": 2 }),
+    );
+    let recoloured = epic("EP-1");
+    assert_eq!(recoloured.color, "#222222");
+    assert_eq!(recoloured.title, "auth rework", "and changes only what was named");
+
+    let missing = mcp.call_tool(
+        4,
+        "kanban_update_epic",
+        &json!({ "epic": "EP-9", "title": "ghost", "expected_version": 3 }),
+    );
+    assert_eq!(missing["isError"], true, "{missing}");
+
+    let stale = mcp.call_tool(
+        5,
+        "kanban_update_epic",
+        &json!({ "epic": "EP-1", "title": "late", "expected_version": 1 }),
+    );
+    assert_eq!(stale["isError"], true, "a stale version is a conflict: {stale}");
+    assert_eq!(epic("EP-1").title, "auth rework");
+
+    // Draft epics stay the user's, as draft tickets do.
+    mcp.call_tool(
+        6,
+        "kanban_create_epic",
+        &json!({ "title": "user's scratch", "status": "draft", "expected_version": 3 }),
+    );
+    let draft = mcp.call_tool(
+        7,
+        "kanban_update_epic",
+        &json!({ "epic": "EP-2", "title": "meddling", "expected_version": 4 }),
+    );
+    assert_eq!(draft["isError"], true, "{draft}");
+    assert!(
+        draft["content"][0]["text"].as_str().unwrap().contains("draft"),
+        "the refusal says why: {draft}"
+    );
+    assert_eq!(epic("EP-2").title, "user's scratch");
 }
