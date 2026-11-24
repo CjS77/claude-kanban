@@ -7,6 +7,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [3.12.1] - 2026-11-24
+
+### Fixed
+
+- **Idle waits in `/kanban:work` and `/kanban:review`.** Loops no longer run a foreground `sleep`, which the harness
+  blocks. A new **Waiting** section has them arm a background until-loop that ends when `board.json` or `config.json`
+  changes or the wait runs out, then Yield. A board edit now wakes an idle loop early, and a loop at capacity Yields
+  until a subagent finishes instead of re-polling.
+
 ## [3.12.0] - 2026-11-24
 
 ### Added
