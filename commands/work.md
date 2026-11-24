@@ -91,8 +91,9 @@ implementation as one.
    after the move to `review`. Landings run in the main checkout, one at a time, in this session; subagents never merge,
    and `action: "land"` is never delegated.
 4. **Top up** — after each close-out, claim the next eligible ticket while others run. Between close-outs with in-flight
-   workers, re-poll on a fixed 60-second cadence (`kanban_board` + `kanban_next`, claim and delegate up to the cap). At
-   capacity, don't re-poll. Loop-end: nothing eligible AND nothing in flight → idle.
+   workers, re-poll on a fixed 60-second cadence (`kanban_board` + `kanban_next`, claim and delegate up to the cap),
+   waiting out each interval as **Waiting** describes (`N` = 60). At capacity, don't re-poll — just Yield until a
+   subagent finishes. Loop-end: nothing eligible AND nothing in flight → idle.
 
 The store is safe under concurrency (lock, CAS, per-ticket worktrees); the discipline is policy: one claimer, one
 board-writer, subagents in their own worktrees.
@@ -178,11 +179,30 @@ Running dry doesn't end the loop; the user keeps feeding the board, so wait and 
 1. **Report briefly** — `kanban_next`'s `waiting` says why each todo ticket doesn't qualify and why each review ticket
    couldn't be proven landed. Report it, don't invent it. Name tickets whose branch is gone or PR closed unmerged — they
    never land on their own and keep dependents blocked.
-2. **Wait `idle_time`** seconds — the value from your latest read; harness wait, or `sleep <idle_time>`.
+2. **Wait `idle_time`** seconds — the value from your latest read — as **Waiting** below describes.
 3. **Re-poll** — fresh `kanban_board` (picks up config changes) then `kanban_next`; work what became eligible, else idle
    again.
 
 Only the user ends an idling loop (a ticket id or `--one` never idles — finish, report, end).
+
+## Waiting
+
+Never run a foreground `sleep N`: the harness blocks it, and chaining shorter sleeps to dodge the block is forbidden
+too. Wait on a condition instead — the board changing, or the time running out, whichever comes first:
+
+1. **Arm** — Bash with `run_in_background: true`, from the main checkout, with `N` = the wait in seconds:
+   ```sh
+   m=$(mktemp); end=$(( $(date +%s) + N ))
+   until [ .kanban/board.json -nt "$m" ] || [ .kanban/config.json -nt "$m" ] || [ "$(date +%s)" -ge "$end" ]; do
+       sleep 2
+   done; rm -f "$m"
+   ```
+   Arm it *after* your last board write, so your own writes don't trip it.
+2. **Yield** — you resume when that command exits (a board edit or the deadline) or when a subagent finishes, whichever
+   comes first. Then re-poll; an early wake-up from a board edit is the point — new tickets start promptly.
+
+Running under `/loop` without an interval (dynamic mode)? End the turn with `ScheduleWakeup` instead (`delaySeconds` =
+the wait, the same `/loop` prompt), rather than arming a wait.
 
 ## Rework (`action: "rework"`)
 

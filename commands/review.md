@@ -41,9 +41,10 @@ Repeat until the user stops you (a ticket id or `--one` ends it):
    - `auto_review` **off** → stop here. The card stays in review; your review **is** the deliverable. Don't call
      `kanban_review` — it refuses, and that's the point: the verdict is the user's. Say which cards wait on their button.
    - Reviewer returned **no verdict** (couldn't read the code) → note it plainly, leave the card alone; never guess.
-5. **Idle and re-poll** — no candidate: report briefly, sleep `idle_time` seconds (harness wait, or `sleep <idle_time>`),
-   poll again. Running dry doesn't end the loop; only the user does. In the parallel case, top up to `max_workers` as
-   reviews finish.
+5. **Idle and re-poll** — no candidate: report briefly, wait `idle_time` seconds exactly as `/kanban:work`'s
+   **Waiting** section describes (a background until-loop on the board or the deadline, then Yield — never a
+   foreground `sleep`, which the harness blocks), poll again. Running dry doesn't end the loop; only the user does. In
+   the parallel case, Yield until a reviewer returns and top up to `max_workers` as reviews finish.
 
 ## Rules
 
