@@ -89,6 +89,7 @@ fn seed_review_ticket(store: &Store, title: &str, branch: &str) -> TicketId {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn the_poll_discovers_records_notes_and_lands() {
     let scratch = tempfile::tempdir().unwrap();
     let repo = scratch.path().join("repo");

@@ -47,6 +47,7 @@ fn pr_gh_inner() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn create_pr_pushes_once_dedupes_and_names_a_missing_gh() {
     let scratch = tempfile::tempdir().unwrap();
     let repo = scratch.path().join("repo");

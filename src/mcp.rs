@@ -652,7 +652,7 @@ impl KanbanServer {
         // Claiming is the MCP door into `doing` (kanban_move passes no owner, so it can't enter) — with the minesweeper
         // toggle on, a ready claim is the delegation moment.
         self.apply_then(Some(p.expected_version), op, move |store| {
-            crate::minesweeper::delegate_entering_doing(store, &id)
+            crate::minesweeper::delegate_entering_doing(store, &id);
         })
         .await
     }

@@ -334,68 +334,84 @@ mod active {
         let Some(facts) = facts.get(&ext.number) else { return Ok(false) };
         let in_doing = matches!(t.column, Column::Doing { .. });
 
-        // 1. A PR references the issue: record it, and put the card where PRs are tracked. The existing landing machinery (rule 5) owns the
-        //    journey from here.
         if let Some((pr, head)) = &facts.pr {
-            let fresh = t.pr.as_ref() != Some(pr);
-            if fresh {
-                ops::apply(
-                    store,
-                    None,
-                    Op::SetPr {
-                        id: t.id.clone(),
-                        pr: Some(pr.clone()),
-                    },
-                )?;
-            }
-            if in_doing {
-                let op = Op::MoveTicket {
-                    id: t.id.clone(),
-                    to: ColumnId::Review,
-                    position: None,
-                    owner: None,
-                    branch: Some(head.clone()),
-                };
-                match ops::apply(store, None, op) {
-                    Ok(_) => {}
-                    Err(OpError::Invalid(e)) => {
-                        tracing::debug!(ticket = %t.id, "review move refused (board moved underneath the poll): {e}")
-                    }
-                    Err(e) => return Err(e.into()),
-                }
-                return Ok(true);
-            }
-            return Ok(fresh);
+            return record_pr(store, t, pr, head, in_doing);
         }
-
-        // 2. A refine split not yet (fully) mirrored: fetch the unmirrored sub-issues and mirror them. The op parks the parent in review;
-        //    its binding facts refresh on the next tick.
         if in_doing && facts.refine.iter().any(|n| !ext.sub_issues.contains(n)) {
-            let bound: HashSet<u64> = board
-                .tickets
-                .iter()
-                .filter_map(|t| t.external.as_ref().filter(|e| e.is_github_issue()).map(|e| e.number))
-                .collect();
-            let children: Vec<SubIssueSpec> = facts
-                .refine
-                .iter()
-                .filter(|n| !bound.contains(n))
-                .map(|&n| fetch_issue(repo, n))
-                .collect::<anyhow::Result<_>>()?;
+            return mirror_refine(store, board, repo, t, &facts.refine);
+        }
+        observe_binding(store, t, ext, facts, flags, in_doing)
+    }
+
+    /// 1. A PR references the issue: record it, and put the card where PRs are tracked. The existing landing machinery (rule 5) owns the
+    ///    journey from here.
+    fn record_pr(store: &Store, t: &crate::store::model::Ticket, pr: &PrRef, head: &str, in_doing: bool) -> anyhow::Result<bool> {
+        let fresh = t.pr.as_ref() != Some(pr);
+        if fresh {
             ops::apply(
                 store,
                 None,
-                Op::MirrorSubIssues {
-                    parent: t.id.clone(),
-                    agent: DELEGATE_AGENT.into(),
-                    children,
+                Op::SetPr {
+                    id: t.id.clone(),
+                    pr: Some(pr.clone()),
                 },
             )?;
-            return Ok(true);
         }
+        if !in_doing {
+            return Ok(fresh);
+        }
+        let op = Op::MoveTicket {
+            id: t.id.clone(),
+            to: ColumnId::Review,
+            position: None,
+            owner: None,
+            branch: Some(head.to_owned()),
+        };
+        match ops::apply(store, None, op) {
+            Ok(_) => {}
+            Err(OpError::Invalid(e)) => {
+                tracing::debug!(ticket = %t.id, "review move refused (board moved underneath the poll): {e}");
+            }
+            Err(e) => return Err(e.into()),
+        }
+        Ok(true)
+    }
 
-        // 3. Durable observations: flag labels and closure, written onto the binding only when they changed. The alarm notes fire once, on
-        //    the transition — the fresh binding is what makes the next tick a no-op.
+    /// 2. A refine split not yet (fully) mirrored: fetch the unmirrored sub-issues and mirror them. The op parks the parent in review; its
+    ///    binding facts refresh on the next tick.
+    fn mirror_refine(store: &Store, board: &Board, repo: &Path, t: &crate::store::model::Ticket, refine: &[u64]) -> anyhow::Result<bool> {
+        let bound: HashSet<u64> = board
+            .tickets
+            .iter()
+            .filter_map(|t| t.external.as_ref().filter(|e| e.is_github_issue()).map(|e| e.number))
+            .collect();
+        let children: Vec<SubIssueSpec> = refine
+            .iter()
+            .filter(|n| !bound.contains(n))
+            .map(|&n| fetch_issue(repo, n))
+            .collect::<anyhow::Result<_>>()?;
+        ops::apply(
+            store,
+            None,
+            Op::MirrorSubIssues {
+                parent: t.id.clone(),
+                agent: DELEGATE_AGENT.into(),
+                children,
+            },
+        )?;
+        Ok(true)
+    }
+
+    /// 3. Durable observations: flag labels and closure, written onto the binding only when they changed. The alarm notes fire once, on the
+    ///    transition — the fresh binding is what makes the next tick a no-op.
+    fn observe_binding(
+        store: &Store,
+        t: &crate::store::model::Ticket,
+        ext: &External,
+        facts: &IssueFacts,
+        flags: &[String],
+        in_doing: bool,
+    ) -> anyhow::Result<bool> {
         let fresh = External {
             closed: facts.closed,
             flag: flags.iter().find(|f| facts.labels.contains(f)).cloned(),
@@ -406,12 +422,12 @@ mod active {
         }
         let newly_flagged = fresh.flag.is_some() && fresh.flag != ext.flag;
         let newly_abandoned = fresh.closed && !ext.closed && in_doing && fresh.sub_issues.is_empty();
-        let (id, number) = (t.id.clone(), ext.number);
+        let number = ext.number;
         ops::apply(
             store,
             None,
             Op::BindExternal {
-                id: id.clone(),
+                id: t.id.clone(),
                 external: Some(fresh.clone()),
             },
         )?;
@@ -420,29 +436,27 @@ mod active {
             let text = format!(
                 "minesweeper flagged: issue #{number} carries `{label}` — investigate on GitHub; the ticket stays in doing until you decide"
             );
-            ops::apply(
-                store,
-                None,
-                Op::AddNote {
-                    id: id.clone(),
-                    text,
-                    author: Some("kanban".into()),
-                },
-            )?;
+            add_board_note(store, &t.id, text)?;
         }
         if newly_abandoned {
             let text = format!("issue #{number} was closed without a PR — rework the ticket, release it, or close it out by hand");
-            ops::apply(
-                store,
-                None,
-                Op::AddNote {
-                    id,
-                    text,
-                    author: Some("kanban".into()),
-                },
-            )?;
+            add_board_note(store, &t.id, text)?;
         }
         Ok(true)
+    }
+
+    /// Append a note authored by the board itself.
+    fn add_board_note(store: &Store, id: &TicketId, text: String) -> anyhow::Result<()> {
+        ops::apply(
+            store,
+            None,
+            Op::AddNote {
+                id: id.clone(),
+                text,
+                author: Some("kanban".into()),
+            },
+        )?;
+        Ok(())
     }
 
     /// Everything the poll wants to know about one issue, out of the batched GraphQL answer.

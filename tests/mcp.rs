@@ -85,6 +85,7 @@ impl Drop for McpSession {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn the_mcp_face_reads_claims_and_recovers_from_conflicts() {
     let dir = tempfile::tempdir().unwrap();
     let store_dir = dir.path().join(".kanban");
@@ -493,6 +494,7 @@ fn the_default_board_read_is_dramatically_smaller() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn kanban_next_lands_merged_review_work_and_the_move_records_companion_branches() {
     use claude_kanban::{
         git::git,
@@ -818,6 +820,7 @@ fn kanban_next_reports_auto_merge_inherited_from_the_epic() {
 /// This drives the whole edit lifecycle over the wire — add, rewire, clear — plus the guards that keep the tool from being
 /// a way around the board's rules: no cycles, no dangling ids, no touching drafts.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn kanban_update_ticket_rewires_dependencies_and_guards_drafts() {
     use claude_kanban::store::model::{Effort, Status, TicketId};
 

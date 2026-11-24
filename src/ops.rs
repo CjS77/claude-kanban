@@ -3289,6 +3289,7 @@ mod review_round_tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn add_review_appends_in_order_stamps_the_author_and_refuses_what_a_verdict_would() {
         use crate::store::model::{External, Side};
         let (_dir, store) = scratch();
@@ -3406,6 +3407,7 @@ mod review_round_tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn a_verdict_records_its_inline_comments_then_itself_and_closes_the_round() {
         use crate::store::model::Side;
         let (_dir, store) = scratch();
