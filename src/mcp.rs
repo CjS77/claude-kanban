@@ -37,7 +37,7 @@ Read the whole board with kanban_board, a single card with kanban_ticket, or one
 slice reads. kanban_board omits done tickets and returns a `done` summary of their ids instead; pass include_done=true, \
 or column=\"done\", only when you need finished specs and logs. Every mutating tool needs expected_version from your \
 latest read; kanban_board and kanban_next both return one, and kanban_next's landing sweep may have advanced the board, \
-so use the freshest. On a version conflict, re-read and retry.\n\n\
+so use the freshest. On a version conflict, another agent (or the browser UI) moved the board — re-read and retry with the new expected_version.\n\n\
 Work only what kanban_next surfaces, and only inside an explicit work loop — never claim spontaneously, never touch \
 draft tickets. It ranks and names the action: \"land\" (an accepted ticket, top priority), \"rework\" (sent back with \
 feedback), \"implement\" (a ready ticket), \"refine\" (a stub). Eligibility is always unblocked, unclaimed, \
